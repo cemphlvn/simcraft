@@ -90,6 +90,15 @@ impl Session {
         self.game().def.kinds.keys().map(|k| (k.as_str(), w.count(k))).collect()
     }
 
+    /// kind → durum → adet (tek durumlu kind'lar dahil).
+    fn states(&self) -> BTreeMap<&str, BTreeMap<&str, usize>> {
+        let mut out: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
+        for e in self.engine.world().entities().values() {
+            *out.entry(e.kind.as_str()).or_default().entry(e.state.as_str()).or_default() += 1;
+        }
+        out
+    }
+
     fn observe(&self, entity: Option<u64>) -> Result<Value, String> {
         let w = self.engine.world();
         let Some(id) = entity else {
@@ -97,16 +106,17 @@ impl Session {
             return Ok(json!({
                 "tick": w.tick,
                 "counts": self.counts(),
+                "states": self.states(),
                 "map": self.render(x0, y0, x1, y1, None),
-                "entities": w.entities.values().collect::<Vec<_>>(),
+                "entities": w.entities().values().collect::<Vec<_>>(),
             }));
         };
-        let me = w.entities.get(&id).ok_or(format!("entity {id} does not exist"))?;
+        let me = w.get(id).ok_or(format!("entity {id} does not exist"))?;
         let r = self.game().cfg.agent.observe_radius;
         let (x0, y0) = w.clamp(me.x - r, me.y - r);
         let (x1, y1) = w.clamp(me.x + r, me.y + r);
         let visible: Vec<_> = w
-            .entities
+            .entities()
             .values()
             .filter(|e| e.id != id && (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y))
             .collect();
@@ -129,10 +139,10 @@ impl Session {
                 rows[(y - y0) as usize][(x - x0) as usize] = c;
             }
         };
-        for e in w.entities.values() {
-            paint(e.x, e.y, self.game().glyph(&e.kind));
+        for e in w.entities().values() {
+            paint(e.x, e.y, self.game().glyph_of(e));
         }
-        if let Some(e) = me.and_then(|id| w.entities.get(&id)) {
+        if let Some(e) = me.and_then(|id| w.get(id)) {
             paint(e.x, e.y, '@');
         }
         rows.into_iter().map(String::from_iter).collect()
@@ -143,7 +153,7 @@ impl Session {
         let controllable = &self.game().cfg.agent.controllable;
         let mut effects = Vec::new();
         for a in &actions {
-            let e = w.entities.get(&a.entity).ok_or(format!("entity {} does not exist", a.entity))?;
+            let e = w.get(a.entity).ok_or(format!("entity {} does not exist", a.entity))?;
             if !controllable.contains(&e.kind) {
                 return Err(format!("kind '{}' is not controllable (engine.toml [agent])", e.kind));
             }
@@ -178,6 +188,7 @@ impl Session {
             "done": tick >= max,
             "hash": format!("{hash:016x}"),
             "counts": self.counts(),
+            "states": self.states(),
             "events": events,
         })
     }

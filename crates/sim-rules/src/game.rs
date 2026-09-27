@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename = "Game")]
+#[serde(rename = "Game", deny_unknown_fields)]
 pub struct GameDef {
     pub name: String,
     pub kinds: BTreeMap<String, KindDef>,
@@ -18,21 +18,30 @@ pub struct GameDef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KindDef {
     pub glyph: char,
     #[serde(default)]
     pub props: BTreeMap<String, i64>,
     #[serde(default)]
     pub fsm: Option<String>,
+    /// Aynı hücrede en fazla bir solid bulunur; solid'ler birbirinin içinden geçemez.
+    #[serde(default)]
+    pub solid: bool,
+    /// Duruma göre glyph (yoksa `glyph`).
+    #[serde(default)]
+    pub glyphs: BTreeMap<String, char>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FsmDef {
     pub initial: String,
     pub transitions: Vec<TransitionDef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransitionDef {
     pub from: String,
     pub to: String,
@@ -41,6 +50,7 @@ pub struct TransitionDef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleDef {
     pub name: String,
     /// Hangi kind'a uygulanır; "*" hepsi.
@@ -72,6 +82,8 @@ pub enum Do {
     MoveToward(String),
     MoveAway(String),
     Wander,
+    /// FSM durumunu değiştirir (etkisiyle birlikte: `[Goto("Fire"), Emit("lightning")]`).
+    Goto(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]

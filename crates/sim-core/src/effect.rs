@@ -55,11 +55,7 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
     let mut moved = BTreeSet::new();
 
     for g in groups {
-        let dead = g
-            .effects
-            .iter()
-            .filter_map(Effect::target)
-            .find(|id| !world.entities.contains_key(id));
+        let dead = g.effects.iter().filter_map(Effect::target).find(|&id| world.get(id).is_none());
         if let Some(id) = dead {
             if g.actor == Some(id) {
                 continue;
@@ -71,34 +67,30 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
         for ef in g.effects {
             match ef {
                 Effect::Set { e, prop, v } => {
-                    if let Some(ent) = world.entities.get_mut(&e) {
-                        ent.props.insert(prop, v);
+                    if let Some(props) = world.props_mut(e) {
+                        props.insert(prop, v);
                     }
                 }
                 Effect::Add { e, prop, d } => {
-                    if let Some(ent) = world.entities.get_mut(&e) {
-                        *ent.props.entry(prop).or_insert(0) += d;
+                    if let Some(props) = world.props_mut(e) {
+                        *props.entry(prop).or_insert(0) += d;
                     }
                 }
-                Effect::SetState { e, state } => {
-                    if let Some(ent) = world.entities.get_mut(&e) {
-                        ent.state = state;
-                    }
-                }
+                Effect::SetState { e, state } => world.set_state(e, state),
                 Effect::Move { e, dx, dy } => {
-                    if !moved.insert(e) {
-                        continue;
+                    if moved.insert(e) {
+                        world.move_by(e, dx, dy);
                     }
-                    let Some(ent) = world.entities.get(&e) else { continue };
-                    let (x, y) = world.clamp(ent.x + dx.signum(), ent.y + dy.signum());
-                    let ent = world.entities.get_mut(&e).expect("checked above");
-                    (ent.x, ent.y) = (x, y);
                 }
                 Effect::Spawn { kind, state, x, y, props } => {
-                    world.spawn(&kind, &state, x, y, props);
+                    let parent = g.actor.unwrap_or(0);
+                    if world.spawn(&kind, &state, x, y, props).is_none() {
+                        // solid bir kind dolu hücreye doğamadı
+                        events.push(Event { tick: world.tick, source: g.source.clone(), entity: parent, name: "blocked".into() });
+                    }
                 }
                 Effect::Despawn { e } => {
-                    world.entities.remove(&e);
+                    world.despawn(e);
                 }
                 Effect::Emit { e, name } => {
                     events.push(Event { tick: world.tick, source: g.source.clone(), entity: e, name });

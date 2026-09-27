@@ -2,6 +2,7 @@
 
 A headless, deterministic simulation engine whose rules are defined outside the engine.
 This file is the project's **single source of truth**. If the code contradicts it, either the code gets fixed or this file is updated first.
+How the engine got here, change by change, is in [`emergence.md`](emergence.md).
 
 ## Three roles, three files
 
@@ -27,7 +28,7 @@ engine.toml┴─► sim-rules ──────►│
 
 | Crate | Contents | Knows the game? |
 |---|---|---|
-| `sim-core` | `World`, `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash | No |
+| `sim-core` | `World` (entities + cell grid + per-kind index, mutation only via methods), `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash | No |
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 
@@ -46,13 +47,14 @@ tick:
 - **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently.
 - An entity **moves at most once per tick**. The first `Move` wins.
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
+- **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
 
 ## Determinism (non-negotiable)
 
 | Source | Safeguard |
 |---|---|
 | Iteration order | `BTreeMap`, id order |
-| Randomness | No shared RNG: `rand(seed, tick, entity, salt)` via splitmix64. Evaluation order does not affect results |
+| Randomness | No shared RNG: `rand(seed, tick, entity, salt)` via splitmix64. Evaluation order does not affect results. Rhai `rand(n)` adds a per-evaluation call index |
 | Arithmetic | Rhai `no_float` + `only_i64`; props are `i64` |
 | Script side effects | `me`, `p`, `near` etc. are constants. Scripts only return effect maps; `print` is disabled |
 | Verification | Test: same panel → identical hash on every tick for 300 ticks |
@@ -68,17 +70,24 @@ tick:
 | `Despawn(Me \| Nearest(kind))` | If there is no target, the rule does not fire |
 | `Spawn(kind)` | Spawns at the entity's position from the kind's template |
 | `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | One step (8 directions) |
+| `Goto(state)` | Changes the entity's FSM state (validated against the kind's states) |
 
 **B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
 
 **What expressions can see:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev distance, 9999 if none), `count.<kind>`, `tick`, `roll` (0..99, deterministic per rule and entity).
 
+**World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `rand(n)` → 0..n-1, deterministic.
+
+`near.<kind>` is computed only for kinds that some expression mentions as `near.<kind>`.
+
+**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, and `glyphs: {state: char}` for per-state rendering.
+
 ## Validation (typestate `Loaded → Validated`)
 
 `Engine<Loaded>` has no `tick` method, so unvalidated rules cannot run: this is enforced at compile time. `validate` returns every error in a single list:
 
-1. RON/TOML schema (`deny_unknown_fields`)
+1. RON/TOML schema (`deny_unknown_fields` in both files)
 2. Rhai syntax (compiled at load time)
 3. Cross-references: switch ↔ rule name, param ↔ `game.ron params`, kinds, FSMs, states
 4. **Dry run:** every expression is evaluated once against the template of each kind it applies to. Typos like `me.hungr` are caught here (`fail_on_invalid_map_property`)
@@ -95,7 +104,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 | `{"cmd":"observe"}` | Full map (ASCII), counts, entities |
 | `{"cmd":"observe","entity":ID}` | `observe_radius` window, `@` = you, visible entities |
 | `{"cmd":"act","actions":[{"entity":ID,"move":[dx,dy]}]}` | Applied on the next `step`, before rules |
-| `{"cmd":"step","n":N}` | tick, done, hash, counts, events (`kill`, `born`, `starved`, `conflict`, `error: …`) |
+| `{"cmd":"step","n":N}` | tick, done, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
 
 ## Roadmap
@@ -108,4 +117,5 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [ ] MCP wrapper (so external agents can connect directly)
 - [ ] `sim-tui` (ratatui) viewer
 - [ ] Parameter sweep: the operator's panel tunes itself (survival / oscillation score)
-- [ ] Performance: move hot props to typed columns; spatial grid for `near` (currently O(n²))
+- [x] Spatial grid + per-kind index for `near` (was O(n²))
+- [ ] Performance: `me` map is still rebuilt per entity per tick; world snapshot is cloned per tick

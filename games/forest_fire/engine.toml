@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (forest fire)
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 2000
+
+[world]
+width = 64
+height = 32
+
+# One patch per cell.
+[spawn]
+patch = 2048
+
+[switches]
+lightning = true
+
+# Growth vs lightning ratio sets the fire-size distribution.
+# Swept on 64x32, 3000 ticks: grow/lightning = 100 → almost every fire burns the whole map;
+# = 10 → heavy-tailed sizes (many small fires, few huge ones).  See docs/emergence.md.
+[params]
+grow = 100
+lightning = 10

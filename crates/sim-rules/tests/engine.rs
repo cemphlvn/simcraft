@@ -80,10 +80,60 @@ fn unknown_state_is_rejected() {
 #[test]
 fn agent_move_overrides_rule_move() {
     let mut e = boot(GAME, PANEL).expect("valid");
-    let wolf = e.world().entities.values().find(|x| x.kind == "wolf").cloned().expect("a wolf");
+    let wolf = e.world().entities().values().find(|x| x.kind == "wolf").cloned().expect("a wolf");
     let dx = if wolf.x < e.world().width / 2 { 1 } else { -1 };
     e.queue(Group { source: "agent".into(), actor: Some(wolf.id), effects: vec![Effect::Move { e: wolf.id, dx, dy: 0 }] });
     e.tick();
-    let after = &e.world().entities[&wolf.id];
+    let after = &e.world().get(wolf.id).unwrap();
     assert_eq!((after.x, after.y), (wolf.x + dx, wolf.y));
+}
+
+// --- regression: engine refactors must not change existing games ---
+
+#[test]
+fn golden_wolf_sheep_hash() {
+    let (hashes, _) = run(PANEL, 300);
+    // Recorded before the spatial-grid refactor. Change only on purpose, together with the game.
+    assert_eq!(format!("{:016x}", hashes[299]), "ee9a66d10246d6f9");
+}
+
+#[test]
+fn unknown_field_in_game_is_rejected() {
+    let game = GAME.replace("glyph: 's',", "glyph: 's', solidd: true,");
+    assert!(boot(&game, PANEL).is_err(), "a typo in game.ron must not be silently ignored");
+}
+
+// --- forest fire ---
+
+const FIRE: &str = include_str!("../../../games/forest_fire/game.ron");
+const FIRE_PANEL: &str = include_str!("../../../games/forest_fire/engine.toml");
+
+#[test]
+fn solid_kinds_fill_one_per_cell() {
+    let e = boot(FIRE, FIRE_PANEL).expect("valid");
+    let w = e.world();
+    for y in 0..w.height {
+        for x in 0..w.width {
+            assert_eq!(w.at(x, y).len(), 1, "cell ({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn forest_grows_and_burns() {
+    let mut e = boot(FIRE, FIRE_PANEL).expect("valid");
+    let mut lightning = 0;
+    for _ in 0..600 {
+        lightning += e.tick().events.iter().filter(|ev| ev.name == "lightning").count();
+    }
+    let trees = e.world().entities().values().filter(|p| p.state == "Tree").count();
+    assert!(trees > 0, "trees must grow");
+    assert!(lightning > 0, "lightning must strike");
+}
+
+#[test]
+fn glyph_for_unknown_state_is_rejected() {
+    let game = FIRE.replace(r#""Fire": '*'"#, r#""Fier": '*'"#);
+    let errs = boot(&game, FIRE_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("glyph for unknown state 'Fier'")), "{errs:?}");
 }

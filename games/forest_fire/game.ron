@@ -1,0 +1,36 @@
+#![enable(implicit_some)]
+// Forest fire (Drossel–Schwabl, 1992). Every cell is one patch: Empty, Tree or Fire.
+//   Empty → Tree   with a small growth chance
+//   Tree  → Fire   if any neighbour burns, or lightning strikes
+//   Fire  → Empty  next tick
+// Nothing here is about fire size, yet fires come in every size: the interesting part is emergent.
+Game(
+    name: "forest_fire",
+
+    kinds: {
+        "patch": (glyph: '.', solid: true, fsm: "patch",
+                  glyphs: { "Empty": '.', "Tree": 'T', "Fire": '*' }),
+    },
+
+    // Probabilities are per 100 000 per tick.
+    params: {
+        "grow": 100,
+        "lightning": 10,
+    },
+
+    fsms: {
+        "patch": (
+            initial: "Empty",
+            transitions: [
+                (from: "Fire",  to: "Empty", when: "true"),
+                (from: "Tree",  to: "Fire",  when: r#"around("patch", "Fire", 1) > 0"#),
+                (from: "Empty", to: "Tree",  when: "rand(100000) < p.grow"),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "lightning", for: "patch", state: "Tree", when: "rand(100000) < p.lightning",
+         then: [ Goto("Fire"), Emit("lightning") ]),
+    ],
+)

@@ -2,17 +2,49 @@
 //! İfadeler (when/Set/Add) Rhai expression, `script` tam Rhai'dir.
 //! Script'ler dünyayı değiştiremez: yalnızca effect map'leri döndürür.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::rc::Rc;
 
 use rhai::{AST, Array, Dynamic, Engine as Rhai, Map, Scope};
-use sim_core::{Effect, Entity, Group, Rules, World, splitmix64};
+use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 
 use crate::config::EngineConfig;
 use crate::game::{Do, GameDef, Target};
 
 /// Hiç yoksa `near.<kind>` bu değeri alır.
 pub const FAR: i64 = 9_999;
+
+/// Rhai'ye kayıtlı dünya sorgularının (`around`, `rand`) gördüğü bağlam.
+/// Tick başında dünyanın anlık görüntüsü bağlanır; her değerlendirmeden önce `me` ve tuz.
+#[derive(Default)]
+struct QueryCtx {
+    world: Option<Rc<World>>,
+    me: EntityId,
+    pos: (i64, i64),
+    salt: u64,
+    calls: u64,
+}
+
+impl QueryCtx {
+    fn around(&self, kind: &str, state: Option<&str>, r: i64) -> i64 {
+        self.world.as_ref().map_or(0, |w| w.around(self.pos, self.me, kind, state, r))
+    }
+
+    /// 0..n. Aynı ifadede birden çok çağrı farklı sayı verir; yine de tamamen deterministik.
+    fn rand(&mut self, n: i64) -> i64 {
+        let Some(w) = &self.world else { return 0 };
+        if n <= 0 {
+            return 0;
+        }
+        self.calls += 1;
+        (w.rand(self.me, self.salt ^ self.calls.wrapping_mul(0xA5A5_5A5A_1234_5678)) % n as u64) as i64
+    }
+}
+
+/// FSM geçişlerinin tuzu kural tuzlarıyla çakışmasın.
+const FSM_SALT: u64 = 1 << 32;
 
 pub struct Game {
     pub def: GameDef,
@@ -23,6 +55,36 @@ pub struct Game {
     rules: Vec<CompiledRule>,
     fsms: BTreeMap<String, Vec<CompiledTransition>>,
     compile_errors: Vec<String>,
+    ctx: Rc<RefCell<QueryCtx>>,
+    /// `p` bir kez kurulur, entity'ler arasında paylaşılır (kopyalanmaz).
+    p_shared: Dynamic,
+    /// İfadelerin gerçekten okuduğu `near.<kind>`'lar. None = hepsi (belirlenemedi).
+    near_kinds: Option<BTreeSet<String>>,
+}
+
+/// Kaynaklarda `near.<kind>` kullanımlarını bulur. `near` başka türlü
+/// kullanılıyorsa (ör. `near["x"]`) güvenli tarafta kalıp None döner.
+fn near_refs<'a>(sources: impl Iterator<Item = &'a str>) -> Option<BTreeSet<String>> {
+    let mut kinds = BTreeSet::new();
+    for src in sources {
+        let mut rest = src;
+        while let Some(i) = rest.find("near") {
+            let before = rest[..i].chars().next_back();
+            rest = &rest[i + 4..];
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                continue; // başka bir kelimenin parçası
+            }
+            let Some(tail) = rest.strip_prefix('.') else {
+                if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    continue; // `nearest` gibi
+                }
+                return None;
+            };
+            let ident: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            kinds.insert(ident);
+        }
+    }
+    Some(kinds)
 }
 
 struct CompiledRule {
@@ -45,6 +107,7 @@ enum CDo {
     MoveToward(String),
     MoveAway(String),
     Wander,
+    Goto(String),
 }
 
 struct CompiledTransition {
@@ -66,8 +129,9 @@ impl Game {
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<(World, Game), String> {
         let def: GameDef = ron::from_str(game_ron).map_err(|e| format!("game.ron: {e}"))?;
         let cfg: EngineConfig = toml::from_str(engine_toml).map_err(|e| format!("engine.toml: {e}"))?;
-        let game = Self::compile(def, cfg);
-        let world = game.initial_world();
+        let mut game = Self::compile(def, cfg);
+        let (world, errs) = game.initial_world();
+        game.compile_errors.extend(errs);
         Ok((world, game))
     }
 
@@ -79,6 +143,14 @@ impl Game {
         // stdout agent protokolüne ait; script'ler oraya yazamaz.
         rhai.on_print(|_| {});
         rhai.on_debug(|_, _, _| {});
+
+        let ctx = Rc::new(RefCell::new(QueryCtx::default()));
+        let c = ctx.clone();
+        rhai.register_fn("around", move |kind: &str, r: i64| c.borrow().around(kind, None, r));
+        let c = ctx.clone();
+        rhai.register_fn("around", move |kind: &str, state: &str, r: i64| c.borrow().around(kind, Some(state), r));
+        let c = ctx.clone();
+        rhai.register_fn("rand", move |n: i64| c.borrow_mut().rand(n));
 
         let mut errors = Vec::new();
         let mut expr = |src: &str, ctx: &str| match rhai.compile_expression(src) {
@@ -123,6 +195,7 @@ impl Game {
                     Do::MoveToward(k) => CDo::MoveToward(k.clone()),
                     Do::MoveAway(k) => CDo::MoveAway(k.clone()),
                     Do::Wander => CDo::Wander,
+                    Do::Goto(st) => CDo::Goto(st.clone()),
                 })
                 .collect();
             rules.push(CompiledRule {
@@ -150,17 +223,40 @@ impl Game {
         errors.extend(script_errors);
         let mut params = def.params.clone();
         params.extend(cfg.params.iter().map(|(k, v)| (k.clone(), *v)));
+        let p: Map = params.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
+        let p_shared = Dynamic::from_map(p).into_shared();
 
-        Game { def, cfg, params, rhai, rules, fsms, compile_errors: errors }
+        let sources = def.fsms.values().flat_map(|f| f.transitions.iter().map(|t| t.when.as_str())).chain(
+            def.rules.iter().flat_map(|r| {
+                let exprs = r.then.iter().filter_map(|d| match d {
+                    Do::Set(_, e) | Do::Add(_, e) => Some(e.as_str()),
+                    _ => None,
+                });
+                r.when.as_deref().into_iter().chain(exprs).chain(r.script.as_deref())
+            }),
+        );
+        let near_kinds = near_refs(sources);
+
+        Game { def, cfg, params, rhai, rules, fsms, compile_errors: errors, ctx, p_shared, near_kinds }
     }
 
     /// Başlangıç nüfusu engine.toml [spawn]'dan, konumlar seed'den.
-    fn initial_world(&self) -> World {
+    /// Solid kind'lar karıştırılmış boş hücrelere, tek tek yerleşir (üst üste binmez).
+    fn initial_world(&self) -> (World, Vec<String>) {
         let mut world = World::new(self.cfg.run.seed, self.cfg.world.width, self.cfg.world.height);
+        world.set_solid(self.def.kinds.iter().filter(|(_, k)| k.solid).map(|(n, _)| n.clone()).collect());
+        let mut errs = Vec::new();
         let mut c = 0u64;
         for (kind, n) in &self.cfg.spawn {
-            if !self.def.kinds.contains_key(kind) {
+            let Some(def) = self.def.kinds.get(kind) else {
                 continue; // validate raporlar
+            };
+            if def.solid {
+                let placed = self.place_solid(&mut world, kind, *n);
+                if placed < *n {
+                    errs.push(format!("engine.toml [spawn]: {kind} = {n}, but only {placed} free cells"));
+                }
+                continue;
             }
             for _ in 0..*n {
                 let x = splitmix64(world.seed.wrapping_add(2 * c)) % world.width as u64;
@@ -170,7 +266,27 @@ impl Game {
                 c += 1;
             }
         }
-        world
+        (world, errs)
+    }
+
+    fn place_solid(&self, world: &mut World, kind: &str, n: u32) -> u32 {
+        let mut cells: Vec<i64> = (0..world.width * world.height).collect();
+        let salt = splitmix64(kind.bytes().fold(world.seed, |h, b| splitmix64(h ^ b as u64)));
+        for i in (1..cells.len()).rev() {
+            let j = (splitmix64(salt ^ i as u64) % (i as u64 + 1)) as usize;
+            cells.swap(i, j);
+        }
+        let mut placed = 0;
+        for cell in cells {
+            if placed == n {
+                break;
+            }
+            let (state, props) = self.template(kind);
+            if world.spawn(kind, &state, cell % world.width, cell / world.width, props).is_some() {
+                placed += 1;
+            }
+        }
+        placed
     }
 
     /// Yeni doğan bir kind'ın başlangıç durumu ve prop'ları.
@@ -186,6 +302,21 @@ impl Game {
 
     pub fn glyph(&self, kind: &str) -> char {
         self.def.kinds.get(kind).map_or('?', |k| k.glyph)
+    }
+
+    /// Duruma özel glyph varsa o, yoksa kind'ın glyph'i.
+    pub fn glyph_of(&self, e: &Entity) -> char {
+        self.def.kinds.get(&e.kind).map_or('?', |k| k.glyphs.get(&e.state).copied().unwrap_or(k.glyph))
+    }
+
+    /// Sorgu bağlamını bir entity'ye ve tuza bağlar (her değerlendirmeden önce).
+    fn bind(&self, e: &Entity, salt: u64) {
+        let mut c = self.ctx.borrow_mut();
+        (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y), salt, 0);
+    }
+
+    fn bind_world(&self, world: Option<&World>) {
+        self.ctx.borrow_mut().world = world.map(|w| Rc::new(w.clone()));
     }
 
     pub fn states_of(&self, kind: &str) -> BTreeSet<String> {
@@ -211,12 +342,15 @@ impl Game {
         self.rules.iter().map(|r| (r.name.clone(), r.enabled)).collect()
     }
 
-    fn counts(&self, world: &World) -> Map {
-        self.def.kinds.keys().map(|k| (k.as_str().into(), Dynamic::from(world.count(k) as i64))).collect()
+    /// Tick başına bir kez; entity'ler arasında paylaşılır.
+    fn counts(&self, world: &World) -> Dynamic {
+        let m: Map =
+            self.def.kinds.keys().map(|k| (k.as_str().into(), Dynamic::from(world.count(k) as i64))).collect();
+        Dynamic::from_map(m).into_shared()
     }
 
     /// Kural ifadelerinin gördüğü dünya: me, p, tick, near, count (+ kurala özel roll).
-    fn base_scope(&self, world: &World, e: &Entity, counts: &Map) -> Scope<'static> {
+    fn base_scope(&self, world: &World, e: &Entity, counts: &Dynamic) -> Scope<'static> {
         let mut me = Map::new();
         me.insert("id".into(), Dynamic::from(e.id as i64));
         me.insert("kind".into(), Dynamic::from(e.kind.clone()));
@@ -230,13 +364,13 @@ impl Game {
             .def
             .kinds
             .keys()
+            .filter(|k| self.near_kinds.as_ref().is_none_or(|ks| ks.contains(*k)))
             .map(|k| (k.as_str().into(), Dynamic::from(world.nearest(e, k).map_or(FAR, |(_, d)| d))))
             .collect();
-        let p: Map = self.params.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
 
         let mut scope = Scope::new();
         scope.push_constant("me", me);
-        scope.push_constant("p", p);
+        scope.push_constant("p", self.p_shared.clone());
         scope.push_constant("tick", world.tick as i64);
         scope.push_constant("near", near);
         scope.push_constant("count", counts.clone());
@@ -251,12 +385,20 @@ impl Game {
         self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string())
     }
 
-    fn eval_rule(&self, world: &World, e: &Entity, rule: &CompiledRule, base: &Scope<'static>) -> Result<Option<Group>, String> {
-        let mut scope = base.clone();
+    /// Kopya yok: kurala özel değişkenler eklenir, sonra scope geri sarılır.
+    fn eval_rule(&self, world: &World, e: &Entity, rule: &CompiledRule, scope: &mut Scope<'static>) -> Result<Option<Group>, String> {
+        let len = scope.len();
         scope.push_constant("roll", world.roll(e.id, rule.salt));
+        self.bind(e, rule.salt);
+        let out = self.eval_rule_in(world, e, rule, scope);
+        scope.rewind(len);
+        out
+    }
+
+    fn eval_rule_in(&self, world: &World, e: &Entity, rule: &CompiledRule, scope: &mut Scope<'static>) -> Result<Option<Group>, String> {
 
         if let Some(w) = &rule.when
-            && !self.eval_bool(&mut scope, w)?
+            && !self.eval_bool(scope, w)?
         {
             return Ok(None);
         }
@@ -265,10 +407,10 @@ impl Game {
         for d in &rule.then {
             match d {
                 CDo::Set(prop, ast) => {
-                    effects.push(Effect::Set { e: e.id, prop: prop.clone(), v: self.eval_int(&mut scope, ast)? })
+                    effects.push(Effect::Set { e: e.id, prop: prop.clone(), v: self.eval_int(scope, ast)? })
                 }
                 CDo::Add(prop, ast) => {
-                    effects.push(Effect::Add { e: e.id, prop: prop.clone(), d: self.eval_int(&mut scope, ast)? })
+                    effects.push(Effect::Add { e: e.id, prop: prop.clone(), d: self.eval_int(scope, ast)? })
                 }
                 CDo::Emit(name) => effects.push(Effect::Emit { e: e.id, name: name.clone() }),
                 CDo::Despawn(Target::Me) => effects.push(Effect::Despawn { e: e.id }),
@@ -291,11 +433,12 @@ impl Game {
                     None => {}
                 },
                 CDo::Wander => effects.push(wander(world, e, rule.salt)),
+                CDo::Goto(st) => effects.push(Effect::SetState { e: e.id, state: st.clone() }),
             }
         }
 
         if let Some(script) = &rule.script {
-            let out: Array = self.rhai.eval_ast_with_scope(&mut scope, script).map_err(|e| e.to_string())?;
+            let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
             for item in out {
                 effects.push(effect_from_map(e, item)?);
             }
@@ -332,6 +475,10 @@ impl Game {
             {
                 errs.push(format!("kind '{name}': unknown fsm '{f}'"));
             }
+            let states = self.states_of(name);
+            for st in k.glyphs.keys().filter(|st| !states.contains(*st)) {
+                errs.push(format!("kind '{name}': glyph for unknown state '{st}'"));
+            }
         }
         let mut seen = BTreeSet::new();
         for (r, def) in self.rules.iter().zip(&self.def.rules) {
@@ -348,6 +495,12 @@ impl Game {
                 }
             }
             for d in &def.then {
+                if let Do::Goto(st) = d {
+                    let kinds: Vec<&String> = self.def.kinds.keys().filter(|k| Self::applies(r, k)).collect();
+                    if !kinds.iter().any(|k| self.states_of(k).contains(st)) {
+                        errs.push(format!("rule '{}': Goto to unknown state '{st}'", r.name));
+                    }
+                }
                 let k = match d {
                     Do::Despawn(Target::Nearest(k)) | Do::Spawn(k) | Do::MoveToward(k) | Do::MoveAway(k) => k,
                     _ => continue,
@@ -363,10 +516,12 @@ impl Game {
     /// yazım hatalı prop, tanımsız parametre, yanlış tip → yükleme anında yakalanır.
     fn dry_run(&self, world: &World, errs: &mut Vec<String>) {
         let counts = self.counts(world);
+        self.bind_world(Some(world));
         for kind in self.def.kinds.keys() {
             let (state, props) = self.template(kind);
             let e = Entity { id: 0, kind: kind.clone(), state, x: 0, y: 0, props };
             let base = self.base_scope(world, &e, &counts);
+            self.bind(&e, 0);
 
             for t in self.fsm_of(kind).into_iter().flatten() {
                 if let Err(m) = self.eval_bool(&mut base.clone(), &t.when) {
@@ -403,6 +558,7 @@ impl Game {
                 }
             }
         }
+        self.bind_world(None);
     }
 }
 
@@ -425,12 +581,15 @@ impl Rules for Game {
             effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
         };
 
-        for e in world.entities.values() {
-            let base = self.base_scope(world, e, &counts);
+        self.bind_world(Some(world));
+        for e in world.entities().values() {
+            let mut base = self.base_scope(world, e, &counts);
 
             // FSM: ilk eşleşen geçiş; kurallar bu tick eski durumu görür.
-            for t in self.fsm_of(&e.kind).into_iter().flatten().filter(|t| t.from == e.state) {
-                match self.eval_bool(&mut base.clone(), &t.when) {
+            let transitions = self.fsm_of(&e.kind).into_iter().flatten().enumerate();
+            for (i, t) in transitions.filter(|(_, t)| t.from == e.state) {
+                self.bind(e, FSM_SALT + i as u64);
+                match self.eval_bool(&mut base, &t.when) {
                     Ok(true) => {
                         out.push(Group {
                             source: "fsm".into(),
@@ -451,13 +610,14 @@ impl Rules for Game {
                 r.enabled && Self::applies(r, &e.kind) && r.state.as_ref().is_none_or(|s| *s == e.state)
             });
             for rule in active {
-                match self.eval_rule(world, e, rule, &base) {
+                match self.eval_rule(world, e, rule, &mut base) {
                     Ok(Some(g)) => out.push(g),
                     Ok(None) => {}
                     Err(m) => out.push(error(&rule.name, e, m)),
                 }
             }
         }
+        self.bind_world(None);
         out
     }
 }
