@@ -14,6 +14,8 @@ pub enum Effect {
     Spawn { kind: String, state: String, x: i64, y: i64, props: BTreeMap<String, i64> },
     Despawn { e: EntityId },
     Emit { e: EntityId, name: String },
+    /// Grup uygulanmadan önce: prop >= min olmalı (canlı durumda). Tutmazsa grup düşer.
+    Need { e: EntityId, prop: String, min: i64 },
 }
 
 impl Effect {
@@ -24,7 +26,8 @@ impl Effect {
             | Effect::SetState { e, .. }
             | Effect::Move { e, .. }
             | Effect::Despawn { e }
-            | Effect::Emit { e, .. } => Some(*e),
+            | Effect::Emit { e, .. }
+            | Effect::Need { e, .. } => Some(*e),
             Effect::Spawn { .. } => None,
         }
     }
@@ -63,6 +66,18 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
             events.push(Event { tick: world.tick, source: g.source, entity: id, name: "conflict".into() });
             continue;
         }
+        let short = g.effects.iter().find_map(|ef| match ef {
+            Effect::Need { e, prop, min } => {
+                let have = world.get(*e).and_then(|x| x.props.get(prop)).copied().unwrap_or(0);
+                (have < *min).then_some(*e)
+            }
+            _ => None,
+        });
+        if let Some(id) = short {
+            // aynı tick'te daha önce uygulanan bir grup kaynağı tüketti
+            events.push(Event { tick: world.tick, source: g.source, entity: id, name: "short".into() });
+            continue;
+        }
 
         for ef in g.effects {
             match ef {
@@ -95,6 +110,7 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
                 Effect::Emit { e, name } => {
                     events.push(Event { tick: world.tick, source: g.source.clone(), entity: e, name });
                 }
+                Effect::Need { .. } => {}
             }
         }
     }

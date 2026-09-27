@@ -83,7 +83,7 @@ fn agent_move_overrides_rule_move() {
     let wolf = e.world().entities().values().find(|x| x.kind == "wolf").cloned().expect("a wolf");
     let dx = if wolf.x < e.world().width / 2 { 1 } else { -1 };
     let args = [("dx".to_string(), dx), ("dy".to_string(), 0)].into();
-    let group = e.rules().act(e.world(), wolf.id, "move", &args).expect("move is a declared action");
+    let group = e.rules().act(e.world(), None, wolf.id, "move", &args).expect("move is a declared action");
     e.queue(group);
     e.tick();
     let after = &e.world().get(wolf.id).unwrap();
@@ -168,7 +168,7 @@ fn walls_block_solid_movement() {
     let mut e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
     let h = hero(&e);
     let args = [("dx".to_string(), -1), ("dy".to_string(), 0)].into();
-    let g = e.rules().act(e.world(), h.id, "move", &args).expect("move");
+    let g = e.rules().act(e.world(), None, h.id, "move", &args).expect("move");
     e.queue(g);
     e.tick();
     assert_eq!(e.world().get(h.id).map(|x| (x.x, x.y)), Some((1, 1)), "wall at x=0");
@@ -177,7 +177,7 @@ fn walls_block_solid_movement() {
 #[test]
 fn action_refused_when_condition_fails() {
     let e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
-    let err = e.rules().act(e.world(), hero(&e).id, "fight", &no_args()).expect_err("no ghost adjacent");
+    let err = e.rules().act(e.world(), None, hero(&e).id, "fight", &no_args()).expect_err("no ghost adjacent");
     assert!(err.starts_with("refused"), "{err}");
 }
 
@@ -186,16 +186,16 @@ fn action_errors_are_specific() {
     let e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
     let id = hero(&e).id;
     let g = e.rules();
-    assert!(g.act(e.world(), id, "dance", &no_args()).unwrap_err().contains("unknown action"));
-    assert!(g.act(e.world(), id, "move", &no_args()).unwrap_err().contains("takes args"));
-    assert!(g.act(e.world(), 1, "move", &no_args()).unwrap_err().contains("not controllable"));
+    assert!(g.act(e.world(), None, id, "dance", &no_args()).unwrap_err().contains("unknown action"));
+    assert!(g.act(e.world(), None, id, "move", &no_args()).unwrap_err().contains("takes args"));
+    assert!(g.act(e.world(), None, 1, "move", &no_args()).unwrap_err().contains("not controllable"));
 }
 
 #[test]
 fn operator_can_switch_off_an_action() {
     let panel = DUNGEON_PANEL.replace("[params]", "[switches]\nspare = false\n\n[params]");
     let e = boot(DUNGEON, &panel).expect("valid");
-    let err = e.rules().act(e.world(), hero(&e).id, "spare", &no_args()).unwrap_err();
+    let err = e.rules().act(e.world(), None, hero(&e).id, "spare", &no_args()).unwrap_err();
     assert!(err.contains("switched off"), "{err}");
 }
 
@@ -231,4 +231,70 @@ fn panel_world_must_match_layout() {
     let panel = DUNGEON_PANEL.replace("[params]", "[world]\nwidth = 30\nheight = 10\n\n[params]");
     let errs = boot(DUNGEON, &panel).err().expect("must fail");
     assert!(errs.iter().any(|e| e.contains("does not match game.ron layout")), "{errs:?}");
+}
+
+// --- market ---
+
+const MARKET: &str = include_str!("../../../games/market/game.ron");
+const MARKET_PANEL: &str = include_str!("../../../games/market/engine.toml");
+
+fn village(e: &Engine<Running, Game>, owner: i64) -> sim_core::Entity {
+    let vs = e.world().entities().values();
+    vs.filter(|x| x.kind == "village").find(|x| x.props["owner"] == owner).cloned().expect("village")
+}
+
+fn n(v: i64) -> std::collections::BTreeMap<String, i64> {
+    [("n".to_string(), v)].into()
+}
+
+#[test]
+fn legend_props_set_owners() {
+    let e = boot(MARKET, MARKET_PANEL).expect("valid");
+    assert_eq!((village(&e, 1).x, village(&e, 2).x), (2, 15));
+}
+
+#[test]
+fn need_prevents_double_spend() {
+    let rich = MARKET.replace(r#""gold": 30"#, r#""gold": 300"#);
+    let mut e = boot(&rich, MARKET_PANEL).expect("valid");
+    let a = village(&e, 1).id;
+    for _ in 0..2 {
+        let g = e.rules().act(e.world(), Some("alice"), a, "buy_stone", &n(8)).expect("stock 10 >= 8 at request time");
+        e.queue(g);
+    }
+    let r = e.tick();
+    assert_eq!(r.events.iter().filter(|ev| ev.name == "short").count(), 1, "{:?}", r.events);
+    let market = e.world().entities().values().find(|x| x.kind == "market").expect("market");
+    assert!(market.props["stone_stock"] >= 0, "stock went negative: {:?}", market.props);
+    assert_eq!(e.world().get(a).unwrap().props["stone"], 8);
+}
+
+#[test]
+fn seats_enforce_ownership() {
+    let e = boot(MARKET, MARKET_PANEL).expect("valid");
+    let (a, w, g) = (village(&e, 1).id, e.world(), e.rules());
+    assert!(g.act(w, None, a, "build", &no_args()).unwrap_err().contains("send \"as\""));
+    assert!(g.act(w, Some("bob"), a, "build", &no_args()).unwrap_err().contains("not yours"));
+    assert!(g.act(w, Some("eve"), a, "build", &no_args()).unwrap_err().contains("unknown seat"));
+}
+
+#[test]
+fn scores_are_per_seat() {
+    let e = boot(MARKET, MARKET_PANEL).expect("valid");
+    let scores = e.rules().scores(e.world());
+    assert_eq!(scores, [("alice".to_string(), 30), ("bob".to_string(), 30)].into());
+}
+
+#[test]
+fn legend_prop_typo_is_rejected() {
+    let game = MARKET.replace(r#"("village", { "owner": 1 })"#, r#"("village", { "ownr": 1 })"#);
+    let errs = boot(&game, MARKET_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("has no prop 'ownr'")), "{errs:?}");
+}
+
+#[test]
+fn seats_need_an_owner_prop() {
+    let panel = PANEL.replace("observe_radius = 5", "observe_radius = 5\nseats = { a = 1 }");
+    let errs = boot(GAME, &panel).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("needs an 'owner' prop")), "{errs:?}");
 }

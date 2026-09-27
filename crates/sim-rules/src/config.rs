@@ -62,10 +62,13 @@ pub struct AgentCfg {
     pub controllable: Vec<String>,
     /// `observe` ile entity etrafında görülen yarıçap.
     pub observe_radius: i64,
+    /// Çok oyunculu: koltuk adı → sahip numarası. Doluysa agent `as` ile konuşur ve
+    /// yalnızca `owner` prop'u kendi numarası olan entity'leri yönetir.
+    pub seats: BTreeMap<String, i64>,
 }
 
 impl Default for AgentCfg {
     fn default() -> Self {
-        Self { controllable: Vec::new(), observe_radius: 5 }
+        Self { controllable: Vec::new(), observe_radius: 5, seats: BTreeMap::new() }
     }
 }

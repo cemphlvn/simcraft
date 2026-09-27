@@ -1,0 +1,84 @@
+#![enable(implicit_some)]
+// Market. Two villages, one market, simultaneous turns.
+//   Village A sits among forests (wood). Village B sits among quarries (stone).
+//   A house needs both, so they must trade through the market.
+//   Prices follow the market's stock: selling floods it (price falls), buying drains it (price rises).
+// Score: gold + houses × house_value.
+Game(
+    name: "market",
+
+    kinds: {
+        "wall":    (glyph: '#', solid: true),
+        "forest":  (glyph: 'f', solid: true),
+        "quarry":  (glyph: 'q', solid: true),
+        "village": (glyph: 'V', solid: true,
+                    props: { "owner": 0, "wood": 0, "stone": 0, "gold": 30, "houses": 0 }),
+        "market":  (glyph: '$', solid: true,
+                    props: { "wood_stock": 10, "stone_stock": 10, "wood_price": 10, "stone_price": 10 }),
+    },
+
+    params: {
+        "work": 3,            // ticks between harvests
+        "price_k": 150,       // price = max(1, price_k / (stock + 5))
+        "consume_every": 4,   // the town eats one of each good this often
+        "house_wood": 3,
+        "house_stone": 3,
+        "house_value": 40,
+        "days": 150,
+    },
+
+    layout: (
+        legend: { '#': "wall", 'f': "forest", 'q': "quarry", '$': "market",
+                  'A': ("village", { "owner": 1 }),
+                  'B': ("village", { "owner": 2 }) },
+        rows: [
+            "##################",
+            "#f.f..........q.q#",
+            "#.A......$.....B.#",
+            "#f.f..........q.q#",
+            "##################",
+        ],
+    ),
+
+    rules: [
+        (name: "chop",  for: "village", when: r#"tick % p.work == 0 && around("forest", 1) > 0"#,
+         then: [ Add("wood", r#"around("forest", 1)"#) ]),
+        (name: "quarry", for: "village", when: r#"tick % p.work == 0 && around("quarry", 1) > 0"#,
+         then: [ Add("stone", r#"around("quarry", 1)"#) ]),
+        (name: "pricing", for: "market",
+         then: [ Set("wood_price",  "max(1, p.price_k / (me.wood_stock + 5))"),
+                 Set("stone_price", "max(1, p.price_k / (me.stone_stock + 5))") ]),
+        (name: "town_demand", for: "market", when: "tick % p.consume_every == 0",
+         then: [ Add("wood_stock",  "if me.wood_stock > 0 { -1 } else { 0 }"),
+                 Add("stone_stock", "if me.stone_stock > 0 { -1 } else { 0 }") ]),
+    ],
+
+    // `Need(prop, min)` is checked when asked *and* again when applied, against the live
+    // state. Two orders in the same tick can't spend the same gold or the same stock twice.
+    actions: [
+        (name: "sell_wood", for: "village", args: ["n"], target: Nearest("market"), when: "arg.n > 0",
+         then: [ Need("wood", "arg.n"),
+                 Add("wood", "-arg.n"), Add("gold", "arg.n * it.wood_price"),
+                 On(It, [ Add("wood_stock", "arg.n") ]) ]),
+        (name: "sell_stone", for: "village", args: ["n"], target: Nearest("market"), when: "arg.n > 0",
+         then: [ Need("stone", "arg.n"),
+                 Add("stone", "-arg.n"), Add("gold", "arg.n * it.stone_price"),
+                 On(It, [ Add("stone_stock", "arg.n") ]) ]),
+        (name: "buy_wood", for: "village", args: ["n"], target: Nearest("market"), when: "arg.n > 0",
+         then: [ Need("gold", "arg.n * it.wood_price"),
+                 On(It, [ Need("wood_stock", "arg.n"), Add("wood_stock", "-arg.n") ]),
+                 Add("wood", "arg.n"), Add("gold", "-arg.n * it.wood_price") ]),
+        (name: "buy_stone", for: "village", args: ["n"], target: Nearest("market"), when: "arg.n > 0",
+         then: [ Need("gold", "arg.n * it.stone_price"),
+                 On(It, [ Need("stone_stock", "arg.n"), Add("stone_stock", "-arg.n") ]),
+                 Add("stone", "arg.n"), Add("gold", "-arg.n * it.stone_price") ]),
+        (name: "build", for: "village",
+         then: [ Need("wood", "p.house_wood"), Need("stone", "p.house_stone"),
+                 Add("wood", "-p.house_wood"), Add("stone", "-p.house_stone"),
+                 Add("houses", "1"), Emit("house") ]),
+    ],
+
+    score: "me.gold + me.houses * p.house_value",
+
+    end: [ (when: "tick >= p.days", result: "time") ],
+)

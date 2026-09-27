@@ -58,3 +58,45 @@ A hand-drawn dungeon. The hero can **fight** or **spare** each ghost. Killing ra
 | regret (kill one, then spare) | 29–38 | 0–1 | 1 | ~4–5 |
 
 One early kill makes every later mercy more expensive; no rule says "regret is slow".
+
+---
+
+## Game 3: market (`games/market`)
+
+Two seats, simultaneous turns. Alice's village grows wood, Bob's grows stone; a house needs both, so they trade through one market whose prices follow its stock.
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| 3.1 | Legend `'A': ("village", {"owner": 1})` → `Expected string` | Per-instance props in a hand-drawn map (who owns which village) | Legend entry is `kind` or `(kind, {prop: value})`; unknown props are rejected | `legend_props_set_owners`, `legend_prop_typo_is_rejected` |
+| 3.2 | Panel `seats` unknown; one stdin, two players | Several agents in one game, each limited to its own entities | Panel `[agent] seats = {name = owner}`; requests carry `"as"`; an entity is yours if its `owner` prop is your seat's number; `you` is per seat | `seats_enforce_ownership`, `seats_need_an_owner_prop` |
+| 3.3 | `score` unknown | A benchmark needs a number per player | `score:` expression per controllable entity, summed per seat; in every `step` / `observe` | `scores_are_per_seat` |
+| 3.4 | Two same-tick buys of 8 from a stock of 10 were both accepted; **stock went to -7** and one village held 16 stone. Each order was checked against the same start-of-tick world | **Resources must not be spent twice** under simultaneous moves. Atomic groups (1.x) only covered dead targets | `Need(prop, min)`: checked at request time (feedback) and again at apply time against the live state; if it fails the whole group is dropped with a `short` event | `need_prevents_double_spend`: one `short`, stock ≥ 0 |
+| 3.5 | *(expected, did not happen)* World-level state such as prices | Globals | **Not added.** A singleton `market` entity with props, reached via `target: Nearest("market")`, carried it without friction | the market game itself |
+
+**Emergent result:** alice's score, 150 days, per strategy pair (symmetric game, `agents/market.py`):
+
+| alice ↓ \ bob → | builder | dumper | speculator |
+|---|---|---|---|
+| builder | 1815 | 1363 | 1130 |
+| dumper | 798 | 450 | – |
+| speculator | 2161 | – | 2157 |
+
+- Dumping hurts everyone, the dumper included: prices crash to $1.
+- Speculation (sell only when dear, buy only when cheap) is the best response to both builder and speculator.
+- Unlike a prisoner's dilemma, the speculator equilibrium (2157 each) beats cooperative building (1815 each): withholding keeps prices up.
+
+None of these numbers are written in any rule; they come from `price = price_k / (stock + 5)` plus two agents.
+
+---
+
+## What the engine became
+
+| | Before the games | After three games |
+|---|---|---|
+| World | entity map, O(n²) `near` | grid + per-kind index, solid occupancy |
+| Rule language | `when`/`then`, 8 actions, `near`/`count`/`roll` | + `around`, `rand`, `Goto`, `Move`, `On`, `Need`, `target`/`it` |
+| Agents | built-in `move` | declared actions with args, act-time feedback, seats, scores |
+| Game file | kinds, fsms, rules, params (unknown fields ignored) | + layout (with props), actions, end, score; strict |
+| Speed (wolf/sheep, ~2000 entities × 100 ticks) | 3.34 s | 0.53 s |
+
+Deliberately not changed: the one-tick death lag (2.7) and globals (3.5).

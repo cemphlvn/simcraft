@@ -10,7 +10,8 @@ games/wolf_sheep/
 └── engine.toml   # the switches: seed, population, which rules are on, parameters
 ```
 
-Three games so far: `wolf_sheep`, `forest_fire`, `mercy_dungeon`.
+Four games so far, each in its own folder under `games/`: `wolf_sheep`, `forest_fire`, `mercy_dungeon`, `market` (two players).
+How the engine grew out of them: [`docs/emergence.md`](docs/emergence.md).
 
 ## Run
 
@@ -28,6 +29,7 @@ Talk to it over stdin, one JSON line at a time:
 ```
 
 It answers one JSON line at a time. Humans, scripts and AI agents all play it the same way.
+Scripted players live in `agents/` (e.g. `python3 agents/market.py speculator builder`).
 
 ## A rule
 

@@ -24,14 +24,39 @@ pub struct GameDef {
     /// Oyun sonu koşulları; ilk doğru olan sonucu belirler.
     #[serde(default)]
     pub end: Vec<EndDef>,
+    /// Kontrol edilebilir her entity için puan ifadesi; koltuk (seat) başına toplanır.
+    #[serde(default)]
+    pub score: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
-    /// glyph → kind. '.' ve ' ' boş hücredir.
-    pub legend: BTreeMap<char, String>,
+    /// glyph → kind ya da (kind, {prop: değer}). '.' ve ' ' boş hücredir.
+    pub legend: BTreeMap<char, Legend>,
     pub rows: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Legend {
+    Kind(String),
+    /// Bu glyph'teki entity'lere özel prop'lar (ör. `("village", {"owner": 1})`).
+    With(String, BTreeMap<String, i64>),
+}
+
+impl Legend {
+    pub fn kind(&self) -> &str {
+        match self {
+            Legend::Kind(k) | Legend::With(k, _) => k,
+        }
+    }
+    pub fn props(&self) -> Option<&BTreeMap<String, i64>> {
+        match self {
+            Legend::Kind(_) => None,
+            Legend::With(_, p) => Some(p),
+        }
+    }
 }
 
 impl Layout {
@@ -126,6 +151,9 @@ pub enum Do {
     Move(String, String),
     /// İçindeki eylemleri başka bir entity'ye uygular: `On(It, [Add("hp", "-3")])`.
     On(Target, Vec<Do>),
+    /// prop >= ifade olmalı. İstek anında ve uygulama anında (canlı durumda) denetlenir;
+    /// tutmazsa grubun tamamı düşer (aynı tick'te iki alıcı tek stok).
+    Need(String, String),
 }
 
 #[derive(Debug, Clone, Deserialize)]

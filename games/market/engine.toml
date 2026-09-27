@@ -1,0 +1,15 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (market)
+#  Two seats. Each agent speaks with {"as": "<seat>"} and may only act for its own village.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 200
+
+[params]
+days = 150
+
+[agent]
+controllable = ["village"]
+seats = { alice = 1, bob = 2 }

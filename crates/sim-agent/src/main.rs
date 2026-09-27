@@ -16,9 +16,20 @@ use sim_rules::Game;
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 enum Request {
-    Info,
-    Observe { entity: Option<u64> },
-    Act { actions: Vec<ActionReq> },
+    Info {
+        #[serde(rename = "as", default)]
+        seat: Option<String>,
+    },
+    Observe {
+        entity: Option<u64>,
+        #[serde(rename = "as", default)]
+        seat: Option<String>,
+    },
+    Act {
+        #[serde(rename = "as", default)]
+        seat: Option<String>,
+        actions: Vec<ActionReq>,
+    },
     Step { n: Option<u64> },
     Hash,
     Quit,
@@ -41,9 +52,9 @@ struct Session {
 impl Session {
     fn handle(&mut self, req: Request) -> Result<Value, String> {
         match req {
-            Request::Info => Ok(self.info()),
-            Request::Observe { entity } => self.observe(entity),
-            Request::Act { actions } => self.act(actions),
+            Request::Info { seat } => Ok(self.info(seat.as_deref())),
+            Request::Observe { entity, seat } => self.observe(entity, seat.as_deref()),
+            Request::Act { seat, actions } => self.act(seat.as_deref(), actions),
             Request::Step { n } => Ok(self.step(n.unwrap_or(1))),
             Request::Hash => {
                 let w = self.engine.world();
@@ -57,7 +68,7 @@ impl Session {
         self.engine.rules()
     }
 
-    fn info(&self) -> Value {
+    fn info(&self, seat: Option<&str>) -> Value {
         let g = self.game();
         let w = self.engine.world();
         let kinds: BTreeMap<_, _> = g
@@ -74,7 +85,9 @@ impl Session {
             "max_ticks": g.cfg.run.max_ticks,
             "kinds": kinds,
             "controllable": g.cfg.agent.controllable,
-            "you": self.yours(),
+            "seats": g.cfg.agent.seats.keys().collect::<Vec<_>>(),
+            "you": self.yours(seat),
+            "score": g.def.score,
             "switches": g.switches(),
             "params": g.params,
             "actions": g.def.actions.iter().map(|a| json!({
@@ -87,7 +100,7 @@ impl Session {
             "commands": {
                 "info": "{\"cmd\":\"info\"}",
                 "observe": "{\"cmd\":\"observe\"} or {\"cmd\":\"observe\",\"entity\":ID} (local view, '@' = you)",
-                "act": "{\"cmd\":\"act\",\"actions\":[{\"entity\":ID,\"do\":\"<action>\",\"args\":{...}}]}  see `actions`; applied next step, before rules",
+                "act": "{\"cmd\":\"act\",\"as\":\"<seat>\",\"actions\":[{\"entity\":ID,\"do\":\"<action>\",\"args\":{...}}]}  see `actions`; `as` only when the game has seats; applied next step, before rules",
                 "step": "{\"cmd\":\"step\",\"n\":N}  stops early when the game ends (`done`, `result`)",
                 "hash": "{\"cmd\":\"hash\"}",
                 "quit": "{\"cmd\":\"quit\"}",
@@ -95,10 +108,12 @@ impl Session {
         })
     }
 
-    /// Agent'ın yönetebileceği entity'ler.
-    fn yours(&self) -> Vec<u64> {
-        let ctl = &self.game().cfg.agent.controllable;
-        self.engine.world().entities().values().filter(|e| ctl.contains(&e.kind)).map(|e| e.id).collect()
+    /// Agent'ın (koltuk varsa o koltuğun) yönetebileceği entity'ler.
+    fn yours(&self, seat: Option<&str>) -> Vec<u64> {
+        let g = self.game();
+        let ctl = &g.cfg.agent.controllable;
+        let entities = self.engine.world().entities().values();
+        entities.filter(|e| ctl.contains(&e.kind) && g.owns(seat, e) == Ok(true)).map(|e| e.id).collect()
     }
 
     fn counts(&self) -> BTreeMap<&str, usize> {
@@ -115,13 +130,14 @@ impl Session {
         out
     }
 
-    fn observe(&self, entity: Option<u64>) -> Result<Value, String> {
+    fn observe(&self, entity: Option<u64>, seat: Option<&str>) -> Result<Value, String> {
         let w = self.engine.world();
         let Some(id) = entity else {
             let (x0, y0, x1, y1) = (0, 0, w.width - 1, w.height - 1);
             return Ok(json!({
                 "tick": w.tick,
-                "you": self.yours(),
+                "you": self.yours(seat),
+                "scores": self.game().scores(w),
                 "counts": self.counts(),
                 "states": self.states(),
                 "map": self.render(x0, y0, x1, y1, None),
@@ -166,10 +182,10 @@ impl Session {
     }
 
     /// Her istek ayrı değerlendirilir: biri reddedilse de diğerleri kuyruğa girer.
-    fn act(&mut self, actions: Vec<ActionReq>) -> Result<Value, String> {
+    fn act(&mut self, seat: Option<&str>, actions: Vec<ActionReq>) -> Result<Value, String> {
         let (world, game) = (self.engine.world(), self.engine.rules());
         let outcomes: Vec<Result<Group, String>> =
-            actions.iter().map(|a| game.act(world, a.entity, &a.action, &a.args)).collect();
+            actions.iter().map(|a| game.act(world, seat, a.entity, &a.action, &a.args)).collect();
         let mut results = Vec::new();
         for (a, out) in actions.iter().zip(outcomes) {
             match out {
@@ -200,6 +216,7 @@ impl Session {
             "tick": tick,
             "done": tick >= max || self.engine.outcome().is_some(),
             "result": self.engine.outcome(),
+            "scores": self.game().scores(self.engine.world()),
             "hash": format!("{hash:016x}"),
             "counts": self.counts(),
             "states": self.states(),

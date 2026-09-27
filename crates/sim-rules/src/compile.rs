@@ -56,6 +56,7 @@ pub struct Game {
     rules: Vec<CompiledRule>,
     fsms: BTreeMap<String, Vec<CompiledTransition>>,
     ends: Vec<CompiledEnd>,
+    score: Option<AST>,
     compile_errors: Vec<String>,
     ctx: Rc<RefCell<QueryCtx>>,
     /// `p` bir kez kurulur, entity'ler arasında paylaşılır (kopyalanmaz).
@@ -90,13 +91,14 @@ enum CDo {
     Goto(String),
     Move(AST, AST),
     On(Target, Vec<CDo>),
+    Need(String, AST),
 }
 
 impl CDo {
     /// Bu eylemde (ve iç içe `On` bloklarında) değerlendirilecek sayı ifadeleri.
     fn int_exprs<'a>(&'a self, out: &mut Vec<&'a AST>) {
         match self {
-            CDo::Set(_, a) | CDo::Add(_, a) => out.push(a),
+            CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
             CDo::Move(dx, dy) => out.extend([dx, dy]),
             CDo::On(_, ds) => ds.iter().for_each(|d| d.int_exprs(out)),
             _ => {}
@@ -148,6 +150,7 @@ impl Compiler<'_> {
             Do::Goto(s) => CDo::Goto(s.clone()),
             Do::Move(dx, dy) => CDo::Move(self.expr(dx, ctx), self.expr(dy, ctx)),
             Do::On(t, ds) => CDo::On(t.clone(), ds.iter().map(|d| self.doo(d, ctx)).collect()),
+            Do::Need(p, e) => CDo::Need(p.clone(), self.expr(e, ctx)),
         }
     }
 
@@ -178,7 +181,7 @@ impl Compiler<'_> {
 /// Bir `Do` ağacındaki tüm ifade kaynakları (near analizi için).
 fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
     match d {
-        Do::Set(_, e) | Do::Add(_, e) => out.push(e),
+        Do::Set(_, e) | Do::Add(_, e) | Do::Need(_, e) => out.push(e),
         Do::Move(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
         Do::On(_, ds) => ds.iter().for_each(|d| do_sources(d, out)),
         _ => {}
@@ -290,6 +293,7 @@ impl Game {
             .iter()
             .map(|e| CompiledEnd { when: cc.expr(&e.when, &format!("end '{}'", e.result)), result: e.result.clone() })
             .collect();
+        let score = def.score.as_deref().map(|s| cc.expr(s, "score"));
         let errors = cc.errors;
 
         let mut params = def.params.clone();
@@ -307,9 +311,10 @@ impl Game {
             r.then.iter().for_each(|d| do_sources(d, &mut sources));
         }
         sources.extend(def.end.iter().map(|e| e.when.as_str()));
+        sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
-        Game { def, cfg, params, rhai, rules, fsms, ends, compile_errors: errors, ctx, p_shared, near_kinds }
+        Game { def, cfg, params, rhai, rules, fsms, ends, score, compile_errors: errors, ctx, p_shared, near_kinds }
     }
 
     /// Dünya boyutu `layout`'tan ya da panelin `[world]`'ünden. Önce layout yerleşir,
@@ -345,14 +350,16 @@ impl Game {
                     if ch == '.' || ch == ' ' {
                         continue;
                     }
-                    let Some(kind) = l.legend.get(&ch) else {
+                    let Some(entry) = l.legend.get(&ch) else {
                         errs.push(format!("layout row {y}, column {x}: '{ch}' is not in the legend"));
                         continue;
                     };
+                    let kind = entry.kind();
                     if !self.def.kinds.contains_key(kind) {
                         continue; // check_refs raporlar
                     }
-                    let (state, props) = self.template(kind);
+                    let (state, mut props) = self.template(kind);
+                    props.extend(entry.props().into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
                     world.spawn(kind, &state, x as i64, y as i64, props);
                 }
             }
@@ -446,7 +453,14 @@ impl Game {
 
     /// Agent bir eylem ister. Dünya `act` ile bir sonraki tick arasında değişmediği
     /// için eylem hemen değerlendirilir; sonuç (Group) tick'te kurallardan önce uygulanır.
-    pub fn act(&self, world: &World, id: EntityId, name: &str, args: &BTreeMap<String, i64>) -> Result<Group, String> {
+    pub fn act(
+        &self,
+        world: &World,
+        seat: Option<&str>,
+        id: EntityId,
+        name: &str,
+        args: &BTreeMap<String, i64>,
+    ) -> Result<Group, String> {
         let rule = self
             .rules
             .iter()
@@ -458,6 +472,9 @@ impl Game {
         let e = world.get(id).ok_or_else(|| format!("entity {id} does not exist"))?;
         if !self.cfg.agent.controllable.contains(&e.kind) {
             return Err(format!("kind '{}' is not controllable (engine.toml [agent])", e.kind));
+        }
+        if !self.owns(seat, e)? {
+            return Err(format!("entity {id} is not yours"));
         }
         if !Self::applies(rule, &e.kind) {
             return Err(format!("action '{name}' is for '{}', entity {id} is a '{}'", rule.for_kind, e.kind));
@@ -482,10 +499,43 @@ impl Game {
             Some(g) => Ok(g),
             None => {
                 let target = def.target.as_ref().map(|t| format!("{t:?}"));
-                let needs: Vec<String> = target.into_iter().chain(def.when.clone()).collect();
+                let mut needs: Vec<String> = target.into_iter().chain(def.when.clone()).collect();
+                def.then.iter().for_each(|d| need_texts(d, &mut needs));
                 Err(format!("refused: needs {}", needs.join(" and ")))
             }
         }
+    }
+
+    /// Koltuk yoksa herkes her şeyi yönetir. Koltuk varsa `as` şart ve `owner` eşleşmeli.
+    pub fn owns(&self, seat: Option<&str>, e: &Entity) -> Result<bool, String> {
+        let seats = &self.cfg.agent.seats;
+        if seats.is_empty() {
+            return Ok(true);
+        }
+        let seat = seat.ok_or_else(|| format!("this game has seats {:?}; send \"as\"", seats.keys().collect::<Vec<_>>()))?;
+        let n = seats.get(seat).ok_or_else(|| format!("unknown seat '{seat}'"))?;
+        Ok(e.props.get("owner") == Some(n))
+    }
+
+    /// Puan tablosu: koltuk başına (koltuk yoksa entity başına) `score` toplamı.
+    pub fn scores(&self, world: &World) -> BTreeMap<String, i64> {
+        let mut out = BTreeMap::new();
+        let Some(score) = &self.score else { return out };
+        let counts = self.counts(world);
+        self.bind_world(Some(world));
+        let by_owner: BTreeMap<i64, &String> = self.cfg.agent.seats.iter().map(|(s, n)| (*n, s)).collect();
+        for e in world.entities().values().filter(|e| self.cfg.agent.controllable.contains(&e.kind)) {
+            let mut scope = self.base_scope(world, e, &counts);
+            self.bind(e, 0);
+            let v = self.eval_int(&mut scope, score).unwrap_or(0);
+            let key = match e.props.get("owner").and_then(|n| by_owner.get(n)) {
+                Some(seat) if !by_owner.is_empty() => (*seat).clone(),
+                _ => e.id.to_string(),
+            };
+            *out.entry(key).or_insert(0) += v;
+        }
+        self.bind_world(None);
+        out
     }
 
     /// Tick başına bir kez; entity'ler arasında paylaşılır.
@@ -650,6 +700,13 @@ impl Game {
                 let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
                 out.push(Effect::Move { e: subj.id, dx, dy });
             }
+            CDo::Need(prop, ast) => {
+                let min = self.eval_int(scope, ast)?;
+                if subj.props.get(prop).copied().unwrap_or(0) < min {
+                    return Ok(false); // şu an bile yetmiyor → ateşlenmez
+                }
+                out.push(Effect::Need { e: subj.id, prop: prop.clone(), min });
+            }
             CDo::On(t, ds) => {
                 let Some(x) = self.resolve(world, who, t) else { return Ok(false) };
                 for d in ds {
@@ -738,8 +795,21 @@ impl Game {
             }
         }
         if let Some(l) = &self.def.layout {
-            for (ch, k) in l.legend.iter().filter(|(_, k)| !known(k)) {
-                errs.push(format!("layout legend '{ch}': unknown kind '{k}'"));
+            for (ch, entry) in &l.legend {
+                let Some(kind) = self.def.kinds.get(entry.kind()) else {
+                    errs.push(format!("layout legend '{ch}': unknown kind '{}'", entry.kind()));
+                    continue;
+                };
+                for p in entry.props().into_iter().flatten().map(|(p, _)| p).filter(|p| !kind.props.contains_key(*p)) {
+                    errs.push(format!("layout legend '{ch}': '{}' has no prop '{p}'", entry.kind()));
+                }
+            }
+        }
+        if !self.cfg.agent.seats.is_empty() {
+            for k in &self.cfg.agent.controllable {
+                if self.def.kinds.get(k).is_some_and(|d| !d.props.contains_key("owner")) {
+                    errs.push(format!("engine.toml [agent] seats: controllable kind '{k}' needs an 'owner' prop"));
+                }
             }
         }
 
@@ -836,6 +906,15 @@ impl Game {
                 errs.push(format!("end '{}': {m}", end.result));
             }
         }
+        if let Some(score) = &self.score {
+            for k in &self.cfg.agent.controllable {
+                let e = synthetic(k);
+                let mut scope = self.base_scope(world, &e, &counts);
+                if let Err(m) = self.eval_int(&mut scope, score) {
+                    errs.push(format!("score on '{k}': {m}"));
+                }
+            }
+        }
         self.bind_world(None);
     }
 }
@@ -912,6 +991,15 @@ impl Rules for Game {
             }
         }
         None
+    }
+}
+
+/// Reddedilen bir eylemin `Need` koşulları, okunur biçimde.
+fn need_texts(d: &Do, out: &mut Vec<String>) {
+    match d {
+        Do::Need(p, e) => out.push(format!("{p} >= {e}")),
+        Do::On(_, ds) => ds.iter().for_each(|d| need_texts(d, out)),
+        _ => {}
     }
 }
 

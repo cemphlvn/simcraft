@@ -44,7 +44,7 @@ tick:
 ```
 
 - **Rules never mutate the world.** They produce a `Group`: the effects of one rule firing.
-- **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently.
+- **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently. Likewise, if any `Need` in the group no longer holds against the live state, the group is dropped with a `short` event.
 - An entity **moves at most once per tick**. The first `Move` wins.
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 - **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
@@ -73,6 +73,7 @@ tick:
 | `Goto(state)` | Changes the entity's FSM state (validated against the kind's states) |
 | `Move(dx, dy)` | One step; `dx`, `dy` are expressions (e.g. `arg.dx`) |
 | `On(Me \| It \| Nearest(kind), [...])` | Applies the nested actions to that entity instead of the owner |
+| `Need(prop, min)` | Guard: `prop >= min` on the subject. Checked at request/eval time and again at apply time against the live state; if it fails the whole group is dropped (`short`). Prevents double spending under simultaneous moves |
 
 **B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
@@ -87,9 +88,13 @@ tick:
 
 **Actions** (`actions:` in `game.ron`) have the same shape as rules plus `args: [...]` (`arg.<name>` in expressions). They run only when an agent asks, and switches apply to them too.
 
-**Layout:** `layout: (legend: {char: kind}, rows: [...])` places entities and sets the world size; `.` and space are empty. The panel's `[world]` is then optional and must match if present.
+**Layout:** `layout: (legend: {char: kind | (kind, {prop: value})}, rows: [...])` places entities and sets the world size; `.` and space are empty. The panel's `[world]` is then optional and must match if present.
 
 **End:** `end: [(when, result)]`: world-level expressions (`count`, `p`, `tick`); the first true one ends the game, and the engine stops ticking.
+
+**Score:** `score: "<expr>"` is evaluated for each controllable entity and summed per seat (or per entity without seats).
+
+**Seats (panel):** `[agent] seats = {alice = 1, bob = 2}` makes the game multi-player. Requests carry `"as": "<seat>"`; an entity belongs to a seat when its `owner` prop equals the seat's number, and controllable kinds must declare `owner`.
 
 **Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, and `glyphs: {state: char}` for per-state rendering.
 
@@ -110,11 +115,11 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 
 | Request | Response |
 |---|---|
-| `{"cmd":"info"}` | Game, kinds (glyph, props, states), controllable kinds, `you` (your entity ids), declared `actions`, effective switches/params, command schema |
-| `{"cmd":"observe"}` | Full map (ASCII), counts, entities |
+| `{"cmd":"info"[,"as":SEAT]}` | Game, kinds (glyph, props, states), controllable kinds, `seats`, `you` (your entity ids), declared `actions`, `score`, effective switches/params, command schema |
+| `{"cmd":"observe"[,"as":SEAT]}` | Full map (ASCII), `you`, `scores`, counts, states, entities |
 | `{"cmd":"observe","entity":ID}` | `observe_radius` window, `@` = you, visible entities |
-| `{"cmd":"act","actions":[{"entity":ID,"do":"<action>","args":{...}}]}` | Evaluated now, applied on the next `step` before rules. Per-action `results` with `ok` or the reason (`refused: needs …`, `unknown action`, `takes args`, `switched off`, `not controllable`) |
-| `{"cmd":"step","n":N}` | tick, done, result (from `end`), hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `blocked`, `error: …`) |
+| `{"cmd":"act"[,"as":SEAT],"actions":[{"entity":ID,"do":"<action>","args":{...}}]}` | Evaluated now, applied on the next `step` before rules. Per-action `results` with `ok` or the reason (`refused: needs …`, `unknown action`, `takes args`, `switched off`, `not controllable`, `not yours`) |
+| `{"cmd":"step","n":N}` | tick, done, result (from `end`), `scores`, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `short`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
 
 ## Roadmap
@@ -124,6 +129,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [x] engine.toml panel (switches, hyperparameters, safety valve)
 - [x] JSON stdio agent interface, wolf/sheep
 - [x] Layout, declared actions, targets (`it`, `On`), end conditions (game 2)
+- [x] Seats, scores, `Need` guards, legend props (game 3)
 - [ ] Event log → `sim-replay` (same log → same hash)
 - [ ] MCP wrapper (so external agents can connect directly)
 - [ ] `sim-tui` (ratatui) viewer
