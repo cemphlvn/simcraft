@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (mercy dungeon)
+#  The map comes from game.ron `layout`, so there is no [world] or [spawn].
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 7
+max_ticks = 400
+
+[params]
+ghost_hit = 40
+mercy_to_spare = 4
+
+[agent]
+controllable = ["hero"]
+observe_radius = 4

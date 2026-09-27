@@ -15,6 +15,38 @@ pub struct GameDef {
     #[serde(default)]
     pub params: BTreeMap<String, i64>,
     pub rules: Vec<RuleDef>,
+    /// Elle çizilmiş harita. Varsa dünya boyutu buradan gelir.
+    #[serde(default)]
+    pub layout: Option<Layout>,
+    /// Agent'ların isteyebileceği eylemler. Kuralla aynı yapı; yalnızca istenince çalışır.
+    #[serde(default)]
+    pub actions: Vec<RuleDef>,
+    /// Oyun sonu koşulları; ilk doğru olan sonucu belirler.
+    #[serde(default)]
+    pub end: Vec<EndDef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Layout {
+    /// glyph → kind. '.' ve ' ' boş hücredir.
+    pub legend: BTreeMap<char, String>,
+    pub rows: Vec<String>,
+}
+
+impl Layout {
+    pub fn size(&self) -> (i64, i64) {
+        let w = self.rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+        (w as i64, self.rows.len() as i64)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndDef {
+    /// Dünya düzeyinde Rhai ifadesi (`count`, `p`, `tick`) → bool.
+    pub when: String,
+    pub result: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +90,12 @@ pub struct RuleDef {
     pub for_kind: String,
     #[serde(default)]
     pub state: Option<String>,
+    /// Hedef: `Nearest(kind)`. Yoksa kural ateşlenmez. İfadelerde `it` (`it.dist` dahil).
+    #[serde(default)]
+    pub target: Option<Target>,
+    /// Yalnızca eylemler: agent'ın vermesi gereken argümanlar. İfadelerde `arg.<ad>`.
+    #[serde(default)]
+    pub args: Vec<String>,
     /// Rhai ifadesi → bool. Yoksa her tick ateşlenir.
     #[serde(default)]
     pub when: Option<String>,
@@ -84,10 +122,17 @@ pub enum Do {
     Wander,
     /// FSM durumunu değiştirir (etkisiyle birlikte: `[Goto("Fire"), Emit("lightning")]`).
     Goto(String),
+    /// Bir adım; dx, dy ifadedir (ör. `Move("arg.dx", "arg.dy")`).
+    Move(String, String),
+    /// İçindeki eylemleri başka bir entity'ye uygular: `On(It, [Add("hp", "-3")])`.
+    On(Target, Vec<Do>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum Target {
+    /// Kuralın sahibi.
     Me,
+    /// Kuralın `target`'ı.
+    It,
     Nearest(String),
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sim_core::{Effect, Engine, Group, Loaded, Running, World};
+use sim_core::{Engine, Group, Loaded, Running};
 use sim_rules::Game;
 
 #[derive(Deserialize)]
@@ -28,8 +28,10 @@ enum Request {
 #[serde(deny_unknown_fields)]
 struct ActionReq {
     entity: u64,
-    #[serde(rename = "move")]
-    mv: [i64; 2],
+    #[serde(rename = "do")]
+    action: String,
+    #[serde(default)]
+    args: BTreeMap<String, i64>,
 }
 
 struct Session {
@@ -72,17 +74,31 @@ impl Session {
             "max_ticks": g.cfg.run.max_ticks,
             "kinds": kinds,
             "controllable": g.cfg.agent.controllable,
+            "you": self.yours(),
             "switches": g.switches(),
             "params": g.params,
+            "actions": g.def.actions.iter().map(|a| json!({
+                "name": a.name,
+                "for": a.for_kind,
+                "args": a.args,
+                "target": a.target.as_ref().map(|t| format!("{t:?}")),
+                "when": a.when,
+            })).collect::<Vec<_>>(),
             "commands": {
                 "info": "{\"cmd\":\"info\"}",
                 "observe": "{\"cmd\":\"observe\"} or {\"cmd\":\"observe\",\"entity\":ID} (local view, '@' = you)",
-                "act": "{\"cmd\":\"act\",\"actions\":[{\"entity\":ID,\"move\":[dx,dy]}]}  dx,dy in -1..1; applied next step, overrides rule movement",
-                "step": "{\"cmd\":\"step\",\"n\":N}",
+                "act": "{\"cmd\":\"act\",\"actions\":[{\"entity\":ID,\"do\":\"<action>\",\"args\":{...}}]}  see `actions`; applied next step, before rules",
+                "step": "{\"cmd\":\"step\",\"n\":N}  stops early when the game ends (`done`, `result`)",
                 "hash": "{\"cmd\":\"hash\"}",
                 "quit": "{\"cmd\":\"quit\"}",
             },
         })
+    }
+
+    /// Agent'ın yönetebileceği entity'ler.
+    fn yours(&self) -> Vec<u64> {
+        let ctl = &self.game().cfg.agent.controllable;
+        self.engine.world().entities().values().filter(|e| ctl.contains(&e.kind)).map(|e| e.id).collect()
     }
 
     fn counts(&self) -> BTreeMap<&str, usize> {
@@ -105,6 +121,7 @@ impl Session {
             let (x0, y0, x1, y1) = (0, 0, w.width - 1, w.height - 1);
             return Ok(json!({
                 "tick": w.tick,
+                "you": self.yours(),
                 "counts": self.counts(),
                 "states": self.states(),
                 "map": self.render(x0, y0, x1, y1, None),
@@ -148,26 +165,22 @@ impl Session {
         rows.into_iter().map(String::from_iter).collect()
     }
 
+    /// Her istek ayrı değerlendirilir: biri reddedilse de diğerleri kuyruğa girer.
     fn act(&mut self, actions: Vec<ActionReq>) -> Result<Value, String> {
-        let w: &World = self.engine.world();
-        let controllable = &self.game().cfg.agent.controllable;
-        let mut effects = Vec::new();
-        for a in &actions {
-            let e = w.get(a.entity).ok_or(format!("entity {} does not exist", a.entity))?;
-            if !controllable.contains(&e.kind) {
-                return Err(format!("kind '{}' is not controllable (engine.toml [agent])", e.kind));
+        let (world, game) = (self.engine.world(), self.engine.rules());
+        let outcomes: Vec<Result<Group, String>> =
+            actions.iter().map(|a| game.act(world, a.entity, &a.action, &a.args)).collect();
+        let mut results = Vec::new();
+        for (a, out) in actions.iter().zip(outcomes) {
+            match out {
+                Ok(group) => {
+                    self.engine.queue(group);
+                    results.push(json!({ "entity": a.entity, "do": a.action, "ok": true }));
+                }
+                Err(e) => results.push(json!({ "entity": a.entity, "do": a.action, "ok": false, "error": e })),
             }
-            let [dx, dy] = a.mv;
-            if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dy) {
-                return Err("move must be within -1..1".into());
-            }
-            effects.push(Effect::Move { e: a.entity, dx, dy });
         }
-        // Her aksiyon ayrı grup: biri ölürse diğerleri düşmesin.
-        for (a, ef) in actions.iter().zip(effects) {
-            self.engine.queue(Group { source: "agent".into(), actor: Some(a.entity), effects: vec![ef] });
-        }
-        Ok(json!({ "queued": actions.len(), "applies_at_tick": self.engine.world().tick }))
+        Ok(json!({ "results": results, "applies_at_tick": self.engine.world().tick }))
     }
 
     fn step(&mut self, n: u64) -> Value {
@@ -175,7 +188,7 @@ impl Session {
         let mut events = Vec::new();
         let mut hash = self.engine.world().hash();
         for _ in 0..n {
-            if self.engine.world().tick >= max {
+            if self.engine.world().tick >= max || self.engine.outcome().is_some() {
                 break;
             }
             let report = self.engine.tick();
@@ -185,7 +198,8 @@ impl Session {
         let tick = self.engine.world().tick;
         json!({
             "tick": tick,
-            "done": tick >= max,
+            "done": tick >= max || self.engine.outcome().is_some(),
+            "result": self.engine.outcome(),
             "hash": format!("{hash:016x}"),
             "counts": self.counts(),
             "states": self.states(),

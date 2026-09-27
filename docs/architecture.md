@@ -10,7 +10,7 @@ How the engine got here, change by change, is in [`emergence.md`](emergence.md).
 |---|---|---|---|
 | **Designer** | `games/<game>/game.ron` | The world: kinds, FSMs, rules, tunable knobs (`params`) | Seed, population, which rules are on |
 | **Operator** (the person running the steam engine) | `games/<game>/engine.toml` | How the engine runs: seed, duration, world size, starting population, **switches**, **hyperparameters**, the Rhai safety valve, agent access | The rules themselves |
-| **Agent** | stdin/stdout JSON | Movement of controllable entities in the game | Rules and panel |
+| **Agent** | stdin/stdout JSON | Which declared action a controllable entity takes | Rules and panel |
 
 The operator can only turn the knobs the designer exposed. If `engine.toml` names a rule, parameter or kind that `game.ron` does not define, the engine **does not start**. Typos are never silently ignored.
 
@@ -71,6 +71,8 @@ tick:
 | `Spawn(kind)` | Spawns at the entity's position from the kind's template |
 | `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | One step (8 directions) |
 | `Goto(state)` | Changes the entity's FSM state (validated against the kind's states) |
+| `Move(dx, dy)` | One step; `dx`, `dy` are expressions (e.g. `arg.dx`) |
+| `On(Me \| It \| Nearest(kind), [...])` | Applies the nested actions to that entity instead of the owner |
 
 **B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
@@ -80,6 +82,14 @@ tick:
 **World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `rand(n)` → 0..n-1, deterministic.
 
 `near.<kind>` is computed only for kinds that some expression mentions as `near.<kind>`.
+
+**Targets:** a rule or action with `target: Nearest(kind)` sees `it` (the target's props plus `it.dist`). With no such entity the rule does not fire.
+
+**Actions** (`actions:` in `game.ron`) have the same shape as rules plus `args: [...]` (`arg.<name>` in expressions). They run only when an agent asks, and switches apply to them too.
+
+**Layout:** `layout: (legend: {char: kind}, rows: [...])` places entities and sets the world size; `.` and space are empty. The panel's `[world]` is then optional and must match if present.
+
+**End:** `end: [(when, result)]`: world-level expressions (`count`, `p`, `tick`); the first true one ends the game, and the engine stops ticking.
 
 **Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, and `glyphs: {state: char}` for per-state rendering.
 
@@ -100,11 +110,11 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 
 | Request | Response |
 |---|---|
-| `{"cmd":"info"}` | Game, kinds (glyph, props, states), controllable kinds, effective switches/params, command schema |
+| `{"cmd":"info"}` | Game, kinds (glyph, props, states), controllable kinds, `you` (your entity ids), declared `actions`, effective switches/params, command schema |
 | `{"cmd":"observe"}` | Full map (ASCII), counts, entities |
 | `{"cmd":"observe","entity":ID}` | `observe_radius` window, `@` = you, visible entities |
-| `{"cmd":"act","actions":[{"entity":ID,"move":[dx,dy]}]}` | Applied on the next `step`, before rules |
-| `{"cmd":"step","n":N}` | tick, done, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `blocked`, `error: …`) |
+| `{"cmd":"act","actions":[{"entity":ID,"do":"<action>","args":{...}}]}` | Evaluated now, applied on the next `step` before rules. Per-action `results` with `ok` or the reason (`refused: needs …`, `unknown action`, `takes args`, `switched off`, `not controllable`) |
+| `{"cmd":"step","n":N}` | tick, done, result (from `end`), hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
 
 ## Roadmap
@@ -113,6 +123,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [x] RON (A) + Rhai (B) + dry-run validation
 - [x] engine.toml panel (switches, hyperparameters, safety valve)
 - [x] JSON stdio agent interface, wolf/sheep
+- [x] Layout, declared actions, targets (`it`, `On`), end conditions (game 2)
 - [ ] Event log → `sim-replay` (same log → same hash)
 - [ ] MCP wrapper (so external agents can connect directly)
 - [ ] `sim-tui` (ratatui) viewer

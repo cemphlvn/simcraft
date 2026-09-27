@@ -1,4 +1,4 @@
-use sim_core::{Effect, Engine, Group, Loaded, Running};
+use sim_core::{Engine, Loaded, Running};
 use sim_rules::Game;
 
 const GAME: &str = include_str!("../../../games/wolf_sheep/game.ron");
@@ -47,7 +47,7 @@ fn switch_off_disables_rule() {
 fn unknown_switch_is_rejected() {
     let panel = PANEL.replace("[switches]", "[switches]\npredaton = false");
     let errs = boot(GAME, &panel).err().expect("must fail");
-    assert!(errs.iter().any(|e| e.contains("no rule named 'predaton'")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("no rule or action named 'predaton'")), "{errs:?}");
 }
 
 #[test]
@@ -82,7 +82,9 @@ fn agent_move_overrides_rule_move() {
     let mut e = boot(GAME, PANEL).expect("valid");
     let wolf = e.world().entities().values().find(|x| x.kind == "wolf").cloned().expect("a wolf");
     let dx = if wolf.x < e.world().width / 2 { 1 } else { -1 };
-    e.queue(Group { source: "agent".into(), actor: Some(wolf.id), effects: vec![Effect::Move { e: wolf.id, dx, dy: 0 }] });
+    let args = [("dx".to_string(), dx), ("dy".to_string(), 0)].into();
+    let group = e.rules().act(e.world(), wolf.id, "move", &args).expect("move is a declared action");
+    e.queue(group);
     e.tick();
     let after = &e.world().get(wolf.id).unwrap();
     assert_eq!((after.x, after.y), (wolf.x + dx, wolf.y));
@@ -136,4 +138,97 @@ fn glyph_for_unknown_state_is_rejected() {
     let game = FIRE.replace(r#""Fire": '*'"#, r#""Fier": '*'"#);
     let errs = boot(&game, FIRE_PANEL).err().expect("must fail");
     assert!(errs.iter().any(|e| e.contains("glyph for unknown state 'Fier'")), "{errs:?}");
+}
+
+// --- mercy dungeon ---
+
+const DUNGEON: &str = include_str!("../../../games/mercy_dungeon/game.ron");
+const DUNGEON_PANEL: &str = include_str!("../../../games/mercy_dungeon/engine.toml");
+
+fn hero(e: &Engine<Running, Game>) -> sim_core::Entity {
+    e.world().entities().values().find(|x| x.kind == "hero").cloned().expect("a hero")
+}
+
+fn no_args() -> std::collections::BTreeMap<String, i64> {
+    Default::default()
+}
+
+#[test]
+fn layout_sets_world_and_places_entities() {
+    let e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
+    let w = e.world();
+    assert_eq!((w.width, w.height), (22, 10));
+    let h = hero(&e);
+    assert_eq!((h.x, h.y), (1, 1));
+    assert_eq!(w.count("ghost"), 3);
+}
+
+#[test]
+fn walls_block_solid_movement() {
+    let mut e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
+    let h = hero(&e);
+    let args = [("dx".to_string(), -1), ("dy".to_string(), 0)].into();
+    let g = e.rules().act(e.world(), h.id, "move", &args).expect("move");
+    e.queue(g);
+    e.tick();
+    assert_eq!(e.world().get(h.id).map(|x| (x.x, x.y)), Some((1, 1)), "wall at x=0");
+}
+
+#[test]
+fn action_refused_when_condition_fails() {
+    let e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
+    let err = e.rules().act(e.world(), hero(&e).id, "fight", &no_args()).expect_err("no ghost adjacent");
+    assert!(err.starts_with("refused"), "{err}");
+}
+
+#[test]
+fn action_errors_are_specific() {
+    let e = boot(DUNGEON, DUNGEON_PANEL).expect("valid");
+    let id = hero(&e).id;
+    let g = e.rules();
+    assert!(g.act(e.world(), id, "dance", &no_args()).unwrap_err().contains("unknown action"));
+    assert!(g.act(e.world(), id, "move", &no_args()).unwrap_err().contains("takes args"));
+    assert!(g.act(e.world(), 1, "move", &no_args()).unwrap_err().contains("not controllable"));
+}
+
+#[test]
+fn operator_can_switch_off_an_action() {
+    let panel = DUNGEON_PANEL.replace("[params]", "[switches]\nspare = false\n\n[params]");
+    let e = boot(DUNGEON, &panel).expect("valid");
+    let err = e.rules().act(e.world(), hero(&e).id, "spare", &no_args()).unwrap_err();
+    assert!(err.contains("switched off"), "{err}");
+}
+
+#[test]
+fn end_condition_finishes_the_game() {
+    let empty = DUNGEON.replace(".....g.....", "...........").replace(".g.", "...").replace("#...g", "#....");
+    let mut e = boot(&empty, DUNGEON_PANEL).expect("valid");
+    assert_eq!(e.outcome(), Some("win"));
+    let r = e.tick();
+    assert_eq!((r.tick, r.outcome.as_deref()), (0, Some("win")), "a finished game does not tick");
+}
+
+#[test]
+fn it_without_target_is_rejected() {
+    let game = DUNGEON.replace(
+        r#"(name: "ghost_dust","#,
+        r#"(name: "bad", for: "hero", then: [ On(It, [ Add("hp", "1") ]) ]),
+        (name: "ghost_dust","#,
+    );
+    let errs = boot(&game, DUNGEON_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("uses It but has no target")), "{errs:?}");
+}
+
+#[test]
+fn layout_char_not_in_legend_is_rejected() {
+    let game = DUNGEON.replace("#H.......#", "#H...?...#");
+    let errs = boot(&game, DUNGEON_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("'?' is not in the legend")), "{errs:?}");
+}
+
+#[test]
+fn panel_world_must_match_layout() {
+    let panel = DUNGEON_PANEL.replace("[params]", "[world]\nwidth = 30\nheight = 10\n\n[params]");
+    let errs = boot(DUNGEON, &panel).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("does not match game.ron layout")), "{errs:?}");
 }

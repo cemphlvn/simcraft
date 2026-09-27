@@ -1,0 +1,80 @@
+#![enable(implicit_some)]
+// Mercy dungeon. You are the hero. Ghosts drift through the halls.
+// Next to a ghost you can FIGHT it or SPARE it.
+//   Killing raises your LV (Level of Violence).
+//   A hurt ghost turns Angry, chases you and strikes back; an Angry ghost cannot be spared.
+//   Mercy works better while your LV is 0.
+// Win: no ghosts left, however they left. Lose: the hero falls.
+Game(
+    name: "mercy_dungeon",
+
+    kinds: {
+        "wall":  (glyph: '#', solid: true),
+        "hero":  (glyph: 'H', solid: true, props: { "hp": 10, "lv": 0 }),
+        "ghost": (glyph: 'g', solid: true, props: { "hp": 6, "mercy": 0 }, fsm: "ghost",
+                  glyphs: { "Calm": 'g', "Angry": 'G' }),
+    },
+
+    params: {
+        "dmg": 3,
+        "ghost_dmg": 1,
+        "ghost_hit": 40,
+        "mercy_to_spare": 4,
+    },
+
+    layout: (
+        legend: { '#': "wall", 'H': "hero", 'g': "ghost" },
+        rows: [
+            "######################",
+            "#H.......#...........#",
+            "#........#.....g.....#",
+            "#........#...........#",
+            "#............#####...#",
+            "#........#.......#.g.#",
+            "#####.####.......#...#",
+            "#................#...#",
+            "#...g............#...#",
+            "######################",
+        ],
+    ),
+
+    fsms: {
+        "ghost": (
+            initial: "Calm",
+            transitions: [
+                (from: "Calm", to: "Angry", when: "me.hp < 6"),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "ghost_drift", for: "ghost", state: "Calm",  then: [ Wander ]),
+        (name: "ghost_chase", for: "ghost", state: "Angry", then: [ MoveToward("hero") ]),
+        (name: "ghost_strike", for: "ghost", state: "Angry", target: Nearest("hero"),
+         when: "it.dist <= 1 && roll < p.ghost_hit",
+         then: [ On(It, [ Add("hp", "-p.ghost_dmg") ]), Emit("strike") ]),
+        (name: "ghost_dust",   for: "ghost", when: "me.hp <= 0", then: [ Emit("dust"), Despawn(Me) ]),
+        (name: "ghost_spared", for: "ghost", when: "me.mercy >= p.mercy_to_spare",
+         then: [ Emit("spared"), Despawn(Me) ]),
+        (name: "hero_falls",   for: "hero",  when: "me.hp <= 0", then: [ Emit("fallen"), Despawn(Me) ]),
+    ],
+
+    // What an agent may ask the hero to do.
+    actions: [
+        (name: "move", for: "hero", args: ["dx", "dy"], then: [ Move("arg.dx", "arg.dy") ]),
+        // `it.hp > 0`: a ghost at 0 hp is only removed next tick (every rule sees the
+        // previous tick). Without this guard the hero could hit the corpse and gain LV again.
+        (name: "fight", for: "hero", target: Nearest("ghost"), when: "it.dist <= 1 && it.hp > 0",
+         then: [ On(It, [ Add("hp", "-p.dmg") ]),
+                 Add("lv", "if it.hp <= p.dmg { 1 } else { 0 }"),
+                 Emit("fight") ]),
+        (name: "spare", for: "hero", target: Nearest("ghost"),
+         when: r#"it.dist <= 1 && it.state == "Calm""#,
+         then: [ On(It, [ Add("mercy", "if me.lv == 0 { 2 } else { 1 }") ]), Emit("spare") ]),
+    ],
+
+    end: [
+        (when: "count.hero == 0",  result: "lose"),
+        (when: "count.ghost == 0", result: "win"),
+    ],
+)

@@ -9,7 +9,9 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct EngineConfig {
     pub run: RunCfg,
-    pub world: WorldCfg,
+    /// game.ron'da `layout` varsa gerekmez (verilirse ona uymalı).
+    #[serde(default)]
+    pub world: Option<WorldCfg>,
     /// Başlangıç nüfusu: kind → adet.
     #[serde(default)]
     pub spawn: BTreeMap<String, u32>,

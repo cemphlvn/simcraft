@@ -32,3 +32,29 @@ size   256-1023  ###                    3
 ```
 
 At `grow / lightning = 100` almost every fire burned the whole map. The operator's panel is where that difference is chosen.
+
+---
+
+## Game 2: mercy dungeon (`games/mercy_dungeon`)
+
+A hand-drawn dungeon. The hero can **fight** or **spare** each ghost. Killing raises LV (Level of Violence); mercy works better at LV 0. A hurt ghost turns Angry, chases and strikes back.
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| 2.1 | `Unexpected field named layout`. Before 1.1 it would have been **silently ignored**, leaving an empty dungeon | A hand-authored map, with world size taken from it | `layout: (legend: {char: kind}, rows: [...])`; panel `[world]` becomes optional (must match if given) | `layout_sets_world_and_places_entities`, `panel_world_must_match_layout`, `layout_char_not_in_legend_is_rejected` |
+| 2.2 | The only agent verb was a built-in `move` | What an agent may do is **game design**, not engine design | `actions:` in `game.ron`: same shape as rules, with `args` (`arg.<name>` in expressions); run only when asked. `move` itself became a declared action (`Move(dx, dy)`); wolf/sheep migrated. Operator switches cover actions too | `action_errors_are_specific`, `operator_can_switch_off_an_action` |
+| 2.3 | A fight must lower **the ghost's** hp, and needs to read it (`it.hp`) | Effects on another entity, with its props visible | Rule/action `target: Nearest(kind)` → `it` in scope (with `it.dist`); `On(Me \| It \| Nearest(k), [...])` applies nested actions to that entity; validated recursively (`It` without `target` fails) | `it_without_target_is_rejected` |
+| 2.4 | The game can be won or lost; the step report couldn't say so | Win/lose as data | `end: [(when, result)]` over `count`, `p`, `tick`; `Rules::outcome`; a finished engine stops ticking; step returns `done` + `result` | `end_condition_finishes_the_game` |
+| 2.5 | An `act` could only be judged at the next tick | Immediate feedback for agents | The world does not change between `act` and `step`, so the action is evaluated at `act` time and its group is queued; refusals say what was needed (`refused: needs Nearest("ghost") and it.dist <= 1 && it.hp > 0`) | `action_refused_when_condition_fails` |
+| 2.6 | `observe` on entity 1 returned a wall; the agent had no way to find its hero | An agent needs to know its own entities | `you: [ids]` in `info` and `observe` | scripted agent uses `info.you` |
+| 2.7 | Violent run ended at LV 4 after 3 kills | **Not an engine change.** A ghost at 0 hp is removed next tick (every rule sees the previous tick); the hero hit the corpse. Changing that would break order-independence | Game fix: `fight` requires `it.hp > 0`. Logged as a design pitfall of simultaneous update | LV = kills in every run below |
+
+**Emergent result:** a scripted agent (`agents/mercy_dungeon.py`) with three policies, 4 seeds each, all wins:
+
+| Policy | Ticks | HP lost | LV | Spares per ghost |
+|---|---|---|---|---|
+| pacifist | 25–32 | 0 | 0 | ~2 |
+| violent | 25–32 | 1–3 | 3 | — |
+| regret (kill one, then spare) | 29–38 | 0–1 | 1 | ~4–5 |
+
+One early kill makes every later mercy more expensive; no rule says "regret is slow".

@@ -72,4 +72,9 @@ Game(
         (name: "wolf_breeding", for: "wolf", when: "me.hunger == 0 && roll < p.wolf_breed_chance",
          then: [ Spawn("wolf"), Emit("born") ]),
     ],
+
+    // What an agent may ask a wolf to do.
+    actions: [
+        (name: "move", for: "wolf", args: ["dx", "dy"], then: [ Move("arg.dx", "arg.dy") ]),
+    ],
 )

@@ -6,9 +6,11 @@ You write the game in a file. The engine runs it.
 
 ```
 games/wolf_sheep/
-├── game.ron      # the world: kinds, states, rules
+├── game.ron      # the world: kinds, states, rules, what players may do
 └── engine.toml   # the switches: seed, population, which rules are on, parameters
 ```
+
+Three games so far: `wolf_sheep`, `forest_fire`, `mercy_dungeon`.
 
 ## Run
 
@@ -21,7 +23,7 @@ Talk to it over stdin, one JSON line at a time:
 ```json
 {"cmd":"info"}
 {"cmd":"observe"}
-{"cmd":"act","actions":[{"entity":41,"move":[1,1]}]}
+{"cmd":"act","actions":[{"entity":41,"do":"move","args":{"dx":1,"dy":1}}]}
 {"cmd":"step","n":10}
 ```
 
