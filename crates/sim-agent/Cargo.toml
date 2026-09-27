@@ -1,0 +1,14 @@
+[package]
+name = "sim-agent"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "simcraft-agent"
+path = "src/main.rs"
+
+[dependencies]
+sim-core.workspace = true
+sim-rules.workspace = true
+serde.workspace = true
+serde_json.workspace = true

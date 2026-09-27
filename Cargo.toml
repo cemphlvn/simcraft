@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/sim-core", "crates/sim-rules", "crates/sim-agent"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+sim-core = { path = "crates/sim-core" }
+sim-rules = { path = "crates/sim-rules" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ron = "0.12"
+toml = "1"
+# no_float + only_i64: script aritmetiği platformdan bağımsız, deterministik kalır
+rhai = { version = "1.26", features = ["no_float", "only_i64"] }

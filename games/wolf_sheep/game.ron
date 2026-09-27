@@ -1,0 +1,75 @@
+#![enable(implicit_some)]
+// Kurt / Koyun — tasarımcının dosyası.
+// İfadeler Rhai'dir ve şunları görür:
+//   me.<prop> me.x me.y me.state me.kind me.id
+//   p.<param>          (aşağıdaki params; engine.toml ezer)
+//   near.<kind>        (en yakın o kind'a mesafe; yoksa 9999)
+//   count.<kind>  tick  roll (0..99, kural başına deterministik zar)
+Game(
+    name: "wolf_sheep",
+
+    kinds: {
+        "sheep": (glyph: 's', props: { "hunger": 0 }, fsm: "sheep"),
+        "wolf":  (glyph: 'W', props: { "hunger": 0 }, fsm: "wolf"),
+    },
+
+    // Tasarımcının açtığı düğmeler. Yönetici engine.toml [params] ile çevirir.
+    params: {
+        "starve_at": 30,
+        "wolf_hunt_at": 12,
+        "sheep_alert": 3,
+        "sheep_breed_chance": 10,
+        "sheep_cap": 90,
+        "graze_gain": 2,
+        "wolf_breed_chance": 3,
+    },
+
+    fsms: {
+        "wolf": (
+            initial: "Roam",
+            transitions: [
+                (from: "Roam", to: "Hunt", when: "me.hunger >= p.wolf_hunt_at"),
+                (from: "Hunt", to: "Roam", when: "me.hunger == 0"),
+            ],
+        ),
+        "sheep": (
+            initial: "Graze",
+            transitions: [
+                (from: "Graze", to: "Flee",  when: "near.wolf <= p.sheep_alert"),
+                (from: "Flee",  to: "Graze", when: "near.wolf > p.sheep_alert"),
+            ],
+        ),
+    },
+
+    rules: [
+        // --- herkes ---
+        (name: "metabolism", for: "*", then: [ Add("hunger", "1") ]),
+        (name: "starvation", for: "*", when: "me.hunger >= p.starve_at",
+         then: [ Despawn(Me), Emit("starved") ]),
+
+        // --- koyun ---
+        // B katmanı örneği: bildirimsel dil yetmediğinde Rhai script'i effect döndürür.
+        (name: "graze", for: "sheep", state: "Graze",
+         script: r#"
+            if roll < 50 && me.hunger > 0 {
+                [ #{ op: "add", prop: "hunger", value: -p.graze_gain } ]
+            } else { [] }
+         "#),
+        (name: "sheep_wander", for: "sheep", state: "Graze", then: [ Wander ]),
+        (name: "sheep_flee",   for: "sheep", state: "Flee",  then: [ MoveAway("wolf") ]),
+        (name: "sheep_breeding", for: "sheep", state: "Graze",
+         when: "roll < p.sheep_breed_chance && count.sheep < p.sheep_cap",
+         then: [ Spawn("sheep"), Emit("born") ]),
+
+        // --- kurt ---
+        (name: "wolf_roam", for: "wolf", state: "Roam", then: [ Wander ]),
+        (name: "wolf_hunt", for: "wolf", state: "Hunt", when: "near.sheep > 0",
+         then: [ MoveToward("sheep") ]),
+        // Atomik grup: iki kurt aynı koyunu hedeflerse ikincisi "conflict" alır, tokluk kazanmaz.
+        (name: "predation", for: "wolf", when: "near.sheep <= 1 && me.hunger > 2",
+         then: [ Despawn(Nearest("sheep")), Set("hunger", "0"), Emit("kill") ]),
+        // Yeni av yemiş (tok) kurt bazen yavrular.
+        (name: "wolf_breeding", for: "wolf", when: "me.hunger == 0 && roll < p.wolf_breed_chance",
+         then: [ Spawn("wolf"), Emit("born") ]),
+    ],
+)
