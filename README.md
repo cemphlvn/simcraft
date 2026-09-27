@@ -49,3 +49,7 @@ predation = false
 - **Checked before it runs.** A typo in a rule, switch or parameter stops the engine at load time.
 
 More detail: [`docs/architecture.md`](docs/architecture.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

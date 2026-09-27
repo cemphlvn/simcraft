@@ -5,6 +5,7 @@ members = ["crates/sim-core", "crates/sim-rules", "crates/sim-agent"]
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+license = "MIT"
 
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
