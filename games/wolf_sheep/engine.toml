@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────
-#  BUHARLI MOTOR — yönetici paneli
-#  Oyunu değiştirmez (o game.ron'da). Motorun nasıl yanacağını ayarlar:
-#  kazan (seed, süre), şalterler (kurallar açık/kapalı), hiperparametreler.
-#  Bilinmeyen anahtar, kural ya da parametre → motor çalışmaz (validate).
+#  STEAM ENGINE — operator panel
+#  Does not change the game (that lives in game.ron). Sets how the engine burns:
+#  the boiler (seed, duration), switches (rules on/off), hyperparameters.
+#  Unknown key, rule or parameter → the engine won't start (validate).
 # ─────────────────────────────────────────────────────────────
 
 [run]
@@ -13,12 +13,12 @@ max_ticks = 500
 width = 32
 height = 16
 
-# Kazana atılan ilk kömür: başlangıç nüfusu
+# First coal in the boiler: starting population
 [spawn]
 sheep = 40
 wolf = 5
 
-# Şalterler — kural adı = şalter adı. Yazılmayan kural açıktır.
+# Switches — rule name = switch name. Rules not listed are on.
 [switches]
 metabolism = true
 starvation = true
@@ -27,21 +27,21 @@ sheep_breeding = true
 predation = true
 wolf_breeding = true
 
-# Hiperparametreler — game.ron `params` varsayılanlarını ezer.
-# Bu set 5 seed'de (42,7,99,1,2) 500 tick iki türü de hayatta tuttu; salınım var.
-# wolf_breed_chance 10'a çıkınca 5 seed'in 4'ünde kurtlar koyunu bitirip kendileri de ölüyor.
+# Hyperparameters — override the `params` defaults in game.ron.
+# This set kept both species alive for 500 ticks on 5 seeds (42,7,99,1,2), with oscillation.
+# At wolf_breed_chance = 10, on 4 of 5 seeds the wolves wipe out the sheep and then starve.
 [params]
 wolf_hunt_at = 12
 sheep_breed_chance = 10
 wolf_breed_chance = 3
 starve_at = 30
 
-# Emniyet ventili — bir ifade/script en fazla bu kadar işlem yapabilir.
+# Safety valve — the most operations a single expression/script may perform.
 [rhai]
 max_operations = 10000
 max_call_levels = 16
 
-# Agent arayüzü
+# Agent interface
 [agent]
 controllable = ["wolf"]
 observe_radius = 5

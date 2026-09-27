@@ -1,10 +1,10 @@
 #![enable(implicit_some)]
-// Kurt / Koyun — tasarımcının dosyası.
-// İfadeler Rhai'dir ve şunları görür:
+// Wolf / Sheep — the designer's file.
+// Expressions are Rhai and can see:
 //   me.<prop> me.x me.y me.state me.kind me.id
-//   p.<param>          (aşağıdaki params; engine.toml ezer)
-//   near.<kind>        (en yakın o kind'a mesafe; yoksa 9999)
-//   count.<kind>  tick  roll (0..99, kural başına deterministik zar)
+//   p.<param>          (the params below; engine.toml overrides them)
+//   near.<kind>        (distance to the nearest of that kind; 9999 if none)
+//   count.<kind>  tick  roll (0..99, a deterministic die per rule)
 Game(
     name: "wolf_sheep",
 
@@ -13,7 +13,7 @@ Game(
         "wolf":  (glyph: 'W', props: { "hunger": 0 }, fsm: "wolf"),
     },
 
-    // Tasarımcının açtığı düğmeler. Yönetici engine.toml [params] ile çevirir.
+    // Knobs the designer exposes. The operator turns them in engine.toml [params].
     params: {
         "starve_at": 30,
         "wolf_hunt_at": 12,
@@ -42,13 +42,13 @@ Game(
     },
 
     rules: [
-        // --- herkes ---
+        // --- everyone ---
         (name: "metabolism", for: "*", then: [ Add("hunger", "1") ]),
         (name: "starvation", for: "*", when: "me.hunger >= p.starve_at",
          then: [ Despawn(Me), Emit("starved") ]),
 
-        // --- koyun ---
-        // B katmanı örneği: bildirimsel dil yetmediğinde Rhai script'i effect döndürür.
+        // --- sheep ---
+        // Layer B example: when the declarative actions aren't enough, a Rhai script returns effects.
         (name: "graze", for: "sheep", state: "Graze",
          script: r#"
             if roll < 50 && me.hunger > 0 {
@@ -61,14 +61,14 @@ Game(
          when: "roll < p.sheep_breed_chance && count.sheep < p.sheep_cap",
          then: [ Spawn("sheep"), Emit("born") ]),
 
-        // --- kurt ---
+        // --- wolf ---
         (name: "wolf_roam", for: "wolf", state: "Roam", then: [ Wander ]),
         (name: "wolf_hunt", for: "wolf", state: "Hunt", when: "near.sheep > 0",
          then: [ MoveToward("sheep") ]),
-        // Atomik grup: iki kurt aynı koyunu hedeflerse ikincisi "conflict" alır, tokluk kazanmaz.
+        // Atomic group: if two wolves target the same sheep, the second gets a "conflict" and stays hungry.
         (name: "predation", for: "wolf", when: "near.sheep <= 1 && me.hunger > 2",
          then: [ Despawn(Nearest("sheep")), Set("hunger", "0"), Emit("kill") ]),
-        // Yeni av yemiş (tok) kurt bazen yavrular.
+        // A wolf that just ate (well fed) sometimes breeds.
         (name: "wolf_breeding", for: "wolf", when: "me.hunger == 0 && roll < p.wolf_breed_chance",
          then: [ Spawn("wolf"), Emit("born") ]),
     ],

@@ -1,111 +1,111 @@
-# simcraft: mimari
+# simcraft: architecture
 
-Kuralları dışarıdan tanımlanan, headless ve deterministik bir simülasyon motoru.
-Bu dosya projenin **tek doğruluk kaynağı**. Kod bununla çelişirse ya kod düzeltilir ya da önce bu dosya güncellenir.
+A headless, deterministic simulation engine whose rules are defined outside the engine.
+This file is the project's **single source of truth**. If the code contradicts it, either the code gets fixed or this file is updated first.
 
-## Üç rol, üç dosya
+## Three roles, three files
 
-| Rol | Dosya | Neye karar verir | Dokunmadığı şey |
+| Role | File | Decides | Does not touch |
 |---|---|---|---|
-| **Tasarımcı** | `games/<oyun>/game.ron` | Dünya: kind'lar, FSM'ler, kurallar, ayar düğmeleri (`params`) | Seed, nüfus, hangi kuralın açık olduğu |
-| **Yönetici** (buharlı motorun başındaki kişi) | `games/<oyun>/engine.toml` | Motorun nasıl yanacağı: seed, süre, dünya boyutu, başlangıç nüfusu, **şalterler**, **hiperparametreler**, Rhai emniyet ventili, agent erişimi | Kuralların kendisi |
-| **Agent** | stdin/stdout JSON | Oyun içindeki kontrol edilebilir entity'lerin hareketi | Kurallar ve panel |
+| **Designer** | `games/<game>/game.ron` | The world: kinds, FSMs, rules, tunable knobs (`params`) | Seed, population, which rules are on |
+| **Operator** (the person running the steam engine) | `games/<game>/engine.toml` | How the engine runs: seed, duration, world size, starting population, **switches**, **hyperparameters**, the Rhai safety valve, agent access | The rules themselves |
+| **Agent** | stdin/stdout JSON | Movement of controllable entities in the game | Rules and panel |
 
-Yönetici yalnızca tasarımcının açtığı düğmeleri çevirebilir. `engine.toml`'da `game.ron`'da olmayan bir kural, parametre ya da kind geçerse motor **çalışmaz**. Yazım hataları sessizce yutulmaz.
+The operator can only turn the knobs the designer exposed. If `engine.toml` names a rule, parameter or kind that `game.ron` does not define, the engine **does not start**. Typos are never silently ignored.
 
-## Katmanlar
+## Layers
 
 ```
-game.ron ──┐                    ┌── sim-agent  (JSON stdio; ilk istemci)
+game.ron ──┐                    ┌── sim-agent  (JSON stdio; first client)
 engine.toml┴─► sim-rules ──────►│
-              (parse, Rhai       └── (sonra) sim-tui, replay
-               derle, validate)
+              (parse, compile    └── (later) sim-tui, replay
+               Rhai, validate)
                      │ impl Rules
                      ▼
                sim-core  (World, Effect, apply, Engine<typestate>)
 ```
 
-| Crate | İçerik | Oyunu bilir mi? |
+| Crate | Contents | Knows the game? |
 |---|---|---|
-| `sim-core` | `World`, `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash | Hayır |
-| `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai derleme, dry-run doğrulama, `impl Rules for Game` | Şemayı bilir, içeriği bilmez |
-| `sim-agent` | `simcraft-agent` binary'si, JSON satır protokolü, ASCII harita | Hayır |
+| `sim-core` | `World`, `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash | No |
+| `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
+| `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 
-## Tick döngüsü
+## Tick loop
 
 ```
 tick:
-  groups = agent kuyruğu            (önce: agent hareketi kural hareketini ezer)
-         + FSM geçişleri            (entity başına ilk eşleşen)
-         + kurallar                 (entity id sırası × game.ron kural sırası)
-  apply(groups)                     (tek yazma noktası)
+  groups = agent queue              (first: agent movement overrides rule movement)
+         + FSM transitions          (first match per entity)
+         + rules                    (entity id order × rule order in game.ron)
+  apply(groups)                     (the single write point)
   tick += 1; hash
 ```
 
-- **Kurallar dünyayı değiştirmez**, `Group` (bir ateşlemenin effect'leri) üretir.
-- **Grup atomiktir:** dokunduğu bir entity bu tick'te daha önce öldüyse grubun tamamı düşer. Ölen başkasıysa `conflict` olayı üretilir (iki kurt aynı koyunu yiyemez), ölen grubun sahibiyse sessizce düşer.
-- Bir entity bir tick'te **en fazla bir kez hareket eder**, ilk gelen `Move` kazanır.
-- FSM geçişi `apply`'da uygulanır. Kurallar o tick boyunca eski durumu görür.
+- **Rules never mutate the world.** They produce a `Group`: the effects of one rule firing.
+- **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently.
+- An entity **moves at most once per tick**. The first `Move` wins.
+- FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 
-## Determinizm (pazarlıksız)
+## Determinism (non-negotiable)
 
-| Kaynak | Önlem |
+| Source | Safeguard |
 |---|---|
-| Iterasyon sırası | `BTreeMap`, id sırası |
-| Rastgelelik | Paylaşılan RNG yok: `rand(seed, tick, entity, salt)`, splitmix64. Değerlendirme sırası sonucu etkilemez |
-| Aritmetik | Rhai `no_float` + `only_i64`, prop'lar `i64` |
-| Script yan etkisi | `me`, `p`, `near` vb. sabit. Script yalnızca effect map'i döndürür, `print` kapalı |
-| Doğrulama | Test: aynı panel → 300 tick boyunca her tick'te aynı hash |
+| Iteration order | `BTreeMap`, id order |
+| Randomness | No shared RNG: `rand(seed, tick, entity, salt)` via splitmix64. Evaluation order does not affect results |
+| Arithmetic | Rhai `no_float` + `only_i64`; props are `i64` |
+| Script side effects | `me`, `p`, `near` etc. are constants. Scripts only return effect maps; `print` is disabled |
+| Verification | Test: same panel → identical hash on every tick for 300 ticks |
 
-## Kural dili
+## Rule language
 
-**A. Bildirimsel (varsayılan):** `when` (Rhai ifadesi → bool), ardından `then: [...]`.
+**A. Declarative (default):** `when` (Rhai expression → bool), then `then: [...]`.
 
-| Eylem | Anlamı |
+| Action | Meaning |
 |---|---|
-| `Set(prop, expr)` / `Add(prop, expr)` | Kendi prop'unu yazar |
-| `Emit(name)` | Olay üretir (agent'lar görür) |
-| `Despawn(Me \| Nearest(kind))` | Hedef yoksa kural ateşlenmez |
-| `Spawn(kind)` | Kendi konumunda, kind şablonuyla doğar |
-| `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | 1 adım (8 yön) |
+| `Set(prop, expr)` / `Add(prop, expr)` | Writes the entity's own prop |
+| `Emit(name)` | Emits an event (agents see it) |
+| `Despawn(Me \| Nearest(kind))` | If there is no target, the rule does not fire |
+| `Spawn(kind)` | Spawns at the entity's position from the kind's template |
+| `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | One step (8 directions) |
 
-**B. Rhai script (kaçış kapısı):** `script:` alanı effect map dizisi döndürür:
+**B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
 
-**İfadelerin gördükleri:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev mesafesi, yoksa 9999), `count.<kind>`, `tick`, `roll` (0..99, kural ve entity başına deterministik).
+**What expressions can see:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev distance, 9999 if none), `count.<kind>`, `tick`, `roll` (0..99, deterministic per rule and entity).
 
-## Doğrulama (typestate `Loaded → Validated`)
+## Validation (typestate `Loaded → Validated`)
 
-`Engine<Loaded>` üzerinde `tick` metodu yoktur. Doğrulanmamış kural derleme zamanında koşamaz. `validate` tüm hataları tek listede döner:
+`Engine<Loaded>` has no `tick` method, so unvalidated rules cannot run: this is enforced at compile time. `validate` returns every error in a single list:
 
-1. RON/TOML şeması (`deny_unknown_fields`)
-2. Rhai sözdizimi (yükleme anında derlenir)
-3. Çapraz referanslar: şalter ↔ kural adı, param ↔ `game.ron params`, kind, FSM, state
-4. **Dry-run:** her ifade her ilgili kind'ın şablonuyla bir kez koşturulur. `me.hungr` gibi yazım hataları burada yakalanır (`fail_on_invalid_map_property`)
+1. RON/TOML schema (`deny_unknown_fields`)
+2. Rhai syntax (compiled at load time)
+3. Cross-references: switch ↔ rule name, param ↔ `game.ron params`, kinds, FSMs, states
+4. **Dry run:** every expression is evaluated once against the template of each kind it applies to. Typos like `me.hungr` are caught here (`fail_on_invalid_map_property`)
 
-Oyun (runtime) durumları **veridir** (`FSM`, string). Motorun durumları **tiptir** (typestate).
+Game (runtime) states are **data** (FSM, strings). Engine states are **types** (typestate).
 
-## Agent protokolü (`simcraft-agent [GAME_DIR] [--config PANEL.toml]`)
+## Agent protocol (`simcraft-agent [GAME_DIR] [--config PANEL.toml]`)
 
-Satır başına bir JSON istek, satır başına bir JSON cevap. Açılışta `{"ok":true,"ready":...}`, hatada `{"ok":false,"stage":"load|validate","errors":[...]}` basılır ve çıkış kodu 2 olur.
+One JSON request per line, one JSON response per line. On startup it prints `{"ok":true,"ready":...}`. On failure it prints `{"ok":false,"stage":"load|validate","errors":[...]}` and exits with code 2.
 
-| İstek | Cevap |
+| Request | Response |
 |---|---|
-| `{"cmd":"info"}` | Oyun, kind'lar (glyph, prop, state), kontrol edilebilir kind'lar, etkin şalterler/parametreler, komut şeması |
-| `{"cmd":"observe"}` | Tüm harita (ASCII), sayımlar, entity'ler |
-| `{"cmd":"observe","entity":ID}` | `observe_radius` penceresi, `@` = sen, görünen entity'ler |
-| `{"cmd":"act","actions":[{"entity":ID,"move":[dx,dy]}]}` | Bir sonraki `step`'te, kurallardan önce uygulanır |
-| `{"cmd":"step","n":N}` | tick, done, hash, sayımlar, olaylar (`kill`, `born`, `starved`, `conflict`, `error: …`) |
-| `{"cmd":"hash"}` | Durum parmak izi (replay/doğrulama) |
+| `{"cmd":"info"}` | Game, kinds (glyph, props, states), controllable kinds, effective switches/params, command schema |
+| `{"cmd":"observe"}` | Full map (ASCII), counts, entities |
+| `{"cmd":"observe","entity":ID}` | `observe_radius` window, `@` = you, visible entities |
+| `{"cmd":"act","actions":[{"entity":ID,"move":[dx,dy]}]}` | Applied on the next `step`, before rules |
+| `{"cmd":"step","n":N}` | tick, done, hash, counts, events (`kill`, `born`, `starved`, `conflict`, `error: …`) |
+| `{"cmd":"hash"}` | State fingerprint (replay/verification) |
 
-## Yol haritası
+## Roadmap
 
-- [x] core + typestate + atomik grup + determinizm testleri
-- [x] RON (A) + Rhai (B) + dry-run doğrulama
-- [x] engine.toml paneli (şalter, hiperparametre, ventil)
-- [x] JSON stdio agent arayüzü, kurt/koyun
-- [ ] Olay günlüğü → `sim-replay` (aynı log → aynı hash)
-- [ ] MCP sarmalayıcı (LOBI / travian-bench agent'ları doğrudan bağlansın)
-- [ ] `sim-tui` (ratatui) izleyici
-- [ ] Parametre taraması: yöneticinin paneli otomatik ayarlaması (hayatta kalma / salınım skoru)
-- [ ] Performans: sıcak prop'ları typed column'a taşımak, `near` için spatial grid (şu an O(n²))
+- [x] core + typestate + atomic groups + determinism tests
+- [x] RON (A) + Rhai (B) + dry-run validation
+- [x] engine.toml panel (switches, hyperparameters, safety valve)
+- [x] JSON stdio agent interface, wolf/sheep
+- [ ] Event log → `sim-replay` (same log → same hash)
+- [ ] MCP wrapper (so external agents can connect directly)
+- [ ] `sim-tui` (ratatui) viewer
+- [ ] Parameter sweep: the operator's panel tunes itself (survival / oscillation score)
+- [ ] Performance: move hot props to typed columns; spatial grid for `near` (currently O(n²))

@@ -1,9 +1,9 @@
 # simcraft
 
-Önce `docs/architecture.md` okunur. Mimarinin tek doğruluk kaynağı odur.
+Read `docs/architecture.md` first. It is the single source of truth for the architecture.
 
-- Yeni oyun = `games/<ad>/game.ron` + `engine.toml`. Motor koduna dokunulmaz.
-- `sim-core` oyun hakkında hiçbir şey bilmez. Oyuna özgü mantık oraya girmez.
-- Determinizm kırılamaz: `HashMap` iterasyonu, float, paylaşılan RNG ve script içinden I/O yasak.
-- Değişiklikten sonra: `cargo test && cargo clippy --all-targets`.
-- Protokol ya da kural dili değişirse önce `docs/architecture.md` güncellenir.
+- A new game = `games/<name>/game.ron` + `engine.toml`. The engine code is not touched.
+- `sim-core` knows nothing about any game. Game-specific logic never goes there.
+- Determinism must not break: no `HashMap` iteration, no floats, no shared RNG, no I/O from scripts.
+- After a change: `cargo test && cargo clippy --all-targets`.
+- If the protocol or the rule language changes, update `docs/architecture.md` first.
