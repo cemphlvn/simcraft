@@ -63,6 +63,7 @@ Then ask, in your own words: *"make a game where …"*.
 |---|---|
 | [`simcraft-game`](skills/simcraft-game/SKILL.md) | Treats you as the designer: asks what the player should feel and decide, writes `game.ron`, runs the engine's check, fixes every error, runs the game and tells you what happened |
 | [`simcraft-experiment`](skills/simcraft-experiment/SKILL.md) | Answers *"what happens if …"*: runs the game many times across settings and seeds and shows you the evidence |
+| [`simcraft-eval`](skills/simcraft-eval/SKILL.md) | Eval-driven development: you define what "better" means, every change is one measured step on fixed seeds, and a log keeps what you learned ([`docs/evals.md`](docs/evals.md)) |
 
 Other AI tools: point them at `skills/<name>/SKILL.md` (Agent Skills format) and at [`docs/architecture.md`](docs/architecture.md). New skill: `skills/new.sh <name>`.
 
@@ -74,8 +75,9 @@ Other AI tools: point them at `skills/<name>/SKILL.md` (Agent Skills format) and
 | **Computer engineering** | [`docs/architecture.md`](docs/architecture.md), then [`CONTRIBUTING.md`](CONTRIBUTING.md) | The Rust core: rules compiler, state charts, determinism, the C API |
 | **Art and design** | [`adapters/unity`](adapters/unity/com.simcraft.core), [`adapters/unreal`](adapters/unreal/Simcraft) | Prefabs and actors per kind, a look per state (`glyphs`): what the player sees while the core decides |
 
-**Five games so far:** `wolf_sheep` (predators and prey), `forest_fire` (fires of every size), `mercy_dungeon` (fight or spare),
-`market` (two players trading), `gamedev` (a studio building games on its own engine). How the engine grew out of
+**Six games so far:** `wolf_sheep` (predators and prey), `forest_fire` (fires of every size), `mercy_dungeon` (fight or spare),
+`market` (two players trading), `gamedev` (a studio building games on its own engine), `colony` (ants, scent trails
+and winter, built [eval-driven](games/colony/EVALS.md)). How the engine grew out of
 them, change by change: [`docs/emergence.md`](docs/emergence.md).
 
 ## Tour

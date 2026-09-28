@@ -1,0 +1,109 @@
+{
+ "step": 1,
+ "change": "brood needs a reserve (brood_reserve = 20)",
+ "seeds": {
+  "1": {
+   "survived": 95,
+   "winters": 0,
+   "first_delivery": 95,
+   "deliveries": 0,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 0,
+   "trail_cells": 0
+  },
+  "2": {
+   "survived": 96,
+   "winters": 0,
+   "first_delivery": 96,
+   "deliveries": 0,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 0
+  },
+  "3": {
+   "survived": 206,
+   "winters": 0,
+   "first_delivery": 40,
+   "deliveries": 7,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 8
+  },
+  "4": {
+   "survived": 174,
+   "winters": 0,
+   "first_delivery": 70,
+   "deliveries": 2,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 9
+  },
+  "5": {
+   "survived": 96,
+   "winters": 0,
+   "first_delivery": 96,
+   "deliveries": 0,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 133.4,
+   "min": 95,
+   "max": 206
+  },
+  "winters": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "first_delivery": {
+   "mean": 79.4,
+   "min": 40,
+   "max": 96
+  },
+  "deliveries": {
+   "mean": 1.8,
+   "min": 0,
+   "max": 7
+  },
+  "peak_ants": {
+   "mean": 12.2,
+   "min": 12,
+   "max": 13
+  },
+  "births": {
+   "mean": 4.2,
+   "min": 4,
+   "max": 5
+  },
+  "starved": {
+   "mean": 12.2,
+   "min": 12,
+   "max": 13
+  },
+  "winter_store": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "trail_cells": {
+   "mean": 3.4,
+   "min": 0,
+   "max": 9
+  }
+ },
+ "errors": {}
+}

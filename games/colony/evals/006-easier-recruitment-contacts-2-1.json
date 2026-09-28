@@ -1,0 +1,109 @@
+{
+ "step": 6,
+ "change": "easier recruitment (contacts 2 -> 1)",
+ "seeds": {
+  "1": {
+   "survived": 298,
+   "winters": 0,
+   "first_delivery": 114,
+   "deliveries": 3,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 0,
+   "trail_cells": 12
+  },
+  "2": {
+   "survived": 234,
+   "winters": 0,
+   "first_delivery": 71,
+   "deliveries": 5,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 23
+  },
+  "3": {
+   "survived": 312,
+   "winters": 0,
+   "first_delivery": 73,
+   "deliveries": 11,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 24
+  },
+  "4": {
+   "survived": 410,
+   "winters": 1,
+   "first_delivery": 53,
+   "deliveries": 53,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 38
+  },
+  "5": {
+   "survived": 359,
+   "winters": 0,
+   "first_delivery": 65,
+   "deliveries": 27,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 0,
+   "trail_cells": 30
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 322.6,
+   "min": 234,
+   "max": 410
+  },
+  "winters": {
+   "mean": 0.2,
+   "min": 0,
+   "max": 1
+  },
+  "first_delivery": {
+   "mean": 75.2,
+   "min": 53,
+   "max": 114
+  },
+  "deliveries": {
+   "mean": 19.8,
+   "min": 3,
+   "max": 53
+  },
+  "peak_ants": {
+   "mean": 12.2,
+   "min": 12,
+   "max": 13
+  },
+  "births": {
+   "mean": 4.2,
+   "min": 4,
+   "max": 5
+  },
+  "starved": {
+   "mean": 12.2,
+   "min": 12,
+   "max": 13
+  },
+  "winter_store": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "trail_cells": {
+   "mean": 25.4,
+   "min": 12,
+   "max": 38
+  }
+ },
+ "errors": {}
+}

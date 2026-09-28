@@ -1,0 +1,109 @@
+{
+ "step": 0,
+ "change": "baseline: design as written",
+ "seeds": {
+  "1": {
+   "survived": 80,
+   "winters": 0,
+   "first_delivery": 80,
+   "deliveries": 0,
+   "peak_ants": 16,
+   "births": 8,
+   "starved": 16,
+   "winter_store": 0,
+   "trail_cells": 0
+  },
+  "2": {
+   "survived": 78,
+   "winters": 0,
+   "first_delivery": 78,
+   "deliveries": 0,
+   "peak_ants": 17,
+   "births": 9,
+   "starved": 17,
+   "winter_store": 0,
+   "trail_cells": 0
+  },
+  "3": {
+   "survived": 206,
+   "winters": 0,
+   "first_delivery": 40,
+   "deliveries": 7,
+   "peak_ants": 16,
+   "births": 8,
+   "starved": 16,
+   "winter_store": 0,
+   "trail_cells": 8
+  },
+  "4": {
+   "survived": 246,
+   "winters": 0,
+   "first_delivery": 70,
+   "deliveries": 3,
+   "peak_ants": 17,
+   "births": 9,
+   "starved": 17,
+   "winter_store": 0,
+   "trail_cells": 10
+  },
+  "5": {
+   "survived": 78,
+   "winters": 0,
+   "first_delivery": 78,
+   "deliveries": 0,
+   "peak_ants": 17,
+   "births": 9,
+   "starved": 17,
+   "winter_store": 0,
+   "trail_cells": 0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 137.6,
+   "min": 78,
+   "max": 246
+  },
+  "winters": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "first_delivery": {
+   "mean": 69.2,
+   "min": 40,
+   "max": 80
+  },
+  "deliveries": {
+   "mean": 2.0,
+   "min": 0,
+   "max": 7
+  },
+  "peak_ants": {
+   "mean": 16.6,
+   "min": 16,
+   "max": 17
+  },
+  "births": {
+   "mean": 8.6,
+   "min": 8,
+   "max": 9
+  },
+  "starved": {
+   "mean": 16.6,
+   "min": 16,
+   "max": 17
+  },
+  "winter_store": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "trail_cells": {
+   "mean": 3.6,
+   "min": 0,
+   "max": 10
+  }
+ },
+ "errors": {}
+}

@@ -1,0 +1,109 @@
+{
+ "step": 3,
+ "change": "staggered starvation (own tolerance per ant)",
+ "seeds": {
+  "1": {
+   "survived": 1,
+   "winters": 0,
+   "first_delivery": 1,
+   "deliveries": 0,
+   "peak_ants": 8,
+   "births": 0,
+   "starved": 8,
+   "winter_store": 40,
+   "trail_cells": 0
+  },
+  "2": {
+   "survived": 1,
+   "winters": 0,
+   "first_delivery": 1,
+   "deliveries": 0,
+   "peak_ants": 8,
+   "births": 0,
+   "starved": 8,
+   "winter_store": 40,
+   "trail_cells": 0
+  },
+  "3": {
+   "survived": 1,
+   "winters": 0,
+   "first_delivery": 1,
+   "deliveries": 0,
+   "peak_ants": 8,
+   "births": 0,
+   "starved": 8,
+   "winter_store": 40,
+   "trail_cells": 0
+  },
+  "4": {
+   "survived": 1,
+   "winters": 0,
+   "first_delivery": 1,
+   "deliveries": 0,
+   "peak_ants": 8,
+   "births": 0,
+   "starved": 8,
+   "winter_store": 40,
+   "trail_cells": 0
+  },
+  "5": {
+   "survived": 1,
+   "winters": 0,
+   "first_delivery": 1,
+   "deliveries": 0,
+   "peak_ants": 8,
+   "births": 0,
+   "starved": 8,
+   "winter_store": 40,
+   "trail_cells": 0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 1.0,
+   "min": 1,
+   "max": 1
+  },
+  "winters": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "first_delivery": {
+   "mean": 1.0,
+   "min": 1,
+   "max": 1
+  },
+  "deliveries": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "peak_ants": {
+   "mean": 8.0,
+   "min": 8,
+   "max": 8
+  },
+  "births": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "starved": {
+   "mean": 8.0,
+   "min": 8,
+   "max": 8
+  },
+  "winter_store": {
+   "mean": 40.0,
+   "min": 40,
+   "max": 40
+  },
+  "trail_cells": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  }
+ },
+ "errors": {}
+}

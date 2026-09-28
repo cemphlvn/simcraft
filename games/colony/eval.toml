@@ -1,0 +1,42 @@
+# What "better" means for this game. tools/eval.py runs every seed and computes these.
+# expr: a Python expression over the run (see docs/evals.md); goal: max | min | info.
+
+seeds = [1, 2, 3, 4, 5]
+max_ticks = 2400          # five years; a colony alive at the end scores 2400
+sample_every = 20
+
+[metrics.survived]
+expr = "end_tick"
+goal = "max"              # the score: how long the colony lasted
+
+[metrics.winters]
+expr = "sum(1 for t in range(p['summer'] + p['autumn'], end_tick, p['summer'] + p['autumn'] + p['winter']))"
+goal = "max"              # winters the colony entered alive
+
+[metrics.first_delivery]
+expr = "first('delivered', 2400)"
+goal = "min"              # how fast the first food comes home (2400 if never, so dying early never looks fast)
+
+[metrics.deliveries]
+expr = "events['delivered']"
+goal = "max"
+
+[metrics.peak_ants]
+expr = "peak('count.ant')"
+goal = "info"
+
+[metrics.births]
+expr = "events['born']"
+goal = "info"
+
+[metrics.starved]
+expr = "events['starved']"
+goal = "info"
+
+[metrics.winter_store]
+expr = "at(p['summer'] + p['autumn'], 'sum.nest.food')"
+goal = "max"              # food in the nest as the first winter starts
+
+[metrics.trail_cells]
+expr = "peak('state.ground.Trail')"
+goal = "info"             # did stigmergy form trails at all

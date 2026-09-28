@@ -63,6 +63,7 @@ Sonra kendi sözlerinle iste: *"… olan bir oyun yap"*.
 |---|---|
 | [`simcraft-game`](skills/simcraft-game/SKILL.md) | Seni tasarımcı olarak görür: oyuncunun ne hissedip neye karar vermesi gerektiğini sorar, `game.ron`'u yazar, motorun denetimini çalıştırır, her hatayı düzeltir, oyunu oynatır ve ne olduğunu anlatır |
 | [`simcraft-experiment`](skills/simcraft-experiment/SKILL.md) | *"… olursa ne olur?"* sorusunu yanıtlar: oyunu farklı ayarlar ve seed'lerle defalarca çalıştırır, kanıtı gösterir |
+| [`simcraft-eval`](skills/simcraft-eval/SKILL.md) | Eval odaklı geliştirme: "daha iyi"nin ne demek olduğunu sen tanımlarsın, her değişiklik sabit seed'lerle ölçülen tek bir adımdır, öğrendiklerin bir günlükte kalır ([`docs/evals.md`](docs/evals.md)) |
 
 Başka yapay zekâ araçları: onları `skills/<ad>/SKILL.md`'ye (Agent Skills biçimi) ve [`docs/architecture.md`](docs/architecture.md)'ye yönlendir. Yeni skill: `skills/new.sh <ad>`.
 
@@ -74,8 +75,9 @@ Başka yapay zekâ araçları: onları `skills/<ad>/SKILL.md`'ye (Agent Skills b
 | **Bilgisayar mühendisliği** | [`docs/architecture.md`](docs/architecture.md), sonra [`CONTRIBUTING.tr.md`](CONTRIBUTING.tr.md) | Rust çekirdeği: kural derleyicisi, durum şemaları, determinizm, C API |
 | **Sanat ve tasarım** | [`adapters/unity`](adapters/unity/com.simcraft.core), [`adapters/unreal`](adapters/unreal/Simcraft) | Her kind için prefab ve actor, her durum için bir görünüm (`glyphs`): çekirdek karar verirken oyuncunun gördüğü |
 
-**Şimdiye kadar beş oyun:** `wolf_sheep` (avcı ve av), `forest_fire` (her boyda yangın), `mercy_dungeon` (dövüş ya da bağışla),
-`market` (takas eden iki oyuncu), `gamedev` (kendi motoru üzerinde oyun geliştiren bir stüdyo). Motorun bu oyunlardan
+**Şimdiye kadar altı oyun:** `wolf_sheep` (avcı ve av), `forest_fire` (her boyda yangın), `mercy_dungeon` (dövüş ya da bağışla),
+`market` (takas eden iki oyuncu), `gamedev` (kendi motoru üzerinde oyun geliştiren bir stüdyo), `colony` (karıncalar,
+koku izleri ve kış; [eval odaklı](games/colony/EVALS.md) yapıldı). Motorun bu oyunlardan
 adım adım nasıl büyüdüğü: [`docs/emergence.md`](docs/emergence.md).
 
 ## Tur
