@@ -400,6 +400,9 @@ Run: `cargo test -p simtest` (everything), `cargo run -p simtest -- test/scenari
 One game, every platform: the rule file and the core never change; a thin shell per platform does
 (research: `docs/research/distribution.md`).
 
+**Why it matters to a game developer:** being cross-platform makes it easy to compile the game, put it live, and
+playtest it with real players, on the web today and in the stores as the game grows, without rewriting it.
+
 | Layer | What | Where it runs |
 |---|---|---|
 | Core | `sim-core`, `sim-state`, `sim-rules` (deterministic, integer, no I/O) | native and **wasm32** (feature `parallel` = rule evaluation on every core; off in the browser) |
