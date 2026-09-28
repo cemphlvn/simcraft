@@ -1,0 +1,15 @@
+# ─────────────────────────────────────────────────────────────
+#  PLAYER PANEL (colony3d) — what `simcraft-play` runs. Evals and tests keep engine.toml.
+#  You are the colony's will: lay eggs, rally the foragers, warm the nest. Stored food spoils.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 12000
+
+[params]
+contacts = 1
+spoil_every = 6
+
+[agent]
+controllable = ["nest"]

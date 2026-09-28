@@ -1,0 +1,21 @@
+#![enable(implicit_some)]
+// HD nature pack: realistic natural-history illustrations for the GPU stage (sim-gpu). Generated with Higgsfield,
+// background removed, imported with simcraft-import (prompts and job ids: assets/src/README.md). No pixelation:
+// the GPU filters and mipmaps them.
+Assets(
+    images: {
+        "sky": "hd/sky.png", "mountains": "hd/mountains.png", "forest": "hd/forest.png", "meadow": "hd/meadow.png",
+        "grass_front": "hd/grass_front.png", "soil": "hd/soil.png", "hollow": "hd/hollow.png",
+        "ant": "hd/ant.png", "ant_b": "hd/ant_b.png",
+        // Walk cycle: 8 frames from a generated video (image-to-video, two-background matte; assets/src/README.md).
+        "ant_walk_0": "hd/ant_walk_0.png", "ant_walk_1": "hd/ant_walk_1.png", "ant_walk_2": "hd/ant_walk_2.png",
+        "ant_walk_3": "hd/ant_walk_3.png", "ant_walk_4": "hd/ant_walk_4.png", "ant_walk_5": "hd/ant_walk_5.png",
+        "ant_walk_6": "hd/ant_walk_6.png", "ant_walk_7": "hd/ant_walk_7.png", "ant_carry": "hd/ant_carry.png",
+        "ant_dormant": "hd/ant_dormant.png", "ant_callow": "hd/ant_callow.png",
+        "card_summer": "hd/card_summer.png", "card_autumn": "hd/card_autumn.png", "card_winter": "hd/card_winter.png",
+        "berry": "hd/berry.png", "berry_spoiled": "hd/berry_spoiled.png",
+        "btn_egg": "hd/btn_egg.png", "btn_rally": "hd/btn_rally.png", "btn_warm": "hd/btn_warm.png",
+        "bush_ripe": "hd/bush_ripe.png", "bush_bare": "hd/bush_bare.png",
+        "mound": "hd/mound.png", "granary": "hd/granary.png",
+    },
+)

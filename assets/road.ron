@@ -1,0 +1,17 @@
+#![enable(implicit_some)]
+// Desert highway pack for first-person tracks (sim-gpu `track.ron`): sunset sky, mesas, asphalt, sand, road
+// objects, roadside scenery, a car hood, button icons. Generated with Higgsfield, imported with simcraft-import
+// (prompts and job ids: assets/src/README.md).
+Assets(
+    images: {
+        "sky": "road/sky.png", "mesas": "road/mesas.png", "asphalt": "road/asphalt.png", "sand": "road/sand.png",
+        "hood": "road/hood.png",
+        "cone": "road/cone.png", "barrier": "road/barrier.png", "oil": "road/oil.png", "coin": "road/coin.png",
+        "nitro": "road/nitro.png", "fuelpad": "road/fuelpad.png", "gate": "road/gate.png",
+        "cactus": "road/cactus.png", "rock": "road/rock.png", "post": "road/post.png",
+        "btn_left": "road/btn_left.png", "btn_right": "road/btn_right.png", "btn_dash": "road/btn_dash.png",
+        "btn_brake": "road/btn_brake.png", "btn_jump": "road/btn_jump.png", "btn_enter": "road/btn_enter.png",
+        "btn_pos1": "road/btn_pos1.png", "btn_pos2": "road/btn_pos2.png", "btn_pos3": "road/btn_pos3.png",
+        "btn_pos4": "road/btn_pos4.png", "car_rear": "road/car_rear.png",
+    },
+)

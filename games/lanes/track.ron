@@ -1,0 +1,72 @@
+#![enable(implicit_some)]
+// Lanes in first person (sim-gpu): the camera rides in the car. Left hand on 1 2 3 4: the four positions across
+// the road, thumb on space: jump. Right hand on Enter: dash. `c` changes the camera view.
+// The move between positions is the core mechanic: its feel is the `switch` block below. Tune it to taste.
+Track(
+    assets: ["road"],
+    follow: "car",
+    sky: "sky",
+    skyline: (image: "mesas", height: 0.2, drift: 0.4),
+    road: (image: "asphalt", lanes: 4, repeat: 2.5, shoulder: "sand", shoulder_width: 45.0, shoulder_repeat: 5.0,
+           paint: (240, 236, 222)),
+    camera: (height: 0.62, back: 0.9, fov: 68.0, pitch: 4.0, rumble: 0.006, bank: 0.9,
+             lane: (stiffness: 110.0, damping: 0.85)),
+    // From outside: the camera behind and above, the car in front of it.
+    views: [ (name: "chase", height: 1.35, back: 3.2, fov: 62.0, pitch: 10.0, body: ("car_rear", 0.75)) ],
+    view: 70.0,
+    fog: ((236, 150, 118), 18.0, 68.0),
+    kinds: {
+        // Smashed: they tumble away, flung ahead of the car and off to the side, and drop out of sight.
+        "cone":    (frames: ["cone"], height: 0.62, push: 1.25,
+                    gone: (tracks: { "x": [(0.0, 0.0), (0.9, 2.6, quad_out)], "y": [(0.0, 0.0), (0.3, 1.1, quad_out), (0.9, -0.2, quad_in)],
+                                     "rot": [(0.0, 0.0), (0.9, 540.0, quad_out)], "alpha": [(0.0, 1.0), (0.7, 1.0), (0.9, 0.0)] })),
+        "barrier": (frames: ["barrier"], height: 0.72, push: 1.15,
+                    gone: (tracks: { "x": [(0.0, 0.0), (0.8, 1.8, quad_out)], "y": [(0.0, 0.0), (0.25, 0.6, quad_out), (0.8, -0.3, quad_in)],
+                                     "rot": [(0.0, 0.0), (0.8, 260.0, quad_out)], "alpha": [(0.0, 1.0), (0.6, 1.0), (0.8, 0.0)] })),
+        "oil":     (frames: ["oil"], height: 0.95, flat: true),
+        // Picked up right under the camera: they zip ahead and up, shrinking to nothing (never swell at that range).
+        "coin":    (frames: ["coin"], height: 0.42, lift: 0.25, spin: 0.8, bob: 0.06, push: 1.8,
+                    gone: (tracks: { "y": [(0.0, 0.0), (0.28, 0.7, quad_out)], "scale": [(0.0, 0.8), (0.28, 0.0, quad_in)] })),
+        "nitro":   (frames: ["nitro"], height: 0.62, lift: 0.1, bob: 0.08, push: 1.8,
+                    gone: (tracks: { "y": [(0.0, 0.0), (0.3, 0.6, quad_out)], "rot": [(0.0, 0.0), (0.3, 180.0, quad_out)], "scale": [(0.0, 0.8), (0.3, 0.0, quad_in)] })),
+        "fuelpad": (frames: ["fuelpad"], height: 0.98, flat: true),
+        "gate":    (frames: ["gate"], height: 1.75),
+    },
+    // Roadside things rushing past: speed you can feel.
+    scenery: [
+        (images: ["post"], height: (0.75, 0.85), every: 4.0, side: (0.35, 0.45), seed: 1),
+        (images: ["cactus", "cactus", "rock"], height: (1.4, 3.2), every: 3.0, side: (2.0, 14.0), seed: 2),
+        (images: ["rock", "cactus"], height: (2.5, 6.0), every: 7.0, side: (12.0, 30.0), seed: 3),
+    ],
+    hood: (image: "hood", height: 0.3, follow: 0.6),
+    // The built-in effects (dash, jump, landing, crash, skid) are on; a game overrides one by name here.
+    fx: {},
+    // The move between positions. `positions`: world X of each (the lane centres here; spread or bunch them).
+    // A switch takes base + per_lane × lanes crossed seconds on the `ease` curve; `hop` lifts the camera per lane;
+    // `start` and `arrive` are effects scaled by the lanes crossed (a 1 → 4 swing is three times a 2 → 3 step).
+    switch: (
+        prop: "lane_to",
+        positions: [-1.5, -0.5, 0.5, 1.5],
+        base: 0.07, per_lane: 0.075, ease: back_out, hop: 0.025,
+        start: (tracks: { "fov": [(0.0, 0.0), (0.06, 2.5, quad_out), (0.3, 0.0, sine_in_out)],
+                          "streaks": [(0.0, 0.0), (0.04, 0.22, quad_out), (0.25, 0.0, quad_in)] }),
+        arrive: (tracks: { "shake": [(0.0, 0.012), (0.18, 0.0, quad_out)],
+                           "pitch": [(0.0, 0.7), (0.25, 0.0, back_out)] }),
+    ),
+    buttons: [
+        (action: "goto", args: { "lane": 0 }, on: "car", icon: "btn_pos1", key: "1", at: (0.05, 0.9), size: 0.085),
+        (action: "goto", args: { "lane": 1 }, on: "car", icon: "btn_pos2", key: "2", at: (0.115, 0.9), size: 0.085),
+        (action: "goto", args: { "lane": 2 }, on: "car", icon: "btn_pos3", key: "3", at: (0.18, 0.9), size: 0.085),
+        (action: "goto", args: { "lane": 3 }, on: "car", icon: "btn_pos4", key: "4", at: (0.245, 0.9), size: 0.085),
+        (action: "jump", on: "car", icon: "btn_jump", key: "space", at: (0.148, 0.77), size: 0.08),
+        (action: "dash", on: "car", icon: "btn_dash", key: "enter", at: (0.93, 0.87), size: 0.12),
+    ],
+    // After a hit the car blinks while it cannot be hit again.
+    blink: "Wobbly",
+    meters: [
+        (prop: "lives", icon: "car_rear", max: 5, at: (0.42, 0.03), size: 0.085),
+        (prop: "nitro", icon: "nitro", max: 6, at: (0.03, 0.05), size: 0.07),
+        (prop: "coins", icon: "coin", max: 30, at: (0.03, 0.13), size: 0.035),
+    ],
+    bars: [ (prop: "fuel", max: 40, at: (0.72, 0.05), size: (0.25, 0.018), color: (255, 170, 60), warn: 0.25) ],
+)

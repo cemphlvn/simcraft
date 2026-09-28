@@ -18,3 +18,68 @@ crisp pixels, limited palette, no text, no characters, the layer is isolated on 
 ```bash
 cargo run --release -p sim-render --bin simcraft-pixelate -- assets/src/hills.png assets/pixel/hills.png --height 18 --colors 8
 ```
+
+## HD pack (`assets/hd/`, `assets/nature_hd.ron`) — 2026-09-28
+
+Natural-history illustration for the GPU stage. Higgsfield `nano_banana_pro` (reported back as `nano_banana_2`),
+backgrounds removed with Higgsfield's image background remover for objects, a white key (`simcraft-import --white`)
+for scenery (the remover erased whole landscapes), then `simcraft-import` (see the flags there). Sources are not
+committed; regenerate with the prompts, or use the job ids.
+
+Style, in every prompt: *realistic natural-history illustration / scientific illustration for a 2.5D side-scrolling
+game, painterly but accurate, soft diffuse daylight from the upper left*, and for objects *isolated on a plain flat
+pure white background, no shadow, no ground, no text*.
+
+| Asset | Prompt (short) | Job | Import |
+|---|---|---|---|
+| `sky` | summer sky, cerulean to warm haze, a few cumulus (21:9, 2k) | 30fa3c24-7ea0-4524-9754-95dd5d1a4611 | `--max 2048` |
+| `mountains` | distant range through haze, blue-grey (21:9, 2k) | 1c2c5e84-a3b5-4c04-96fd-e84bd84508cb, cut c792d6dc-4750-49bd-872c-328f6924d1fe | cut, `--bottom --tile 20` |
+| `forest` | far spruce, pine and birch edge (21:9, 2k) | e05b3389-35ed-43ec-b9ff-abcec62f6544 | `--white --bottom --tile 20` |
+| `meadow` | rolling meadow, clover, shrubs (21:9, 2k) | a5d1d571-90ae-45fe-ada8-b2bc9fb86ef4 | `--white --bottom --tile 20` |
+| `grass_front` | ant-scale grass, clover, leaf, pebble, dandelion clumps (21:9, 2k) | f9f8a382-35fb-42b4-962b-6b79e11e92d2 | `--white --bottom --tile 20` |
+| `soil` | ant-farm soil profile, tileable (1:1, 2k) | f1a90132-66c1-4e3a-9ef0-e361ec00b835 | `--max 1024` |
+| `hollow` | nest tunnel wall texture (1:1) | eb843023-28ed-4cb5-b27a-524e4c4739d3 | `--max 512` (unused: hollows are blobs) |
+| `ant` | *Formica rufa* worker, lateral, tripod gait, accurate anatomy (1:1) | 3c1be446-007c-4570-ac99-1473dbcc12c0, cut 797c561f-3d95-417f-bc9b-9983d734132f | cut, `--crop --max 512` |
+| `ant_b` | same ant (reference), opposite gait phase | 9c3198df-173f-4ed2-9fc6-05076060b2b0, cut 5469d129-12f6-47b2-824a-ff8ccb377918 | cut, `--crop --max 512` |
+| `ant_carry` | same ant carrying a raspberry | dfa06879-772a-4606-a759-4ea184cdb22c, cut 7282cf8a-96ef-4f2a-8de2-e04548d6ead3 | cut, `--crop --max 512` |
+| `ant_dormant` | same ant folded, winter rest | 98ea3635-9a05-4b33-ae7f-b3c78fc295d3, cut 579d2cc0-bd14-492d-90ea-ca8b7da42108 | cut, `--crop --max 512` |
+| `ant_callow` | young pale callow worker | f96d4f54-468f-43d6-8ad7-c88487605bda, cut 4b8233c3-f071-48f7-921e-4466142e8c5c | cut, `--crop --max 512` |
+| `bush_ripe` / `bush_bare` | wild raspberry shrub with / without berries | 296ff3c8-5508-4775-a569-8a1083ce14ab / 3231e989-8197-4e3a-882f-a151ad1c39a9 (cuts c516b0cb… / 1de5cf77…) | cut, `--crop --max 512` |
+| `mound` | red wood ant nest mound, entrance | d7771bca-49df-460f-9297-2438dc76da2d, cut 4a91fb3a-7ca1-459b-a32a-44a7526bce19 | cut, `--crop --max 512` |
+| `granary` | heap of stored seeds | 88794b44-d09f-4428-9a27-fe98e0f15dcb, cut a078cfca-3504-4985-9fb9-e5b3632cc7f6 | cut, `--crop --max 512` |
+| `card_summer` / `card_autumn` / `card_winter` | serif title card with a botanical sprig (16:9, 2k; the winter card is the reference for the others) | 04a5f861-3fa0-4c47-9bd3-b4bf4835c5db / 09cfad4f-cba6-4702-841d-a3c5299c5f70 / e758e078-d64b-4003-90c1-8af74b162b34 | `--white --crop --max 1400` |
+
+Lessons: ask for a *white* ground, not "transparent-looking" (the model paints a checkerboard); name the word
+"exactly once" on title cards; a background remover keeps objects but erases landscapes.
+
+### Walk cycle from video (`ant_walk_0..7`)
+
+1. Image-to-video from the still ant (job 3c1be446…): Kling 3.0 Turbo, 1:1, 5 s, start frame only, prompt *"the ant
+   walks in place on the spot with a natural tripod gait … body stays at exactly the same position and size … static
+   locked-off camera, plain pure white background"* → ff20b635-3357-4c47-a617-59a08615be99. (MiniMax H3 with the
+   same image as start and end frame, fed64805…, loops but the ant drifts and turns: worse for a sprite.)
+2. Higgsfield's video background remover (529a261b-4e79-4570-936a-48b0f7d7449b) returns the ant over **black**,
+   H.264, no alpha. Keying black would eat the dark gaster, so: **two-background matte**. The same frame exists over
+   cream (original) and over black (cut): `alpha = 1 − (original − cut) / cream`, `colour = cut / alpha`. Exact
+   edges, antennae and hairs kept.
+3. The loop: the segment whose last frame is closest to its first **relative to how much the legs move in between**
+   (a still segment closes perfectly but does not walk): frames 80..111 at 24 fps; 8 frames evenly across it, all
+   cropped to one shared box (no jitter), 512 px wide.
+
+## Road pack (`assets/road/`, `assets/road.ron`) — 2026-09-29
+
+First-person desert highway for `games/lanes`. Higgsfield `nano_banana_pro`; objects cut with the background remover
+(white parts such as cone bands, wall stripes, arrows and the checkered banner survive it), scenery with
+`simcraft-import --white --tile`, then `simcraft-import`.
+
+| Asset | Prompt (short) | Job |
+|---|---|---|
+| `sky` | sunset desert sky, orange to violet, streaky clouds (21:9, 2k) | 4c84d79d-5809-46a5-b3a7-d569d9c9e02f |
+| `mesas` | distant mesas and buttes at sunset, haze (21:9, 2k; `--white --bottom --tile 20`) | 0b1a3dd3-b98e-49fc-89a0-d7a0c6f0fb1a |
+| `asphalt` / `sand` | tileable worn asphalt / desert roadside ground, from above | 00ec9476… / b35723e2… |
+| `cone`, `barrier`, `coin`, `nitro`, `fuelpad`, `gate` | eye-level objects in warm sunset light, white ground | 1e1d4d0d…, 5ef2c2e8…, a8d4c65a…, 321b69bd…, e55b3be1…, 4bb667f0… |
+| `oil` | iridescent oil slick from above | 9d0b7b0b… (cut 0142aaa2…) |
+| `hood` | red muscle car hood from the driver's seat | 33b80deb-4a15-4f5f-8bf8-04efbb9211a4 |
+| `car_rear` | the same car from behind (hood as reference) | 52491bb4-3101-43e5-bad2-76f78242d183 |
+| `cactus`, `rock`, `post` | roadside scenery | 00545f81…, 45e8647d…, 063572f0… |
+| `btn_*` | chrome-rimmed midnight-blue badges: arrows, flame (dash), brake, jump, tap; `btn_pos1..4`: four lane stripes, one lit (the jump badge as reference) | 7aee37e7…, 3031f285…, aae2514c…, 218cfbc0…, 1b052772…, a3ba137d…, 434c2384…, 3aac2707…, f985158b…, 2f96debb… |

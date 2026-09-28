@@ -1,0 +1,48 @@
+#![enable(implicit_some)]
+// The colony on the HD stage (sim-gpu, `simcraft-play games/colony3d`). Space is real: every layer stands at a
+// depth, and moves 1/depth as fast as the camera, so parallax comes from perspective. Rows of the world behind
+// the cut plane stand a little deeper (`row_depth`): the surface is a strip of land, not a line.
+Stage(
+    assets: ["nature_hd"],
+    cells_across: 8.0,
+    horizon: 0.6,
+    plane: 9,
+    row_depth: 0.05,
+    season_env: "seasons",
+    follow: "ant",
+    sky: "sky",
+    layers: [
+        (image: "mountains",   depth: 30.0, height: 50.0, haze: 35, blur: 1.0),
+        (image: "forest",      depth: 12.0, height: 14.0, haze: 18, blur: 0.5),
+        (image: "meadow",      depth: 4.0,  height: 3.6,  haze: 4,  lift: -0.05),
+        // Turf on the cut: grass the ants walk in, overlapping the top of the soil.
+        (image: "grass_front", depth: 1.0,  height: 0.28, lift: -0.1, offset: 7.0),
+        (image: "grass_front", depth: 0.55, height: 0.5,  lift: -0.12, front: true, blur: 1.6, opacity: 0.95),
+    ],
+    soil: (image: "soil", scale: 5.0, hollow: "hollow", darken: 55),
+    kinds: {
+        // An 8-frame walk cycle cut from a generated video; still ants hold the first pose.
+        "ant":      (frames: ["ant_walk_0", "ant_walk_1", "ant_walk_2", "ant_walk_3",
+                              "ant_walk_4", "ant_walk_5", "ant_walk_6", "ant_walk_7"], height: 0.42, bob: 0.008, fps: 14.0,
+                     states: { "Carry": ["ant_carry"], "Dormant": ["ant_dormant"], "Nurse": ["ant_callow"] }),
+        "bush":     (frames: ["bush_ripe"], states: { "Bare": ["bush_bare"] }, height: 1.5, sink: 0.08),
+        "entrance": (frames: ["mound"], height: 1.1, sink: 0.12),
+        "nest":     (frames: ["granary"], height: 0.45),
+    },
+    // The colony's store, made visible: every unit of food is a berry on the granary floor. Deliveries drop in, meals take
+    // from the top, spoiled food turns at the bottom and rots away.
+    piles: [
+        (kind: "nest", prop: "food", item: "berry", per: 1, max: 60, size: 0.14, offset: (0.75, 0.0),
+         spoil: (prop: "spoiled", item: "berry_spoiled")),
+    ],
+    // What the player can do: the game's declared actions (game.ron `actions`), for the nest. A button is lit exactly
+    // when the game would take the action now; a refused press shakes. Animations are data (defaults shown in docs).
+    buttons: [
+        (action: "lay_egg", on: "nest", icon: "btn_egg",   key: "1", at: (0.07, 0.87)),
+        (action: "rally",   on: "nest", icon: "btn_rally", key: "2", at: (0.165, 0.87),
+         anims: { "idle": (tracks: { "rot": [(0.0, -3.0), (1.6, 3.0, sine_in_out), (3.2, -3.0, sine_in_out)] }, loop: true) }),
+        (action: "warm",    on: "nest", icon: "btn_warm",  key: "3", at: (0.26, 0.87)),
+    ],
+    season_cards: { "Summer": "card_summer", "Autumn": "card_autumn", "Winter": "card_winter" },
+    vignette: 35,
+)
