@@ -12,3 +12,6 @@ ron.workspace = true
 toml.workspace = true
 rhai.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

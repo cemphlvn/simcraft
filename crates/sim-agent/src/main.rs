@@ -3,7 +3,7 @@
 //!   simcraft-agent [GAME_DIR] [--config engine.toml]
 //!   simcraft-agent [GAME_DIR] [--config engine.toml] --replay run.jsonl
 //!
-//! Komutlar: info · observe · act · step · hash · quit  (ayrıntı: docs/architecture.md)
+//! Komutlar: info · observe · act · step · hash · snapshot · restore · quit  (ayrıntı: docs/architecture.md)
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -13,7 +13,7 @@ mod sinks;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sim_core::{Engine, Filter, Group, Loaded, Msg, Running};
+use sim_core::{Engine, Filter, Group, Loaded, Msg, Running, Snapshot};
 use sim_rules::Game;
 
 #[derive(Deserialize)]
@@ -35,6 +35,13 @@ enum Request {
     },
     Step { n: Option<u64> },
     Hash,
+    Snapshot,
+    Restore {
+        snapshot: Box<Snapshot>,
+        /// Verilirse görüntünün alındığı oyunun parmak izi; bu oyununkiyle aynı olmalı.
+        #[serde(default)]
+        source: Option<String>,
+    },
     Quit,
 }
 
@@ -60,6 +67,25 @@ impl Session {
             Request::Act { seat, actions } => self.act(seat.as_deref(), actions),
             Request::Step { n } => Ok(self.step(n.unwrap_or(1))),
             Request::Hash => {
+                let w = self.engine.world();
+                Ok(json!({ "tick": w.tick, "hash": format!("{:016x}", w.hash()) }))
+            }
+            Request::Snapshot => {
+                let w = self.engine.world();
+                Ok(json!({
+                    "tick": w.tick,
+                    "hash": format!("{:016x}", w.hash()),
+                    "game": self.game().def.name,
+                    "source": format!("{:016x}", self.game().source_hash),
+                    "snapshot": self.engine.snapshot(),
+                }))
+            }
+            Request::Restore { snapshot, source } => {
+                let ours = format!("{:016x}", self.game().source_hash);
+                if let Some(s) = source.filter(|s| *s != ours) {
+                    return Err(format!("snapshot is from another game.ron/engine.toml (source {s}, this one {ours})"));
+                }
+                self.engine.restore(*snapshot).map_err(|e| e.join("; "))?;
                 let w = self.engine.world();
                 Ok(json!({ "tick": w.tick, "hash": format!("{:016x}", w.hash()) }))
             }

@@ -151,6 +151,16 @@ Unlike games 1–3 this change was **requested** (a state engine with composable
 
 ---
 
+## Request: adoptable from Unity and Unreal
+
+Not a game. Product direction (architecture.md): hosts display, the core decides, one `game.ron` everywhere. First step: save and load.
+
+| # | Need | Refactor | Evidence |
+|---|---|---|---|
+| U.1 | A host must save and load a game (and a player must be able to "load game") | `World`/`Engine` snapshot and restore (derived indexes rebuilt; queued acts and outcome kept; `format` version); `Rules::check_world` refuses a world from another game; `restore` goes on the bus so logs still replay | `snapshot_restores_the_exact_future` (wolf/sheep, gamedev, market, through JSON); `foreign_snapshots_are_rejected`; `a_log_with_a_restore_still_replays`; market at tick 20 = 4.3 KB |
+
+---
+
 ## What the engine became
 
 | | Before the games | After four games |

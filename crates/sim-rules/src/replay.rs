@@ -30,6 +30,12 @@ pub fn replay(engine: &mut Engine<Running, Game>, log: &[Msg]) -> Result<ReplayR
                 engine.queue(group);
                 report.acts += 1;
             }
+            Msg::Restore { tick, hash, snapshot } => {
+                engine.restore((**snapshot).clone()).map_err(|e| format!("tick {tick}: restore failed: {}", e.join("; ")))?;
+                if engine.world().hash() != *hash {
+                    return Err(format!("restore at tick {tick}: log {hash:016x}, now {:016x}", engine.world().hash()));
+                }
+            }
             Msg::Tick { tick, hash } => {
                 let r = engine.tick();
                 if (r.tick, r.hash) != (*tick, *hash) {

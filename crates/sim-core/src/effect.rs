@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::world::{EntityId, World};
 
 /// Kuralların dünyaya dair "niyet"i. Dünyayı yalnızca `apply` değiştirir.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
     Set { e: EntityId, prop: String, v: i64 },
     Add { e: EntityId, prop: String, d: i64 },
@@ -35,7 +35,7 @@ impl Effect {
 
 /// Bir kuralın tek bir ateşlemesi. Atomiktir: dokunduğu entity'lerden biri
 /// bu tick'te daha önce yok olduysa grubun tamamı düşer (iki kurt aynı koyunu yiyemez).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub source: String,
     /// Grubun sahibi. Sahip bu tick'te öldüyse grup sessizce düşer (conflict değil).

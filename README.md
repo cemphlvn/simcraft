@@ -76,6 +76,10 @@ cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
 # {"ok":true,"verified_ticks":150,"acts":234,...}
 ```
 
+## Save and load
+
+`{"cmd":"snapshot"}` returns the whole game; `{"cmd":"restore",...}` goes back to it, and the future is bit-identical.
+
 ## Guarantees
 
 - **Deterministic.** Same seed, same inputs, same world, every tick.

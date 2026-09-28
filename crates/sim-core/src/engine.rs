@@ -1,10 +1,23 @@
 use std::marker::PhantomData;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bus::{Bus, Msg};
 use crate::effect::{Event, Group, apply};
-use crate::world::World;
+use crate::world::{World, WorldSnapshot};
+
+/// Anlık görüntü biçimi. Değişirse artar; eski biçim reddedilir.
+pub const SNAPSHOT_FORMAT: u32 = 1;
+
+/// Bir tick sınırında motorun tamamı: dünya, kuyruktaki agent eylemleri, sonuç.
+/// Aynı kurallarla geri yüklenince gelecek tick'ler bit bit aynıdır.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub format: u32,
+    pub world: WorldSnapshot,
+    pub pending: Vec<Group>,
+    pub outcome: Option<String>,
+}
 
 /// Oyunun kuralları. Motor bunların nereden geldiğini (RON, Rhai, WASM) bilmez.
 pub trait Rules {
@@ -15,6 +28,10 @@ pub trait Rules {
     /// Oyun bitti mi? Bittiyse sonuç (ör. "win"). Sonrasında tick işlemez.
     fn outcome(&self, _world: &World) -> Option<String> {
         None
+    }
+    /// Geri yüklenen bir dünya bu kurallara uyuyor mu (bilinen kind'lar, geçerli durumlar)?
+    fn check_world(&self, _world: &World) -> Result<(), Vec<String>> {
+        Ok(())
     }
 }
 
@@ -87,6 +104,32 @@ impl<R: Rules> Engine<Running, R> {
 
     pub fn outcome(&self) -> Option<&str> {
         self.outcome.as_deref()
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            format: SNAPSHOT_FORMAT,
+            world: self.world.snapshot(),
+            pending: self.pending.clone(),
+            outcome: self.outcome.clone(),
+        }
+    }
+
+    /// Motoru bir anlık görüntüye döndürür. Kurallar dünyayı kabul etmezse hiçbir şey değişmez.
+    pub fn restore(&mut self, s: Snapshot) -> Result<(), Vec<String>> {
+        if s.format != SNAPSHOT_FORMAT {
+            return Err(vec![format!("snapshot format {} (this engine reads {SNAPSHOT_FORMAT})", s.format)]);
+        }
+        let world = World::from_snapshot(s.world).map_err(|e| vec![e])?;
+        self.rules.check_world(&world)?;
+        self.world = world;
+        self.pending = s.pending;
+        self.outcome = s.outcome;
+        if !self.bus.is_empty() {
+            let (tick, hash) = (self.world.tick, self.world.hash());
+            self.bus.publish(Msg::Restore { tick, hash, snapshot: Box::new(self.snapshot()) });
+        }
+        Ok(())
     }
 
     /// Aboneler burada. Motor her tick'in olaylarını, hash'ini ve sonunu yayınlar;

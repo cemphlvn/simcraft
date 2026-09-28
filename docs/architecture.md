@@ -71,7 +71,7 @@ tick:
 
 ## Event bus
 
-Everything that happens is published once, in order, on `Engine::bus()`: `start` (game, seed, source fingerprint, start hash), `act` (every agent request, accepted or refused), `event` (game and engine events), `tick` (tick + hash), `end`.
+Everything that happens is published once, in order, on `Engine::bus()`: `start` (game, seed, source fingerprint, start hash), `act` (every agent request, accepted or refused), `event` (game and engine events), `tick` (tick + hash), `end`, `restore` (with the snapshot, so a log with a "load game" still replays).
 
 - `sim-core` owns only the message type, `Sink` and `Bus` (with an optional name `Filter`); it does no I/O. Sinks live in the host.
 - The operator wires outputs in the panel: `[bus] log = "runs/x.jsonl"` (JSONL, flushed every tick) and/or `listen = "127.0.0.1:7878"` (TCP, every client gets every line from when it connects; slow clients are dropped, the simulation never waits).
@@ -187,6 +187,8 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 | `{"cmd":"act"[,"as":SEAT],"actions":[{"entity":ID,"do":"<action>","args":{...}}]}` | Evaluated now, applied on the next `step` before rules. Per-action `results` with `ok` or the reason (`refused: needs …`, `unknown action`, `takes args`, `switched off`, `not controllable`, `not yours`) |
 | `{"cmd":"step","n":N}` | tick, done, result (from `end`), `scores`, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `short`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
+| `{"cmd":"snapshot"}` | `tick`, `hash`, `game`, `source` (fingerprint of `game.ron` + `engine.toml`), `snapshot`: the whole engine between ticks (world, queued acts, outcome; `format` = 1) |
+| `{"cmd":"restore","snapshot":{...}[,"source":S]}` | Back to that moment; the future is bit-identical. Refused (nothing changes) if the format differs, the world is inconsistent, a kind or state is unknown to this game, or `source` does not match. |
 
 ## Roadmap
 
@@ -198,7 +200,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [x] Seats, scores, `Need` guards, legend props (game 3)
 - [x] Event bus: JSONL log, live TCP stream, verified replay
 - [x] State charts: `sim-state` + game 4 (gamedev)
-- [ ] World snapshot / restore
+- [x] World snapshot / restore
 - [ ] `sim-ffi`: versioned C API
 - [ ] Unity adapter (C# package) + sample
 - [ ] Unreal adapter (C++ plugin + Blueprints)

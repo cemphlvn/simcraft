@@ -407,6 +407,7 @@ dependencies = [
  "rhai",
  "ron",
  "serde",
+ "serde_json",
  "sim-core",
  "sim-state",
  "toml",

@@ -481,3 +481,77 @@ fn ambiguous_goto_needs_a_path() {
     assert!(boot(&game, DEV_PANEL).is_ok(), "a path is unique");
 }
 
+// --- snapshot / restore ---
+
+#[test]
+fn snapshot_restores_the_exact_future() {
+    for (game, panel) in [(GAME, PANEL), (DEV, DEV_PANEL), (MARKET, MARKET_PANEL)] {
+        let mut a = boot(game, panel).expect("valid");
+        for _ in 0..50 {
+            a.tick();
+        }
+        // Through JSON, the way a host (Unity, Unreal, a save file) would keep it.
+        let json = serde_json::to_string(&a.snapshot()).expect("serializes");
+        let future: Vec<u64> = (0..50).map(|_| a.tick().hash).collect();
+
+        let mut b = boot(game, panel).expect("valid");
+        b.restore(serde_json::from_str(&json).expect("parses")).expect("restores");
+        let again: Vec<u64> = (0..50).map(|_| b.tick().hash).collect();
+        assert_eq!(future, again);
+    }
+}
+
+#[test]
+fn snapshot_keeps_queued_acts() {
+    let mut a = boot(GAME, PANEL).expect("valid");
+    let wolf = a.world().entities().values().find(|x| x.kind == "wolf").cloned().expect("a wolf");
+    let args = [("dx".to_string(), 1), ("dy".to_string(), 0)].into();
+    let g = a.rules().act(a.world(), None, wolf.id, "move", &args).expect("ok");
+    a.queue(g);
+    let snap = a.snapshot();
+    let h1 = a.tick().hash;
+    let mut b = boot(GAME, PANEL).expect("valid");
+    b.restore(snap).expect("restores");
+    assert_eq!(b.tick().hash, h1);
+}
+
+#[test]
+fn foreign_snapshots_are_rejected() {
+    let mut fire = boot(FIRE, FIRE_PANEL).expect("valid");
+    let wolves = boot(GAME, PANEL).expect("valid").snapshot();
+    let before = fire.world().hash();
+    let errs = fire.restore(wolves).expect_err("wolf/sheep is not forest fire");
+    assert!(errs.iter().any(|e| e.contains("unknown kind 'wolf'")), "{errs:?}");
+    assert_eq!(fire.world().hash(), before, "a refused restore changes nothing");
+
+    let mut dev = boot(DEV, DEV_PANEL).expect("valid");
+    let mut snap = dev.snapshot();
+    snap.world.entities.iter_mut().filter(|e| e.kind == "dev").for_each(|e| e.state = "Life.Partying".into());
+    let errs = dev.restore(snap).expect_err("no such state");
+    assert!(errs.iter().any(|e| e.contains("unknown state 'Life.Partying'")), "{errs:?}");
+}
+
+#[test]
+fn a_log_with_a_restore_still_replays() {
+    let log: Arc<Mutex<Vec<Msg>>> = Arc::default();
+    let mut e = boot(MARKET, MARKET_PANEL).expect("valid");
+    let (game, seed, source_hash, hash) = (e.rules().def.name.clone(), 1, e.rules().source_hash, e.world().hash());
+    e.bus().subscribe(Filter::All, Box::new(log.clone()));
+    e.bus().publish(Msg::Start { game, seed, source_hash, hash });
+    for _ in 0..10 {
+        e.tick();
+    }
+    let save = e.snapshot();
+    for _ in 0..10 {
+        e.tick();
+    }
+    e.restore(save).expect("restores"); // "load game"
+    for _ in 0..10 {
+        e.tick();
+    }
+    let log = log.lock().unwrap().clone();
+    let mut fresh = boot(MARKET, MARKET_PANEL).expect("valid");
+    let r = sim_rules::replay(&mut fresh, &log).expect("replays through the restore");
+    assert_eq!(r.ticks, 30);
+    assert_eq!(fresh.world().hash(), e.world().hash());
+}

@@ -1485,6 +1485,27 @@ impl Rules for Game {
         groups.into_iter().flatten().collect()
     }
 
+    /// Geri yüklenen dünya: her entity bilinen bir kind, durumu o kind'ın şemasında geçerli.
+    fn check_world(&self, world: &World) -> Result<(), Vec<String>> {
+        let mut errs = Vec::new();
+        for e in world.entities().values() {
+            if !self.def.kinds.contains_key(&e.kind) {
+                errs.push(format!("entity {}: unknown kind '{}'", e.id, e.kind));
+                continue;
+            }
+            match self.kind_charts.get(&e.kind) {
+                Some(c) => {
+                    if let Err(m) = c.decode(&e.state) {
+                        errs.push(format!("entity {} ({}): {m}", e.id, e.kind));
+                    }
+                }
+                None if e.state != "-" => errs.push(format!("entity {} ({}): has no fsm, state '{}'", e.id, e.kind, e.state)),
+                None => {}
+            }
+        }
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+
     fn outcome(&self, world: &World) -> Option<String> {
         if self.ends.is_empty() {
             return None;

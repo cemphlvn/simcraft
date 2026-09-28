@@ -32,6 +32,8 @@ pub enum Msg {
     Tick { tick: u64, hash: u64 },
     /// Oyun bitti.
     End { tick: u64, result: String },
+    /// Motor bir anlık görüntüye döndü. Replay aynı görüntüden devam eder.
+    Restore { tick: u64, hash: u64, snapshot: Box<crate::engine::Snapshot> },
 }
 
 impl Msg {
@@ -43,6 +45,7 @@ impl Msg {
             Msg::Event(e) => &e.name,
             Msg::Tick { .. } => "tick",
             Msg::End { .. } => "end",
+            Msg::Restore { .. } => "restore",
         }
     }
 }

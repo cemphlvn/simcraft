@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub type EntityId = u64;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entity {
     pub id: EntityId,
     pub kind: String,
@@ -12,6 +12,18 @@ pub struct Entity {
     pub x: i64,
     pub y: i64,
     pub props: BTreeMap<String, i64>,
+}
+
+/// Dünyanın tamamı, taşınabilir biçimde. Grid ve kind indeksi türetilir; taşınmaz.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldSnapshot {
+    pub seed: u64,
+    pub tick: u64,
+    pub width: i64,
+    pub height: i64,
+    pub next_id: EntityId,
+    pub solid: BTreeSet<String>,
+    pub entities: Vec<Entity>,
 }
 
 /// Tüm oyun durumu. BTreeMap: iterasyon sırası id'ye göre sabit → determinizm.
@@ -46,6 +58,47 @@ impl World {
             solid: BTreeSet::new(),
             next_id: 1,
         }
+    }
+
+    pub fn snapshot(&self) -> WorldSnapshot {
+        WorldSnapshot {
+            seed: self.seed,
+            tick: self.tick,
+            width: self.width,
+            height: self.height,
+            next_id: self.next_id,
+            solid: self.solid.clone(),
+            entities: self.entities.values().cloned().collect(),
+        }
+    }
+
+    /// Anlık görüntüden dünyayı kurar; türetilmiş indeksler yeniden hesaplanır.
+    /// Tutarsız bir görüntü (sınır dışı, tekrarlanan id, aynı hücrede iki solid) reddedilir.
+    pub fn from_snapshot(s: WorldSnapshot) -> Result<World, String> {
+        if s.width < 1 || s.height < 1 {
+            return Err(format!("world size {}x{}", s.width, s.height));
+        }
+        let mut w = World::new(s.seed, s.width, s.height);
+        w.tick = s.tick;
+        w.solid = s.solid;
+        for e in s.entities {
+            if !w.in_bounds(e.x, e.y) {
+                return Err(format!("entity {} at ({}, {}) is outside the world", e.id, e.x, e.y));
+            }
+            if e.id >= s.next_id || w.entities.contains_key(&e.id) {
+                return Err(format!("entity id {} is repeated or not below next_id {}", e.id, s.next_id));
+            }
+            if w.solid.contains(&e.kind) && w.blocked(e.x, e.y) {
+                return Err(format!("two solids at ({}, {})", e.x, e.y));
+            }
+            let c = w.cell(e.x, e.y);
+            let pos = w.grid[c].partition_point(|&i| i < e.id);
+            w.grid[c].insert(pos, e.id);
+            w.by_kind.entry(e.kind.clone()).or_default().insert(e.id);
+            w.entities.insert(e.id, e);
+        }
+        w.next_id = s.next_id;
+        Ok(w)
     }
 
     pub fn set_solid(&mut self, kinds: BTreeSet<String>) {
