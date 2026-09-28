@@ -1,5 +1,5 @@
-//! Olay veriyolu: motorda olan her şey tek sırayla, abonelere yayınlanır.
-//! Çekirdek I/O yapmaz; dosyaya, sokete, LOBI'ye yazan `Sink`'ler host'ta yaşar.
+//! Event bus: everything that happens in the engine is published to subscribers in one order.
+//! The core does no I/O; `Sink`s that write to files, sockets or LOBI live in the host.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -11,9 +11,9 @@ use crate::effect::Event;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Msg {
-    /// Koşu başladı. `source_hash`: game.ron + engine.toml içeriği (replay aynı oyunu doğrular).
+    /// Run started. `source_hash`: game.ron + engine.toml contents (replay verifies the same game).
     Start { game: String, seed: u64, source_hash: u64, hash: u64 },
-    /// Bir agent eylemi istendi (kabul ya da ret). `tick`: uygulanacağı tick.
+    /// An agent action was requested (accepted or rejected). `tick`: the tick it applies on.
     Act {
         tick: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,18 +26,18 @@ pub enum Msg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Oyunun ya da motorun ürettiği olay (kill, house, short, conflict…).
+    /// An event produced by the game or the engine (kill, house, short, conflict…).
     Event(Event),
-    /// Tick bitti; durumun parmak izi.
+    /// Tick finished; fingerprint of the state.
     Tick { tick: u64, hash: u64 },
-    /// Oyun bitti.
+    /// Game over.
     End { tick: u64, result: String },
-    /// Motor bir anlık görüntüye döndü. Replay aynı görüntüden devam eder.
+    /// The engine was restored to a snapshot. Replay continues from the same snapshot.
     Restore { tick: u64, hash: u64, snapshot: Box<crate::engine::Snapshot> },
 }
 
 impl Msg {
-    /// Filtre için ad: olaylarda olay adı, diğerlerinde tür adı.
+    /// Name for filtering: the event name for events, the variant name otherwise.
     pub fn name(&self) -> &str {
         match self {
             Msg::Start { .. } => "start",
@@ -50,12 +50,12 @@ impl Msg {
     }
 }
 
-/// Abone. Yayın sırası = motorun olay sırası.
+/// Subscriber. Publish order = the engine's event order.
 pub trait Sink: Send {
     fn publish(&mut self, msg: &Msg);
 }
 
-/// Bellek içi kayıt (testler, gömülü kullanım): yayından sonra da okunabilir.
+/// In-memory log (tests, embedded use): readable after publishing too.
 impl Sink for Arc<Mutex<Vec<Msg>>> {
     fn publish(&mut self, msg: &Msg) {
         if let Ok(mut v) = self.lock() {
@@ -64,7 +64,7 @@ impl Sink for Arc<Mutex<Vec<Msg>>> {
     }
 }
 
-/// Hangi mesajlar: hepsi ya da adı listede olanlar.
+/// Which messages: all, or those whose name is in the list.
 #[derive(Clone, Debug, Default)]
 pub enum Filter {
     #[default]

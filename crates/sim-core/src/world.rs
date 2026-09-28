@@ -14,7 +14,7 @@ pub struct Entity {
     pub props: BTreeMap<String, i64>,
 }
 
-/// Dünyanın tamamı, taşınabilir biçimde. Grid ve kind indeksi türetilir; taşınmaz.
+/// The whole world, in portable form. Grid and kind index are derived; not carried.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldSnapshot {
     pub seed: u64,
@@ -26,8 +26,8 @@ pub struct WorldSnapshot {
     pub entities: Vec<Entity>,
 }
 
-/// Tüm oyun durumu. BTreeMap: iterasyon sırası id'ye göre sabit → determinizm.
-/// Mutasyon yalnızca metotlarla: grid indeksi entity'lerle hep senkron kalır.
+/// All game state. BTreeMap: iteration order is fixed by id → determinism.
+/// Mutation only through methods: the grid index always stays in sync with entities.
 #[derive(Clone, Debug)]
 pub struct World {
     pub seed: u64,
@@ -35,11 +35,11 @@ pub struct World {
     pub width: i64,
     pub height: i64,
     entities: BTreeMap<EntityId, Entity>,
-    /// Hücre başına entity id'leri (artan sırada). Türetilmiş veri; hash'e girmez.
+    /// Entity ids per cell (ascending). Derived data; not part of the hash.
     grid: Vec<Vec<EntityId>>,
-    /// Kind başına entity id'leri. Seyrek kind'larda (8 kurt, 2000 koyun) aramayı ucuzlatır.
+    /// Entity ids per kind. Makes lookups cheap for sparse kinds (8 wolves, 2000 sheep).
     by_kind: BTreeMap<String, BTreeSet<EntityId>>,
-    /// Aynı hücrede ikinci bir solid bulunamaz (duvar, ağaç, kahraman).
+    /// A cell cannot hold a second solid (wall, tree, hero).
     solid: BTreeSet<String>,
     next_id: EntityId,
 }
@@ -72,8 +72,8 @@ impl World {
         }
     }
 
-    /// Anlık görüntüden dünyayı kurar; türetilmiş indeksler yeniden hesaplanır.
-    /// Tutarsız bir görüntü (sınır dışı, tekrarlanan id, aynı hücrede iki solid) reddedilir.
+    /// Builds the world from a snapshot; derived indexes are recomputed.
+    /// An inconsistent snapshot (out of bounds, duplicate id, two solids in one cell) is rejected.
     pub fn from_snapshot(s: WorldSnapshot) -> Result<World, String> {
         if s.width < 1 || s.height < 1 {
             return Err(format!("world size {}x{}", s.width, s.height));
@@ -125,7 +125,7 @@ impl World {
         (0..self.width).contains(&x) && (0..self.height).contains(&y)
     }
 
-    /// Hücredeki entity id'leri (artan).
+    /// Entity ids in the cell (ascending).
     pub fn at(&self, x: i64, y: i64) -> &[EntityId] {
         if !self.in_bounds(x, y) {
             return &[];
@@ -133,12 +133,12 @@ impl World {
         &self.grid[self.cell(x, y)]
     }
 
-    /// Hücrede solid bir entity var mı?
+    /// Is there a solid entity in the cell?
     pub fn blocked(&self, x: i64, y: i64) -> bool {
         self.at(x, y).iter().any(|id| self.solid.contains(&self.entities[id].kind))
     }
 
-    /// Solid bir kind dolu hücreye doğamaz → None.
+    /// A solid kind cannot spawn into an occupied cell → None.
     pub fn spawn(
         &mut self,
         kind: &str,
@@ -156,7 +156,7 @@ impl World {
         let e = Entity { id, kind: kind.into(), state: state.into(), x, y, props };
         self.entities.insert(id, e);
         let c = self.cell(x, y);
-        self.grid[c].push(id); // id'ler artan verildiği için sıra korunur
+        self.grid[c].push(id); // ids are issued ascending, so order is preserved
         self.by_kind.entry(kind.into()).or_default().insert(id);
         Some(id)
     }
@@ -171,7 +171,7 @@ impl World {
         Some(e)
     }
 
-    /// Bir adım. Solid bir entity dolu hücreye giremez. Hareket ettiyse true.
+    /// One step. A solid entity cannot enter an occupied cell. True if it moved.
     pub fn move_by(&mut self, id: EntityId, dx: i64, dy: i64) -> bool {
         let Some(e) = self.entities.get(&id) else { return false };
         let (x, y) = self.clamp(e.x + dx.signum(), e.y + dy.signum());
@@ -210,20 +210,20 @@ impl World {
         self.by_kind.get(kind).map_or(0, BTreeSet::len)
     }
 
-    /// Chebyshev mesafesi `d` olan halkadaki hücreler (sınır içinde).
+    /// Cells on the ring at Chebyshev distance `d` (within bounds).
     fn ring(&self, cx: i64, cy: i64, d: i64) -> impl Iterator<Item = (i64, i64)> + '_ {
         (cy - d..=cy + d)
             .flat_map(move |y| (cx - d..=cx + d).map(move |x| (x, y)))
             .filter(move |&(x, y)| (x - cx).abs().max((y - cy).abs()) == d && self.in_bounds(x, y))
     }
 
-    /// En yakın `kind` (Chebyshev mesafesi). Eşitlikte küçük id kazanır.
+    /// Nearest `kind` (Chebyshev distance). On a tie the smaller id wins.
     pub fn nearest(&self, from: &Entity, kind: &str) -> Option<(&Entity, i64)> {
         self.nearest_where(from, kind, |_| true)
     }
 
-    /// `keep`'i geçen en yakın `kind`. Seyrek kind → üyeleri tek tek tara; yoğun kind →
-    /// halka halka dışarı ara. İki yol da aynı sonucu verir (en küçük mesafe, sonra en küçük id).
+    /// Nearest `kind` passing `keep`. Sparse kind → scan members one by one; dense kind →
+    /// search outward ring by ring. Both give the same result (smallest distance, then smallest id).
     pub fn nearest_where(&self, from: &Entity, kind: &str, keep: impl Fn(&Entity) -> bool) -> Option<(&Entity, i64)> {
         let members = self.by_kind.get(kind)?;
         if members.len() <= SPARSE {
@@ -249,12 +249,12 @@ impl World {
         None
     }
 
-    /// `r` yarıçapında (Chebyshev), kendisi hariç, `kind` (ve istenirse `state`) sayısı.
+    /// Count of `kind` (and optionally `state`) within radius `r` (Chebyshev), excluding self.
     pub fn around(&self, pos: (i64, i64), exclude: EntityId, kind: &str, state: Option<&str>, r: i64) -> i64 {
         self.around_where(pos, exclude, kind, r, |e| state.is_none_or(|s| e.state == s))
     }
 
-    /// `r` yarıçapında, kendisi hariç, `keep`'i geçen `kind` sayısı.
+    /// Count of `kind` passing `keep` within radius `r`, excluding self.
     pub fn around_where(
         &self,
         (cx, cy): (i64, i64),
@@ -277,13 +277,13 @@ impl World {
         n
     }
 
-    /// Komşu (8 yön) boş, solid içermeyen hücreler; sabit sırada.
+    /// Neighboring (8 directions) empty cells with no solid; in fixed order.
     pub fn free_neighbors(&self, x: i64, y: i64) -> Vec<(i64, i64)> {
         self.ring(x, y, 1).filter(|&(x, y)| !self.blocked(x, y)).collect()
     }
 
-    /// Durumsuz rastgelelik: (seed, tick, entity, salt) → sayı.
-    /// Kural değerlendirme sırası sonucu etkilemez; paylaşılan RNG durumu yok.
+    /// Stateless randomness: (seed, tick, entity, salt) → number.
+    /// Rule evaluation order does not affect the result; no shared RNG state.
     pub fn rand(&self, entity: EntityId, salt: u64) -> u64 {
         splitmix64(
             self.seed
@@ -293,12 +293,12 @@ impl World {
         )
     }
 
-    /// 0..100 arası zar.
+    /// A die roll in 0..100.
     pub fn roll(&self, entity: EntityId, salt: u64) -> i64 {
         (self.rand(entity, salt) % 100) as i64
     }
 
-    /// Durumun parmak izi (FNV-1a). Aynı seed + aynı input → aynı hash.
+    /// Fingerprint of the state (FNV-1a). Same seed + same input → same hash.
     pub fn hash(&self) -> u64 {
         let mut h = Fnv::new();
         h.u64(self.tick);
@@ -318,7 +318,7 @@ impl World {
     }
 }
 
-/// Bu sayının altındaki kind'larda doğrusal tarama halka aramasından ucuz.
+/// For kinds below this count, a linear scan is cheaper than a ring search.
 const SPARSE: usize = 64;
 
 pub fn splitmix64(mut z: u64) -> u64 {

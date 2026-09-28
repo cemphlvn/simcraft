@@ -1,5 +1,5 @@
-//! Replay: bir veriyolu kaydını aynı oyunda yeniden oynatır ve her tick'in hash'ini doğrular.
-//! Kayıt yalnızca kabul edilmiş eylemleri ve tick hash'lerini taşır; gerisini determinizm üretir.
+//! Replay: replays a bus recording on the same game and verifies every tick's hash.
+//! The recording carries only accepted acts and tick hashes; determinism produces the rest.
 
 use sim_core::{Engine, Msg, Running};
 

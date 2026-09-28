@@ -1,5 +1,5 @@
-//! Headless, deterministik simülasyon çekirdeği.
-//! Oyun hakkında hiçbir şey bilmez; yalnızca World, Effect ve tick döngüsü.
+//! Headless, deterministic simulation core.
+//! Knows nothing about any game; only World, Effect and the tick loop.
 
 mod bus;
 mod effect;

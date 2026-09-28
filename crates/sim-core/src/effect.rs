@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::world::{EntityId, World};
 
-/// Kuralların dünyaya dair "niyet"i. Dünyayı yalnızca `apply` değiştirir.
+/// The rules' "intent" toward the world. Only `apply` changes the world.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
     Set { e: EntityId, prop: String, v: i64 },
@@ -14,7 +14,7 @@ pub enum Effect {
     Spawn { kind: String, state: String, x: i64, y: i64, props: BTreeMap<String, i64> },
     Despawn { e: EntityId },
     Emit { e: EntityId, name: String },
-    /// Grup uygulanmadan önce: prop >= min olmalı (canlı durumda). Tutmazsa grup düşer.
+    /// Before the group applies: prop >= min must hold (on live state). Otherwise the group is dropped.
     Need { e: EntityId, prop: String, min: i64 },
 }
 
@@ -33,12 +33,12 @@ impl Effect {
     }
 }
 
-/// Bir kuralın tek bir ateşlemesi. Atomiktir: dokunduğu entity'lerden biri
-/// bu tick'te daha önce yok olduysa grubun tamamı düşer (iki kurt aynı koyunu yiyemez).
+/// A single firing of a rule. Atomic: if any entity it touches
+/// was already removed this tick, the whole group is dropped (two wolves cannot eat the same sheep).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub source: String,
-    /// Grubun sahibi. Sahip bu tick'te öldüyse grup sessizce düşer (conflict değil).
+    /// Owner of the group. If the owner died this tick, the group is dropped silently (not a conflict).
     pub actor: Option<EntityId>,
     pub effects: Vec<Effect>,
 }
@@ -51,8 +51,8 @@ pub struct Event {
     pub name: String,
 }
 
-/// Tek yazma noktası. Sıra: gruplar geldiği sırayla; ilk `Move` kazanır
-/// (agent grupları kurallardan önce geldiği için agent hareketi önceliklidir).
+/// The single write point. Order: groups in arrival order; the first `Move` wins
+/// (agent groups arrive before rules, so agent movement takes precedence).
 pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
     let mut events = Vec::new();
     let mut moved = BTreeSet::new();
@@ -74,7 +74,7 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
             _ => None,
         });
         if let Some(id) = short {
-            // aynı tick'te daha önce uygulanan bir grup kaynağı tüketti
+            // a group applied earlier this tick consumed the resource
             events.push(Event { tick: world.tick, source: g.source, entity: id, name: "short".into() });
             continue;
         }
@@ -100,7 +100,7 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
                 Effect::Spawn { kind, state, x, y, props } => {
                     let parent = g.actor.unwrap_or(0);
                     if world.spawn(&kind, &state, x, y, props).is_none() {
-                        // solid bir kind dolu hücreye doğamadı
+                        // a solid kind could not spawn into an occupied cell
                         events.push(Event { tick: world.tick, source: g.source.clone(), entity: parent, name: "blocked".into() });
                     }
                 }

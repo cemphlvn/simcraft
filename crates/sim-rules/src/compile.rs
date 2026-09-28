@@ -1,6 +1,6 @@
-//! game.ron + engine.toml → derlenmiş kurallar (sim_core::Rules).
-//! İfadeler (when/Set/Add/Move) Rhai expression, `script` tam Rhai'dir.
-//! Script'ler dünyayı değiştiremez: yalnızca effect map'leri döndürür.
+//! game.ron + engine.toml → compiled rules (sim_core::Rules).
+//! Expressions (when/Set/Add/Move) are Rhai expressions; `script` is full Rhai.
+//! Scripts cannot change the world: they only return effect maps.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,20 +15,20 @@ use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, Pick
 use crate::config::EngineConfig;
 use crate::game::{Do, GameDef, PickDef, RuleDef, StateDef, Target};
 
-/// Derlenmiş durum şeması: koşullar `exprs`'e, eylem blokları `blocks`'a indekstir.
+/// Compiled state chart: conditions index into `exprs`, action blocks into `blocks`.
 type StateChart = Chart<usize, usize>;
 
-/// Hiç yoksa `near.<kind>` bu değeri alır.
+/// `near.<kind>` when there is none.
 pub const FAR: i64 = 9_999;
 
-/// FSM geçişlerinin tuzu kural tuzlarıyla çakışmasın.
+/// Keeps FSM transition salts from colliding with rule salts.
 const FSM_SALT: u64 = 1 << 32;
 
-/// Bir çekirdek bu kadar entity'yi tek parça alır; küçük dünyalarda paralel yük olmaz.
+/// A core takes this many entities as one chunk; small worlds pay no parallel overhead.
 const CHUNK: usize = 64;
 
-/// Rhai'ye kayıtlı dünya sorgularının (`around`, `rand`) gördüğü bağlam.
-/// Her çekirdeğin kendi bağlamı var (thread-local): dünyanın anlık görüntüsü, `me`, tuz.
+/// Context seen by world queries registered in Rhai (`around`, `rand`).
+/// Each core has its own context (thread-local): world snapshot, `me`, salt.
 #[derive(Default)]
 struct QueryCtx {
     world: Option<Arc<World>>,
@@ -36,7 +36,7 @@ struct QueryCtx {
     pos: (i64, i64),
     salt: u64,
     calls: u64,
-    /// `me`'nin kind'ı ve durum metni (`in_state`, `steps_to` için).
+    /// `me`'s kind and state text (for `in_state`, `steps_to`).
     kind: String,
     state: String,
 }
@@ -50,14 +50,14 @@ impl QueryCtx {
         }
     }
 
-    /// O durumdaki en yakın `kind`'a uzaklık; yoksa FAR.
+    /// Distance to the nearest `kind` in that state; FAR if none.
     fn near_in(&self, kind: &str, sel: &str) -> i64 {
         let Some(w) = &self.world else { return FAR };
         let Some(me) = w.get(self.me) else { return FAR };
         w.nearest_where(me, kind, |e| sim_state::in_label(&e.state, sel)).map_or(FAR, |(_, d)| d)
     }
 
-    /// 0..n. Aynı ifadede birden çok çağrı farklı sayı verir; yine de tamamen deterministik.
+    /// 0..n. Multiple calls in one expression give different numbers; still fully deterministic.
     fn rand(&mut self, n: i64) -> i64 {
         let Some(w) = &self.world else { return 0 };
         if n <= 0 {
@@ -75,30 +75,30 @@ thread_local! {
 pub struct Game {
     pub def: GameDef,
     pub cfg: EngineConfig,
-    /// game.ron varsayılanları + engine.toml ezmeleri.
+    /// game.ron defaults + engine.toml overrides.
     pub params: BTreeMap<String, i64>,
-    /// game.ron + engine.toml içeriğinin parmak izi (replay aynı oyunu mu oynuyor?).
+    /// Fingerprint of game.ron + engine.toml content (is the replay playing the same game?).
     pub source_hash: u64,
     rhai: Rhai,
-    /// Önce kurallar, sonra eylemler (`is_action`). Tuzlar bu sırayla verilir.
+    /// Rules first, then actions (`is_action`). Salts are assigned in this order.
     rules: Vec<CompiledRule>,
     ends: Vec<CompiledEnd>,
     score: Option<AST>,
     compile_errors: Vec<String>,
-    /// None = tek çekirdek.
+    /// None = single core.
     pool: Option<rayon::ThreadPool>,
-    /// `p`, bir kez kurulur. Her çekirdek kendi scope'una bir kez kopyalar (kilit yok).
+    /// `p`, built once. Each core copies it into its own scope once (no locks).
     p_map: Map,
-    /// Kind → şema (makinesi olan kind'lar).
+    /// Kind → chart (kinds that have a machine).
     kind_charts: Arc<BTreeMap<String, Arc<StateChart>>>,
-    /// Şemaların koşul/puan ifadeleri ve eylem blokları.
+    /// Condition/score expressions and action blocks of the charts.
     exprs: Vec<AST>,
     blocks: Vec<Vec<CDo>>,
-    /// Kind → doğumdaki durum metni.
+    /// Kind → state text at birth.
     initial_states: BTreeMap<String, String>,
-    /// Durumların içine yazılmış kuralların tanımları (`rules`'taki sırayla, doğrulama için).
+    /// Definitions of rules written inside states (in `rules` order, for validation).
     machine_rules: Vec<RuleDef>,
-    /// İfadelerin gerçekten okuduğu `near.<kind>`'lar. None = hepsi (belirlenemedi).
+    /// The `near.<kind>`s expressions actually read. None = all (could not be determined).
     near_kinds: Option<BTreeSet<String>>,
 }
 
@@ -108,13 +108,13 @@ struct CompiledRule {
     is_action: bool,
     enabled: bool,
     for_kind: String,
-    /// Makineye yazılmış kural: hangi kind'lar (makineyi kullananlar).
+    /// Rule written in a machine: which kinds (those using the machine).
     kinds: Option<BTreeSet<String>>,
-    /// (makine, makine içi yol): kuralın yaşadığı durum.
+    /// (machine, path within machine): the state the rule lives in.
     home: Option<(String, String)>,
     state: Option<String>,
     depth: Option<usize>,
-    /// Kind → bağlı olduğu durum düğümleri (`state` ya da `home`).
+    /// Kind → the state nodes it is bound to (`state` or `home`).
     bind: BTreeMap<String, Vec<NodeId>>,
     target: Option<Target>,
     args: Vec<String>,
@@ -141,7 +141,7 @@ enum CDo {
 }
 
 impl CDo {
-    /// Bu eylemde (ve iç içe `On` bloklarında) değerlendirilecek sayı ifadeleri.
+    /// Number expressions to evaluate in this action (and nested `On` blocks).
     fn int_exprs<'a>(&'a self, out: &mut Vec<&'a AST>) {
         match self {
             CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
@@ -157,13 +157,13 @@ struct CompiledEnd {
     result: String,
 }
 
-/// Bir kural değerlendirilirken kim kimdir: `Me` sahibi, `It` hedefi.
+/// Who is who while a rule is evaluated: `Me` the owner, `It` the target.
 struct Who<'a> {
     me: &'a Entity,
     it: Option<&'a Entity>,
 }
 
-/// Kaynak metinleri AST'ye çevirir, hataları toplar (ilk hatada durmaz).
+/// Compiles source texts to AST, collecting errors (does not stop at the first).
 struct Compiler<'a> {
     rhai: &'a Rhai,
     errors: Vec<String>,
@@ -224,18 +224,18 @@ impl Compiler<'_> {
     }
 }
 
-/// Makinelerden toplananlar: ifadeler, eylem blokları, durumlara yazılmış kurallar.
+/// Collected from machines: expressions, action blocks, rules written in states.
 #[derive(Default)]
 struct Machines {
     exprs: Vec<AST>,
     blocks: Vec<Vec<CDo>>,
-    /// (makine, makine içi yol, kural)
+    /// (machine, path within machine, rule)
     rules: Vec<(String, String, RuleDef)>,
 }
 
 impl Compiler<'_> {
-    /// `game.ron`'daki bir durum → sim-state tanımı. Düz (eski) makinede durumlar
-    /// geçişlerden çıkarılır: `(initial, transitions)` yeterlidir.
+    /// A state in `game.ron` → sim-state definition. In a flat (legacy) machine states
+    /// are inferred from transitions: `(initial, transitions)` is enough.
     fn spec(&mut self, m: &mut Machines, machine: &str, path: &str, d: &StateDef, root: bool) -> Spec<usize, usize> {
         let ctx = |what: String| match path {
             "" => format!("fsm '{machine}' {what}"),
@@ -300,7 +300,7 @@ impl Compiler<'_> {
 }
 
 impl Compiler<'_> {
-    /// Boş değilse bir eylem bloğu ekler; `Spec` bloğun indeksini taşır.
+    /// Adds an action block if non-empty; `Spec` carries the block's index.
     fn block(&mut self, m: &mut Machines, ds: &[Do], ctx: &str) -> Vec<usize> {
         if ds.is_empty() {
             return Vec::new();
@@ -311,7 +311,7 @@ impl Compiler<'_> {
     }
 }
 
-/// Bir durum ağacındaki tüm ifade kaynakları.
+/// All expression sources in a state tree.
 fn state_sources<'a>(d: &'a StateDef, out: &mut Vec<&'a str>) {
     for t in &d.transitions {
         out.push(&t.when);
@@ -329,7 +329,7 @@ fn state_sources<'a>(d: &'a StateDef, out: &mut Vec<&'a str>) {
     d.states.values().chain(d.layers.values()).for_each(|c| state_sources(c, out));
 }
 
-/// Bir kind'ın durum metninden `sel`'e en az geçiş (ulaşılamazsa FAR).
+/// Fewest transitions from a kind's state text to `sel` (FAR if unreachable).
 fn steps(charts: &BTreeMap<String, Arc<StateChart>>, kind: &str, state: &str, sel: &str) -> i64 {
     let Some(c) = charts.get(kind) else { return FAR };
     let Ok(m) = c.decode(sim_state::active_part(state)) else { return FAR };
@@ -340,7 +340,7 @@ fn map_str(m: &Map, key: &str) -> String {
     m.get(key).and_then(|d| d.clone().into_string().ok()).unwrap_or_default()
 }
 
-/// Bir `Do` ağacındaki tüm ifade kaynakları (near analizi için).
+/// All expression sources in a `Do` tree (for near analysis).
 fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
     match d {
         Do::Set(_, e) | Do::Add(_, e) | Do::Need(_, e) => out.push(e),
@@ -350,8 +350,8 @@ fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
     }
 }
 
-/// Kaynaklarda `near.<kind>` kullanımlarını bulur. `near` başka türlü
-/// kullanılıyorsa (ör. `near["x"]`) güvenli tarafta kalıp None döner.
+/// Finds `near.<kind>` uses in sources. If `near` is used any other way
+/// (e.g. `near["x"]`) it stays on the safe side and returns None.
 fn near_refs<'a>(sources: impl Iterator<Item = &'a str>) -> Option<BTreeSet<String>> {
     let mut kinds = BTreeSet::new();
     for src in sources {
@@ -360,11 +360,11 @@ fn near_refs<'a>(sources: impl Iterator<Item = &'a str>) -> Option<BTreeSet<Stri
             let before = rest[..i].chars().next_back();
             rest = &rest[i + 4..];
             if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                continue; // başka bir kelimenin parçası
+                continue; // part of another word
             }
             let Some(tail) = rest.strip_prefix('.') else {
                 if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-                    continue; // `nearest` gibi
+                    continue; // like `nearest`
                 }
                 return None;
             };
@@ -375,7 +375,7 @@ fn near_refs<'a>(sources: impl Iterator<Item = &'a str>) -> Option<BTreeSet<Stri
     Some(kinds)
 }
 
-/// Rhai'ye verilen entity görünümü (`me`, `it`).
+/// Entity view given to Rhai (`me`, `it`).
 fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
     let mut m = Map::new();
     m.insert("id".into(), Dynamic::from(e.id as i64));
@@ -393,7 +393,7 @@ fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
 }
 
 impl Game {
-    /// `dir/game.ron` + `config` (varsayılan `dir/engine.toml`).
+    /// `dir/game.ron` + `config` (default `dir/engine.toml`).
     pub fn load(dir: &Path, config: Option<&Path>) -> Result<(World, Game), String> {
         let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
         let game_src = read(&dir.join("game.ron"))?;
@@ -420,7 +420,7 @@ impl Game {
         rhai.set_max_operations(cfg.rhai.max_operations);
         rhai.set_max_call_levels(cfg.rhai.max_call_levels);
         rhai.set_fail_on_invalid_map_property(true);
-        // stdout agent protokolüne ait; script'ler oraya yazamaz.
+        // stdout belongs to the agent protocol; scripts cannot write there.
         rhai.on_print(|_| {});
         rhai.on_debug(|_, _, _| {});
 
@@ -443,12 +443,12 @@ impl Game {
         let mut mach = Machines::default();
         let specs: BTreeMap<String, Spec<usize, usize>> =
             def.fsms.iter().map(|(name, f)| (name.clone(), cc.spec(&mut mach, name, "", f, true))).collect();
-        // Tuzlar: kural i → i+1 (eski oyunların gidişatı değişmesin), eylemler sonra.
+        // Salts: rule i → i+1 (so existing games keep their trajectory), actions after.
         let n = def.rules.len() as u64;
         let mut rules: Vec<CompiledRule> =
             def.rules.iter().enumerate().map(|(i, r)| cc.rule(r, i as u64 + 1, false, &cfg)).collect();
         rules.extend(def.actions.iter().enumerate().map(|(i, r)| cc.rule(r, n + i as u64 + 1, true, &cfg)));
-        // Durumlara yazılmış kurallar en sonda: eski oyunların tuzları kaymaz.
+        // Rules written in states come last: existing games' salts do not shift.
         let base = rules.len() as u64;
         for (i, (m, p, r)) in mach.rules.iter().enumerate() {
             let mut c = cc.rule(r, base + i as u64 + 1, false, &cfg);
@@ -551,8 +551,8 @@ impl Game {
         }
     }
 
-    /// Dünya boyutu `layout`'tan ya da panelin `[world]`'ünden. Önce layout yerleşir,
-    /// sonra `[spawn]`. Solid kind'lar karıştırılmış boş hücrelere tek tek yerleşir.
+    /// World size from `layout` or the panel's `[world]`. Layout is placed first,
+    /// then `[spawn]`. Solid kinds are placed one by one into shuffled empty cells.
     fn initial_world(&self) -> (World, Vec<String>) {
         let mut errs = Vec::new();
         let (w, h) = match (&self.def.layout, &self.cfg.world) {
@@ -590,7 +590,7 @@ impl Game {
                     };
                     let kind = entry.kind();
                     if !self.def.kinds.contains_key(kind) {
-                        continue; // check_refs raporlar
+                        continue; // check_refs reports it
                     }
                     let (state, mut props) = self.template(kind);
                     props.extend(entry.props().into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
@@ -602,7 +602,7 @@ impl Game {
         let mut c = 0u64;
         for (kind, n) in &self.cfg.spawn {
             let Some(def) = self.def.kinds.get(kind) else {
-                continue; // validate raporlar
+                continue; // validate reports it
             };
             if def.solid {
                 let placed = self.place_solid(&mut world, kind, *n);
@@ -642,7 +642,7 @@ impl Game {
         placed
     }
 
-    /// Yeni doğan bir kind'ın başlangıç durumu ve prop'ları.
+    /// Initial state and props of a newborn kind.
     pub fn template(&self, kind: &str) -> (String, BTreeMap<String, i64>) {
         let Some(k) = self.def.kinds.get(kind) else { return ("-".into(), BTreeMap::new()) };
         let state = self.initial_states.get(kind).cloned().unwrap_or_else(|| "-".into());
@@ -653,8 +653,8 @@ impl Game {
         self.def.kinds.get(kind).map_or('?', |k| k.glyph)
     }
 
-    /// Duruma özel glyph varsa o, yoksa kind'ın glyph'i.
-    /// En derin eşleşen durumun glyph'i (`Flow`, `Work`'ten önce gelir).
+    /// The state-specific glyph if any, else the kind's glyph.
+    /// Glyph of the deepest matching state (`Flow` wins over `Work`).
     pub fn glyph_of(&self, e: &Entity) -> char {
         let Some(k) = self.def.kinds.get(&e.kind) else { return '?' };
         let (Some(c), false) = (self.kind_charts.get(&e.kind), k.glyphs.is_empty()) else {
@@ -672,7 +672,7 @@ impl Game {
         best.map_or(k.glyph, |(_, g)| g)
     }
 
-    /// Kind'ın tüm durumları (yollarıyla); makinesi yoksa `-`.
+    /// All states of a kind (with paths); `-` if it has no machine.
     pub fn states_of(&self, kind: &str) -> BTreeSet<String> {
         match self.kind_charts.get(kind) {
             Some(c) => c.paths().map(str::to_string).collect(),
@@ -680,18 +680,18 @@ impl Game {
         }
     }
 
-    /// Gözlemcilerin gördüğü durum: yalnızca etkin olanlar.
+    /// State as observers see it: active ones only.
     pub fn state_label<'e>(&self, e: &'e Entity) -> &'e str {
         sim_state::active_part(&e.state)
     }
 
-    /// Etkin şalter durumu (kural ya da eylem adı → açık mı).
+    /// Effective switch state (rule or action name → on?).
     pub fn switches(&self) -> BTreeMap<String, bool> {
         self.rules.iter().map(|r| (r.name.clone(), r.enabled)).collect()
     }
 
-    /// Agent bir eylem ister. Dünya `act` ile bir sonraki tick arasında değişmediği
-    /// için eylem hemen değerlendirilir; sonuç (Group) tick'te kurallardan önce uygulanır.
+    /// An agent requests an action. Since the world does not change between `act` and the next tick,
+    /// the action is evaluated at once; the result (Group) is applied at the tick, before rules.
     pub fn act(
         &self,
         world: &World,
@@ -745,7 +745,7 @@ impl Game {
         }
     }
 
-    /// Koltuk yoksa herkes her şeyi yönetir. Koltuk varsa `as` şart ve `owner` eşleşmeli.
+    /// Without seats anyone controls everything. With seats, `as` is required and `owner` must match.
     pub fn owns(&self, seat: Option<&str>, e: &Entity) -> Result<bool, String> {
         let seats = &self.cfg.agent.seats;
         if seats.is_empty() {
@@ -756,7 +756,7 @@ impl Game {
         Ok(e.props.get("owner") == Some(n))
     }
 
-    /// Puan tablosu: koltuk başına (koltuk yoksa entity başına) `score` toplamı.
+    /// Scoreboard: `score` sum per seat (per entity if there are no seats).
     pub fn scores(&self, world: &World) -> BTreeMap<String, i64> {
         let mut out = BTreeMap::new();
         let Some(score) = &self.score else { return out };
@@ -777,13 +777,13 @@ impl Game {
         out
     }
 
-    /// Tick başına bir kez.
+    /// Once per tick.
     fn counts(&self, world: &World) -> Map {
         self.def.kinds.keys().map(|k| (k.as_str().into(), Dynamic::from(world.count(k) as i64))).collect()
     }
 
-    /// Tick boyunca sabit olanlar: p, tick, count. Çekirdek başına bir kez kurulur;
-    /// entity'ye özel değişkenler üstüne eklenip geri sarılır.
+    /// Constant during a tick: p, tick, count. Built once per core;
+    /// per-entity variables are pushed on top and rewound.
     fn tick_scope(&self, world: &World, counts: &Map) -> Scope<'static> {
         let mut scope = Scope::new();
         scope.push_constant("p", self.p_map.clone());
@@ -792,7 +792,7 @@ impl Game {
         scope
     }
 
-    /// Entity'ye özel: me, near.
+    /// Per entity: me, near.
     fn push_entity(&self, scope: &mut Scope<'static>, world: &World, e: &Entity) {
         let near: Map = self
             .def
@@ -805,19 +805,19 @@ impl Game {
         scope.push_constant("near", near);
     }
 
-    /// Kural ifadelerinin gördüğü dünya: p, tick, count, me, near (+ kurala özel roll, it, arg).
+    /// World seen by rule expressions: p, tick, count, me, near (+ per-rule roll, it, arg).
     fn base_scope(&self, world: &World, e: &Entity, counts: &Map) -> Scope<'static> {
         let mut scope = self.tick_scope(world, counts);
         self.push_entity(&mut scope, world, e);
         scope
     }
 
-    /// `end` ifadelerinin gördüğü dünya: p, tick, count.
+    /// World seen by `end` expressions: p, tick, count.
     fn world_scope(&self, world: &World) -> Scope<'static> {
         self.tick_scope(world, &self.counts(world))
     }
 
-    /// Sorgu bağlamını bir entity'ye ve tuza bağlar (her değerlendirmeden önce).
+    /// Binds the query context to an entity and salt (before each evaluation).
     fn bind(&self, e: &Entity, salt: u64) {
         CTX.with(|c| {
             let mut c = c.borrow_mut();
@@ -831,7 +831,7 @@ impl Game {
         });
     }
 
-    /// Bu çekirdeğin bağlamına dünyayı bağlar (kopya yoksa oluşturur).
+    /// Binds the world to this core's context (creates it if missing).
     fn bind_world(&self, world: Option<&World>) {
         self.bind_snapshot(world.map(|w| Arc::new(w.clone())).as_ref());
     }
@@ -845,7 +845,7 @@ impl Game {
         });
     }
 
-    /// Bir entity'nin bu tick'teki tüm grupları: önce FSM geçişi, sonra kurallar (sırayla).
+    /// All of an entity's groups this tick: FSM transition first, then rules (in order).
     fn eval_entity(&self, world: &World, e: &Entity, scope: &mut Scope<'static>) -> Vec<Group> {
         let len = scope.len();
         self.push_entity(scope, world, e);
@@ -862,7 +862,7 @@ impl Game {
             effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
         };
 
-        // Durum şeması: tek grup (geçişler, seçimler, enter/exit). Kurallar bu tick eski durumu görür.
+        // State chart: one group (transitions, picks, enter/exit). Rules see the old state this tick.
         let chart = self.kind_charts.get(&e.kind);
         let mem = match self.memory(e) {
             Ok(m) => m,
@@ -894,12 +894,12 @@ impl Game {
         out
     }
 
-    /// Makinesi olan entity'nin belleği (makinesi yoksa None).
+    /// Memory of an entity with a machine (None if it has none).
     fn memory(&self, e: &Entity) -> Result<Option<Memory>, String> {
         self.kind_charts.get(&e.kind).map(|c| c.decode(&e.state)).transpose()
     }
 
-    /// Kural bu entity'nin şu anki durumuna bağlı mı (`state:` ya da durumun içine yazılmış)?
+    /// Is the rule bound to this entity's current state (`state:` or written inside the state)?
     fn bound(&self, r: &CompiledRule, e: &Entity, mem: Option<&Memory>) -> bool {
         if r.state.is_none() && r.home.is_none() {
             return true;
@@ -908,7 +908,7 @@ impl Game {
         r.bind.get(&e.kind).is_some_and(|ids| c.in_any(m, ids, r.depth))
     }
 
-    /// Şema değişikliği → grup: önce yeni durum, sonra exit / then / enter eylemleri.
+    /// Chart change → group: new state first, then exit / then / enter actions.
     fn state_group(
         &self,
         world: &World,
@@ -926,7 +926,7 @@ impl Game {
         Ok(Some(Group { source: "fsm".into(), actor: Some(e.id), effects }))
     }
 
-    /// Şema eylem blokları. Hedefi bulunamayan eylem atlanır (geçiş değil).
+    /// Chart action blocks. An action whose target is missing is skipped (not the transition).
     #[allow(clippy::too_many_arguments)]
     fn run_blocks<'a>(
         &self,
@@ -957,7 +957,7 @@ impl Game {
         res
     }
 
-    /// `Goto`, `Interrupt`, `Back`: öznenin şemasında değişiklik + onun eylemleri.
+    /// `Goto`, `Interrupt`, `Back`: a change in the subject's chart + its actions.
     #[allow(clippy::too_many_arguments)]
     fn change_state<'a>(
         &self,
@@ -982,7 +982,7 @@ impl Game {
                 _ => c.back(m, o),
             }
         }
-        // Başkasının seçimleri burada değerlendirilemez (ifadeler `me`'yi görür): yedeğe düşer.
+        // Another entity's picks cannot be evaluated here (expressions see `me`): falls back.
         let o = if subj.id == who.me.id {
             change(c, &m, d, target, &mut RhaiOracle { game: self, world, e: subj, scope })?
         } else {
@@ -1005,7 +1005,7 @@ impl Game {
         self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string())
     }
 
-    /// Kopya yok: kurala özel değişkenler eklenir, sonra scope geri sarılır.
+    /// No copy: per-rule variables are pushed, then the scope is rewound.
     fn eval_rule(
         &self,
         world: &World,
@@ -1051,7 +1051,7 @@ impl Game {
         let mut effects = Vec::new();
         for d in &rule.then {
             if !self.eval_do(world, &who, e, d, rule.salt, scope, &mut effects)? {
-                return Ok(None); // hedef yok → ateşleme anlamsız
+                return Ok(None); // no target → firing is meaningless
             }
         }
 
@@ -1073,8 +1073,8 @@ impl Game {
         }
     }
 
-    /// `subj` eylemin uygulandığı entity: normalde sahibi, `On(...)` içinde hedef.
-    /// false = hedef bulunamadı; kural bu tick ateşlenmez.
+    /// `subj` is the entity the action applies to: normally the owner, the target inside `On(...)`.
+    /// false = target not found; the rule does not fire this tick.
     #[allow(clippy::too_many_arguments)]
     fn eval_do<'a>(
         &self,
@@ -1117,7 +1117,7 @@ impl Game {
             CDo::Need(prop, ast) => {
                 let min = self.eval_int(scope, ast)?;
                 if subj.props.get(prop).copied().unwrap_or(0) < min {
-                    return Ok(false); // şu an bile yetmiyor → ateşlenmez
+                    return Ok(false); // not enough even now → does not fire
                 }
                 out.push(Effect::Need { e: subj.id, prop: prop.clone(), min });
             }
@@ -1140,7 +1140,7 @@ impl Game {
         }
     }
 
-    /// Bir hedefin olası kind'ları (doğrulama için). `me`: kuralın sahibi olabilecek kind'lar.
+    /// Possible kinds of a target (for validation). `me`: kinds that may own the rule.
     fn target_kinds(&self, name: &str, target: Option<&Target>, me: &[String], t: &Target, errs: &mut Vec<String>) -> Vec<String> {
         match t {
             Target::Me => me.to_vec(),
@@ -1162,7 +1162,7 @@ impl Game {
         }
     }
 
-    /// Seçici, kind'lardan en az birinin bir durumuna çıkmalı.
+    /// The selector must resolve to a state of at least one of the kinds.
     fn check_selector(&self, what: &str, kinds: &[String], sel: &str, errs: &mut Vec<String>) {
         let found = kinds.iter().any(|k| self.kind_charts.get(k).is_some_and(|c| !c.resolve(sel).is_empty()));
         if !found {
@@ -1170,7 +1170,7 @@ impl Game {
         }
     }
 
-    /// `subjects`: eylemin uygulandığı entity'nin olası kind'ları; `me`: kuralın sahibininkiler.
+    /// `subjects`: possible kinds of the entity the action applies to; `me`: those of the rule's owner.
     #[allow(clippy::too_many_arguments)]
     fn check_do(
         &self,
@@ -1217,7 +1217,7 @@ impl Game {
         }
     }
 
-    /// Makinenin enter/exit/then eylemleri: özne o makineyi kullanan kind'lar.
+    /// The machine's enter/exit/then actions: the subject is any kind using that machine.
     fn check_machine(&self, machine: &str, path: &str, d: &StateDef, kinds: &[String], errs: &mut Vec<String>) {
         let name = if path.is_empty() { format!("fsm {machine}") } else { format!("fsm {machine} state {path}") };
         let all = d.enter.iter().chain(&d.exit).chain(d.transitions.iter().flat_map(|t| &t.then));
@@ -1347,8 +1347,8 @@ impl Game {
         }
     }
 
-    /// Her ifadeyi her ilgili kind'ın şablonuyla bir kez koşturur:
-    /// yazım hatalı prop, tanımsız parametre, yanlış tip → yükleme anında yakalanır.
+    /// Runs each expression once against each relevant kind's template:
+    /// misspelled prop, undeclared parameter, wrong type → caught at load time.
     fn dry_run(&self, world: &World, errs: &mut Vec<String>) {
         let counts = self.counts(world);
         self.bind_world(Some(world));
@@ -1461,19 +1461,19 @@ impl Rules for Game {
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
-    /// Değerlendirme yalnızca okur → entity'ler çekirdeklere bölünür. Sonuçlar id
-    /// sırasıyla birleşir; bu yüzden çekirdek sayısı sonucu değiştirmez.
+    /// Evaluation only reads → entities are split across cores. Results merge in id
+    /// order, so the core count does not change the result.
     fn eval(&self, world: &World) -> Vec<Group> {
         let counts = self.counts(world);
         let snap = Arc::new(world.clone());
         let entities: Vec<&Entity> = world.entities().values().collect();
-        // Her iş parçası kendi scope'unu bir kez kurar: paylaşılan, kilitli değer yok.
+        // Each worker builds its own scope once: no shared, locked values.
         let init = || self.tick_scope(world, &counts);
         let per = |scope: &mut Scope<'static>, e: &&Entity| {
             self.bind_snapshot(Some(&snap));
             self.eval_entity(world, e, scope)
         };
-        // Küçük dünyada iş dağıtmak işin kendisinden pahalı: sıralı yol.
+        // In a small world, distributing work costs more than the work: sequential path.
         let pool = self.pool.as_ref().filter(|_| entities.len() >= 4 * CHUNK);
         let groups: Vec<Vec<Group>> = match pool {
             Some(pool) => pool.install(|| entities.par_iter().with_min_len(CHUNK).map_init(init, per).collect()),
@@ -1485,7 +1485,7 @@ impl Rules for Game {
         groups.into_iter().flatten().collect()
     }
 
-    /// Geri yüklenen dünya: her entity bilinen bir kind, durumu o kind'ın şemasında geçerli.
+    /// Restored world: every entity is a known kind, its state valid in that kind's chart.
     fn check_world(&self, world: &World) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
         for e in world.entities().values() {
@@ -1522,7 +1522,7 @@ impl Rules for Game {
     }
 }
 
-/// Şema koşullarını Rhai'de değerlendirir; `me` o entity'dir.
+/// Evaluates chart conditions in Rhai; `me` is that entity.
 struct RhaiOracle<'g, 'a, 's> {
     game: &'g Game,
     world: &'a World,
@@ -1549,7 +1549,7 @@ impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
     }
 }
 
-/// `Nearest(kind)` ya da `NearestIn(kind, state)`.
+/// `Nearest(kind)` or `NearestIn(kind, state)`.
 fn nearest<'w>(world: &'w World, from: &Entity, t: &Target) -> Option<(&'w Entity, i64)> {
     match t {
         Target::Nearest(k) => world.nearest(from, k),
@@ -1558,7 +1558,7 @@ fn nearest<'w>(world: &'w World, from: &Entity, t: &Target) -> Option<(&'w Entit
     }
 }
 
-/// Seçici tek bir duruma çıkmalı (`Goto`, `Interrupt`).
+/// The selector must resolve to a single state (`Goto`, `Interrupt`).
 fn unique(c: &StateChart, sel: &str) -> Result<NodeId, String> {
     match c.resolve(sel)[..] {
         [one] => Ok(one),
@@ -1567,7 +1567,7 @@ fn unique(c: &StateChart, sel: &str) -> Result<NodeId, String> {
     }
 }
 
-/// Reddedilen bir eylemin `Need` koşulları, okunur biçimde.
+/// A refused action's `Need` conditions, in readable form.
 fn need_texts(d: &Do, out: &mut Vec<String>) {
     match d {
         Do::Need(p, e) => out.push(format!("{p} >= {e}")),
@@ -1581,7 +1581,7 @@ fn wander(world: &World, e: &Entity, salt: u64) -> Effect {
     Effect::Move { e: e.id, dx: (r % 3) as i64 - 1, dy: ((r / 3) % 3) as i64 - 1 }
 }
 
-/// Script çıktısı: `#{op: "add", prop: "hunger", value: -1}` gibi map'ler.
+/// Script output: maps like `#{op: "add", prop: "hunger", value: -1}`.
 fn effect_from_map(e: &Entity, item: Dynamic) -> Result<Effect, String> {
     let m = item.try_cast::<Map>().ok_or("script must return an array of maps")?;
     let s = |k: &str| {

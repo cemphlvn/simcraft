@@ -1,5 +1,5 @@
-//! engine.toml — buharlı motorun yönetici paneli.
-//! Oyunun *ne* olduğunu game.ron söyler; motorun *nasıl* çalışacağını bu dosya.
+//! engine.toml — the steam engine's operator panel.
+//! game.ron says *what* the game is; this file says *how* the engine runs.
 
 use std::collections::BTreeMap;
 
@@ -9,16 +9,16 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct EngineConfig {
     pub run: RunCfg,
-    /// game.ron'da `layout` varsa gerekmez (verilirse ona uymalı).
+    /// Not needed if game.ron has a `layout` (if given, it must match).
     #[serde(default)]
     pub world: Option<WorldCfg>,
-    /// Başlangıç nüfusu: kind → adet.
+    /// Initial population: kind → count.
     #[serde(default)]
     pub spawn: BTreeMap<String, u32>,
-    /// Şalterler: kural adı → açık/kapalı. Yazılmayan kural açıktır.
+    /// Switches: rule name → on/off. Unlisted rules are on.
     #[serde(default)]
     pub switches: BTreeMap<String, bool>,
-    /// Hiperparametreler: game.ron'daki varsayılanları ezer. Kurallarda `p.<ad>`.
+    /// Hyperparameters: override game.ron defaults. `p.<name>` in rules.
     #[serde(default)]
     pub params: BTreeMap<String, i64>,
     #[serde(default)]
@@ -29,13 +29,13 @@ pub struct EngineConfig {
     pub bus: BusCfg,
 }
 
-/// Olay veriyolunun çıkışları. İkisi de isteğe bağlı.
+/// Event bus outputs. Both optional.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BusCfg {
-    /// Her mesajı JSONL olarak bu dosyaya yazar (çalışma dizinine göre). Replay'in girdisi.
+    /// Writes every message as JSONL to this file (relative to the working dir). Input for replay.
     pub log: Option<String>,
-    /// Canlı izleyiciler için TCP adresi (ör. "127.0.0.1:7878"); bağlanan her istemci her mesajı alır.
+    /// TCP address for live viewers (e.g. "127.0.0.1:7878"); every connected client gets every message.
     pub listen: Option<String>,
 }
 
@@ -44,8 +44,8 @@ pub struct BusCfg {
 pub struct RunCfg {
     pub seed: u64,
     pub max_ticks: u64,
-    /// Kural değerlendirmesi için çekirdek sayısı (kazan sayısı). 0 = hepsi, 1 = tek çekirdek.
-    /// Sonucu değiştirmez: aynı seed her çekirdek sayısında aynı hash'i verir.
+    /// Core count for rule evaluation (number of boilers). 0 = all, 1 = single core.
+    /// Does not change the result: the same seed gives the same hash at any core count.
     #[serde(default)]
     pub threads: usize,
 }
@@ -60,7 +60,7 @@ pub struct WorldCfg {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RhaiCfg {
-    /// Emniyet ventili: tek bir ifade/script'in yapabileceği en fazla işlem.
+    /// Safety valve: max operations a single expression/script may perform.
     pub max_operations: u64,
     pub max_call_levels: usize,
 }
@@ -74,12 +74,12 @@ impl Default for RhaiCfg {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AgentCfg {
-    /// Agent'ların `act` ile yönetebileceği kind'lar.
+    /// Kinds agents may control via `act`.
     pub controllable: Vec<String>,
-    /// `observe` ile entity etrafında görülen yarıçap.
+    /// Radius seen around an entity via `observe`.
     pub observe_radius: i64,
-    /// Çok oyunculu: koltuk adı → sahip numarası. Doluysa agent `as` ile konuşur ve
-    /// yalnızca `owner` prop'u kendi numarası olan entity'leri yönetir.
+    /// Multiplayer: seat name → owner number. If set, an agent speaks with `as` and
+    /// controls only entities whose `owner` prop is its own number.
     pub seats: BTreeMap<String, i64>,
 }
 

@@ -1,4 +1,4 @@
-//! Oyun tanımı (game.ron, A: bildirimsel + B: Rhai) ve motor paneli (engine.toml).
+//! Game definition (game.ron, A: declarative + B: Rhai) and engine panel (engine.toml).
 
 mod compile;
 pub mod config;

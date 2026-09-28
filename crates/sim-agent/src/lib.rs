@@ -1,5 +1,5 @@
-//! Agent protokolü: satır başına bir JSON istek, bir JSON cevap. `simcraft-agent` (stdio)
-//! ve `sim-ffi` (C API) aynı `Session`'ı kullanır; protokolün tek bir tanımı vardır.
+//! Agent protocol: one JSON request per line, one JSON response. `simcraft-agent` (stdio)
+//! and `sim-ffi` (C API) use the same `Session`; the protocol has a single definition.
 
 use std::collections::BTreeMap;
 
@@ -30,7 +30,7 @@ pub enum Request {
     Snapshot,
     Restore {
         snapshot: Box<Snapshot>,
-        /// Verilirse görüntünün alındığı oyunun parmak izi; bu oyununkiyle aynı olmalı.
+        /// If given, fingerprint of the game the snapshot was taken from; must match this game's.
         #[serde(default)]
         source: Option<String>,
     },
@@ -129,7 +129,7 @@ impl Session {
         })
     }
 
-    /// Agent'ın (koltuk varsa o koltuğun) yönetebileceği entity'ler.
+    /// Entities the agent (or its seat, if any) can control.
     fn yours(&self, seat: Option<&str>) -> Vec<u64> {
         let g = self.game();
         let ctl = &g.cfg.agent.controllable;
@@ -142,7 +142,7 @@ impl Session {
         self.game().def.kinds.keys().map(|k| (k.as_str(), w.count(k))).collect()
     }
 
-    /// kind → durum → adet (tek durumlu kind'lar dahil).
+    /// kind → state → count (including single-state kinds).
     fn states(&self) -> BTreeMap<&str, BTreeMap<&str, usize>> {
         let mut out: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
         for e in self.engine.world().entities().values() {
@@ -183,7 +183,7 @@ impl Session {
         }))
     }
 
-    /// ASCII harita: agent'lar için en ucuz, en okunaklı gözlem.
+    /// ASCII map: the cheapest, most readable observation for agents.
     fn render(&self, x0: i64, y0: i64, x1: i64, y1: i64, me: Option<u64>) -> Vec<String> {
         let w = self.engine.world();
         let cols = (x1 - x0 + 1) as usize;
@@ -202,7 +202,7 @@ impl Session {
         rows.into_iter().map(String::from_iter).collect()
     }
 
-    /// Her istek ayrı değerlendirilir: biri reddedilse de diğerleri kuyruğa girer.
+    /// Each request is evaluated separately: if one is rejected, the others are still queued.
     fn act(&mut self, seat: Option<&str>, actions: Vec<ActionReq>) -> Result<Value, String> {
         let (world, game) = (self.engine.world(), self.engine.rules());
         let outcomes: Vec<Result<Group, String>> =
@@ -259,8 +259,8 @@ impl Session {
 
 
 impl Session {
-    /// Metinlerden kurulum (host dosyaları kendisi okur: Unity StreamingAssets, Unreal content).
-    /// Hata, stdio'daki başlangıç hatasıyla aynı biçimde döner.
+    /// Setup from texts (the host reads files itself: Unity StreamingAssets, Unreal content).
+    /// Errors come back in the same format as the stdio startup error.
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<Session, Value> {
         let (world, game) =
             Game::from_strs(game_ron, engine_toml).map_err(|e| json!({ "ok": false, "stage": "load", "errors": [e] }))?;
@@ -271,7 +271,7 @@ impl Session {
         Ok(Session { engine })
     }
 
-    /// Bir satır → bir cevap. `quit` için None.
+    /// One line → one response. None for `quit`.
     pub fn handle_line(&mut self, line: &str) -> Option<Value> {
         Some(match serde_json::from_str::<Request>(line) {
             Ok(Request::Quit) => return None,

@@ -25,7 +25,7 @@ fn run(panel: &str, ticks: u64) -> (Vec<u64>, Vec<String>) {
 fn same_seed_same_trajectory() {
     let (a, _) = run(PANEL, 300);
     let (b, _) = run(PANEL, 300);
-    assert_eq!(a, b, "aynı seed + aynı input → her tick aynı hash");
+    assert_eq!(a, b, "same seed + same input → same hash every tick");
 }
 
 #[test]

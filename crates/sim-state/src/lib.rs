@@ -1,24 +1,24 @@
-//! Durum şemaları (state chart): iç içe durumlar, katmanlar, yeniden kullanılan makineler,
-//! hatırlama, kesme/geri dönme, seçim. Oyunu da Rhai'yi de bilmez: koşullar (`G`) ve
-//! eylemler (`A`) dışarıdan gelen tutamaçlardır; değerlendirmeyi `Oracle` yapar.
+//! State charts: nested states, layers, reused machines,
+//! history, interrupt/back, pick. Knows neither the game nor Rhai: guards (`G`) and
+//! actions (`A`) are handles from outside; the `Oracle` evaluates them.
 //!
-//! Bellek tek bir metindir (`encode`/`decode`): etkin yapraklar, `#` hatırlananlar,
-//! `^` kaydedilmiş kesmeler. Düz bir makinenin durumu yalnızca yaprağın adıdır.
+//! Memory is a single string (`encode`/`decode`): active leaves, `#` remembered ones,
+//! `^` saved interrupts. A flat machine's state is just the leaf's name.
 
 use std::collections::BTreeMap;
 
 pub type NodeId = usize;
 
-/// Durum adlarında kullanılamayan karakterler (bellek metninin ayraçları).
+/// Characters not allowed in state names (separators of the memory string).
 pub const RESERVED: &[char] = &['.', '|', '#', '^', '=', ','];
 
-/// Kesmeler en fazla bu kadar iç içe geçer.
+/// Maximum nesting depth of interrupts.
 pub const MAX_STACK: usize = 16;
 
-/// Ulaşılamayan durumun adım sayısı.
+/// Step count of an unreachable state.
 pub const FAR: i64 = 9_999;
 
-// ---------------------------------------------------------------- tanım
+// ---------------------------------------------------------------- definition
 
 #[derive(Clone, Debug)]
 pub struct Spec<G, A> {
@@ -53,9 +53,9 @@ impl<G, A> Default for Spec<G, A> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickKind {
-    /// İlk tutan koşul.
+    /// The first guard that holds.
     First,
-    /// En yüksek puan; eşitlikte önce yazılan.
+    /// Highest score; on a tie, the one written first.
     Best,
 }
 
@@ -67,7 +67,7 @@ pub struct PickSpec<G> {
 
 #[derive(Clone, Debug)]
 pub struct TransitionSpec<G, A> {
-    /// Çocuk yolu (`"Dev.Polish"`) ya da `"*"` (herhangi bir çocuk).
+    /// Child path (`"Dev.Polish"`) or `"*"` (any child).
     pub from: String,
     pub to: Option<String>,
     pub back: bool,
@@ -76,7 +76,7 @@ pub struct TransitionSpec<G, A> {
     pub then: Vec<A>,
 }
 
-// ---------------------------------------------------------------- derlenmiş şema
+// ---------------------------------------------------------------- compiled chart
 
 #[derive(Clone, Debug)]
 pub enum Shape<G> {
@@ -88,7 +88,7 @@ pub enum Shape<G> {
 #[derive(Clone, Debug)]
 pub struct Pick<G> {
     pub kind: PickKind,
-    /// (çocuk, koşul/puan, tuz)
+    /// (child, guard/score, salt)
     pub options: Vec<(NodeId, G, u64)>,
 }
 
@@ -118,18 +118,18 @@ pub struct Transition<G, A> {
 pub struct Node<G, A> {
     pub name: String,
     pub parent: Option<NodeId>,
-    /// Kökten yol (`Life.Awake`); kökün yolu boştur.
+    /// Path from the root (`Life.Awake`); the root's path is empty.
     pub path: String,
     pub depth: usize,
-    /// Alt ağacın bittiği id (ön-sıra numaralandırma: alt ağaç = `id..end`).
+    /// Id where the subtree ends (pre-order numbering: subtree = `id..end`).
     pub end: NodeId,
     pub shape: Shape<G>,
     pub remember: bool,
     pub enter: Vec<A>,
     pub exit: Vec<A>,
     pub transitions: Vec<Transition<G, A>>,
-    /// Bu düğümün hangi makinenin hangi durumundan geldiği: (makine, makine içi yol).
-    /// `use` ile takılan düğüm hem kendi yerini hem takılan makinenin kökünü taşır.
+    /// Which machine and which of its states this node comes from: (machine, path in machine).
+    /// A node mounted via `use` carries both its own place and the mounted machine's root.
     pub origins: Vec<(String, String)>,
 }
 
@@ -137,17 +137,17 @@ pub struct Node<G, A> {
 pub struct Chart<G, A> {
     pub nodes: Vec<Node<G, A>>,
     index: BTreeMap<String, NodeId>,
-    /// `steps[a][b]`: a'dan b'ye en az geçiş sayısı.
+    /// `steps[a][b]`: minimum number of transitions from a to b.
     steps: Vec<Vec<i64>>,
 }
 
-/// Koşulları ve puanları değerlendiren taraf (sim-rules'ta Rhai).
+/// The side that evaluates guards and scores (Rhai in sim-rules).
 pub trait Oracle<G> {
     fn test(&mut self, g: &G, salt: u64) -> Result<bool, String>;
     fn score(&mut self, g: &G, salt: u64) -> Result<i64, String>;
 }
 
-/// Değerlendirme olmadan: `pick` yedeğe düşer (doğumda kullanılır).
+/// Without evaluation: `pick` falls back to the default (used at birth).
 pub struct NoOracle;
 
 impl<G> Oracle<G> for NoOracle {
@@ -161,26 +161,26 @@ impl<G> Oracle<G> for NoOracle {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Memory {
-    /// Etkin yapraklar, artan id.
+    /// Active leaves, ascending id.
     pub leaves: Vec<NodeId>,
-    /// Hatırlayan durum → en son çıkılan çocuğu.
+    /// Remembering state → its most recently exited child.
     pub history: BTreeMap<NodeId, NodeId>,
-    /// Kesmeler: (kapsam, o kapsamda o anki yapraklar). Sonuncusu en üstte.
+    /// Interrupts: (scope, the leaves in that scope at the time). The last one is on top.
     pub stack: Vec<(NodeId, Vec<NodeId>)>,
 }
 
-/// Bir adımın sonucu.
+/// The result of a step.
 #[derive(Clone, Debug)]
 pub struct Outcome<A> {
     pub mem: Memory,
-    /// Sırayla: exit (içten dışa), geçişin `then`'i, enter (dıştan içe).
+    /// In order: exit (inside out), the transition's `then`, enter (outside in).
     pub actions: Vec<A>,
-    /// Bu değişikliği başlatan geçiş/seçimin tuzu.
+    /// Salt of the transition/pick that started this change.
     pub salt: Option<u64>,
     pub changed: bool,
 }
 
-// ---------------------------------------------------------------- kurulum
+// ---------------------------------------------------------------- building
 
 struct Builder<'m, G, A> {
     machines: &'m BTreeMap<String, Spec<G, A>>,
@@ -214,7 +214,7 @@ impl<G: Clone, A: Clone> Builder<'_, G, A> {
             origins: vec![origin.clone()],
         });
 
-        // `use`: gövde başka bir makineden gelir.
+        // `use`: the body comes from another machine.
         let mut body_origin = origin;
         let mut pushed = false;
         let body: &Spec<G, A> = match &spec.uses {
@@ -358,7 +358,7 @@ impl<G: Clone, A: Clone> Builder<'_, G, A> {
         id
     }
 
-    /// `base` altında göreli yol (`"Dev.Polish"`).
+    /// Relative path under `base` (`"Dev.Polish"`).
     fn rel(&self, base: NodeId, rel: &str) -> Option<NodeId> {
         let mut at = base;
         for seg in rel.split('.') {
@@ -369,7 +369,7 @@ impl<G: Clone, A: Clone> Builder<'_, G, A> {
 }
 
 impl<G: Clone, A: Clone> Chart<G, A> {
-    /// `machines[name]` kök olur; `use` edilen makineler yerine takılır.
+    /// `machines[name]` becomes the root; `use`d machines are mounted in place.
     pub fn build(name: &str, machines: &BTreeMap<String, Spec<G, A>>) -> Result<Self, Vec<String>> {
         let Some(root) = machines.get(name) else { return Err(vec![format!("unknown machine '{name}'")]) };
         let mut b = Builder { machines, nodes: Vec::new(), errors: Vec::new(), using: vec![name.to_string()] };
@@ -378,7 +378,7 @@ impl<G: Clone, A: Clone> Chart<G, A> {
             return Err(b.errors);
         }
         let mut nodes = b.nodes;
-        // Tuzlar: ön-sırada her düğümün geçişleri, sonra seçenekleri. Düz makinede geçiş i → i.
+        // Salts: in pre-order, each node's transitions, then its options. In a flat machine transition i → i.
         let mut salt = 0;
         for n in &mut nodes {
             for t in &mut n.transitions {
@@ -404,7 +404,7 @@ impl<G, A: Clone> Chart<G, A> {
         &self.nodes[id]
     }
 
-    /// Kök hariç tüm durumların yolları.
+    /// Paths of all states except the root.
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.nodes.iter().skip(1).map(|n| n.path.as_str())
     }
@@ -421,7 +421,7 @@ impl<G, A: Clone> Chart<G, A> {
         }
     }
 
-    /// Yolun sonu `sel` olan durumlar: `"Work"`, `"Awake.Work"`.
+    /// States whose path ends in `sel`: `"Work"`, `"Awake.Work"`.
     pub fn resolve(&self, sel: &str) -> Vec<NodeId> {
         let segs: Vec<&str> = sel.split('.').collect();
         (1..self.nodes.len())
@@ -432,14 +432,14 @@ impl<G, A: Clone> Chart<G, A> {
             .collect()
     }
 
-    /// (makine, makine içi yol) kaynağından gelen düğümler: makineye yazılmış kuralların yerleri.
+    /// Nodes originating from (machine, path in machine): where rules written on the machine apply.
     pub fn with_origin(&self, machine: &str, path: &str) -> Vec<NodeId> {
         (0..self.nodes.len())
             .filter(|&i| self.nodes[i].origins.iter().any(|(m, p)| m == machine && p == path))
             .collect()
     }
 
-    // ------------------------------------------------------------ bellek metni
+    // ------------------------------------------------------------ memory string
 
     pub fn encode(&self, m: &Memory) -> String {
         let paths = |ls: &[NodeId]| ls.iter().map(|&l| self.nodes[l].path.as_str()).collect::<Vec<_>>().join("|");
@@ -493,7 +493,7 @@ impl<G, A: Clone> Chart<G, A> {
         Ok(m)
     }
 
-    // ------------------------------------------------------------ sorgular
+    // ------------------------------------------------------------ queries
 
     pub fn is_active(&self, m: &Memory, n: NodeId) -> bool {
         m.leaves.iter().any(|&l| self.inside(n, l))
@@ -503,7 +503,7 @@ impl<G, A: Clone> Chart<G, A> {
         self.children(n).iter().copied().find(|&c| self.is_active(m, c))
     }
 
-    /// `ids`'den biri etkin mi; `depth` verilirse etkin yaprak en fazla o kadar altta mı.
+    /// Is one of `ids` active; with `depth`, is the active leaf at most that far below.
     pub fn in_any(&self, m: &Memory, ids: &[NodeId], depth: Option<usize>) -> bool {
         ids.iter().any(|&n| {
             m.leaves
@@ -512,12 +512,12 @@ impl<G, A: Clone> Chart<G, A> {
         })
     }
 
-    /// Etkin olanlar içinde en derin eşleşmenin derinliği (glyph seçimi için).
+    /// Depth of the deepest match among the active ones (for glyph selection).
     pub fn deepest(&self, m: &Memory, ids: &[NodeId]) -> Option<usize> {
         ids.iter().filter(|&&n| self.is_active(m, n)).map(|&n| self.nodes[n].depth).max()
     }
 
-    /// Etkin durumlardan `ids`'den birine en az kaç geçiş. 0 = zaten orada.
+    /// Minimum transitions from the active states to one of `ids`. 0 = already there.
     pub fn steps_to(&self, m: &Memory, ids: &[NodeId]) -> i64 {
         let mut best = FAR;
         for (a, row) in self.steps.iter().enumerate() {
@@ -531,7 +531,7 @@ impl<G, A: Clone> Chart<G, A> {
         best
     }
 
-    /// Bir düğüme girince varsayılan olarak girilebilecek her şey (seçimler iyimser: hepsi).
+    /// Everything that may be entered by default on entering a node (picks optimistic: all).
     fn entry_closure(&self, n: NodeId, out: &mut Vec<NodeId>) {
         out.push(n);
         match &self.nodes[n].shape {
@@ -558,7 +558,7 @@ impl<G, A: Clone> Chart<G, A> {
 
     fn step_table(&self) -> Vec<Vec<i64>> {
         let n = self.nodes.len();
-        // Kenar: düğüm → bir geçişle varılan kümeler (hedef + ataları + varsayılan girişi).
+        // Edge: node → sets reached by one transition (target + its ancestors + default entry).
         let mut edges: Vec<Vec<Vec<NodeId>>> = vec![Vec::new(); n];
         for (l, node) in self.nodes.iter().enumerate() {
             for t in &node.transitions {
@@ -605,9 +605,9 @@ impl<G, A: Clone> Chart<G, A> {
             .collect()
     }
 
-    // ------------------------------------------------------------ değişiklikler
+    // ------------------------------------------------------------ changes
 
-    /// Doğum: `initial` (ya da ilk seçenek) zinciri; `enter` çalışmaz.
+    /// Birth: the `initial` (or first option) chain; `enter` does not run.
     pub fn initial(&self) -> Memory {
         let mut none = NoOracle;
         let mut r = Run::new(self, &Memory::default(), &mut none);
@@ -615,21 +615,21 @@ impl<G, A: Clone> Chart<G, A> {
         r.mem
     }
 
-    /// Bir tick: dıştan içe, her seviyede ilk tutan geçiş; yoksa `recheck`.
+    /// One tick: outside in, the first transition that holds at each level; else `recheck`.
     pub fn step(&self, m: &Memory, o: &mut impl Oracle<G>) -> Result<Outcome<A>, String> {
         let mut r = Run::new(self, m, o);
         r.walk(0)?;
         Ok(r.finish())
     }
 
-    /// `Goto`: hedef zaten etkinse değişiklik yok.
+    /// `Goto`: no change if the target is already active.
     pub fn goto(&self, m: &Memory, target: NodeId, o: &mut impl Oracle<G>) -> Result<Outcome<A>, String> {
         let mut r = Run::new(self, m, o);
         r.go_to(target, false, &[])?;
         Ok(r.finish())
     }
 
-    /// `Interrupt`: hedefin bağlı olduğu seviyede şu anki yeri kaydet, sonra git.
+    /// `Interrupt`: save the current place at the target's level, then go.
     pub fn interrupt(&self, m: &Memory, target: NodeId, o: &mut impl Oracle<G>) -> Result<Outcome<A>, String> {
         let scope = self.nodes[target].parent.ok_or("cannot interrupt into the root")?;
         let mut r = Run::new(self, m, o);
@@ -638,7 +638,7 @@ impl<G, A: Clone> Chart<G, A> {
         Ok(r.finish())
     }
 
-    /// `Back`: en son kaydedilen kesmeye dön; yoksa değişiklik yok.
+    /// `Back`: return to the most recently saved interrupt; else no change.
     pub fn back(&self, m: &Memory, o: &mut impl Oracle<G>) -> Result<Outcome<A>, String> {
         let mut r = Run::new(self, m, o);
         if let Some((scope, leaves)) = r.mem.stack.pop() {
@@ -647,7 +647,7 @@ impl<G, A: Clone> Chart<G, A> {
         Ok(r.finish())
     }
 
-    /// Bir hedef `Interrupt` için uygun mu (ebeveyni `states` taşıyor mu)?
+    /// Is a target valid for `Interrupt` (does its parent have `states`)?
     pub fn interruptible(&self, target: NodeId) -> bool {
         self.nodes[target].parent.is_some_and(|p| matches!(self.nodes[p].shape, Shape::Or { .. }))
     }
@@ -764,7 +764,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
                 if let (Some(cur), Some(cs)) = (current, cur_score)
                     && s <= cs
                 {
-                    return Ok(cur); // eşitlikte yerinde kal
+                    return Ok(cur); // on a tie, stay put
                 }
                 self.salt.get_or_insert(salt);
                 Ok(c)
@@ -807,7 +807,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
         self.changed = true;
     }
 
-    /// `n`'ye gir; `goals` içindeki düğümlere doğru, gerisi varsayılan.
+    /// Enter `n`; toward the nodes in `goals`, default for the rest.
     fn enter_to(&mut self, n: NodeId, goals: &[NodeId]) -> Result<(), String> {
         self.actions.extend(self.node(n).enter.iter().cloned());
         self.changed = true;
@@ -834,7 +834,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
         }
     }
 
-    /// Yalnızca farklı olanı değiştir. Hedef zaten etkinse `reenter` onu yeniden girer.
+    /// Change only what differs. If the target is already active, `reenter` re-enters it.
     fn go_to(&mut self, target: NodeId, reenter: bool, then: &[A]) -> Result<(), String> {
         let mut path = Vec::new();
         let mut at = Some(target);
@@ -842,7 +842,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
             path.push(a);
             at = self.node(a).parent;
         }
-        path.reverse(); // kök, ..., hedef
+        path.reverse(); // root, ..., target
         for w in path.windows(2) {
             let (parent, a) = (w[0], w[1]);
             if let Shape::Or { .. } = self.node(parent).shape {
@@ -876,7 +876,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
         Ok(())
     }
 
-    /// `scope`'un çocuğunu bırak, kaydedilen yapraklara (yoksa varsayılana) geri gir.
+    /// Leave `scope`'s child, re-enter the saved leaves (else the default).
     fn restore(&mut self, scope: NodeId, leaves: &[NodeId], then: &[A]) -> Result<(), String> {
         if let Some(c) = self.chart.active_child(&self.mem, scope) {
             self.exit(c);
@@ -891,14 +891,14 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
     }
 }
 
-// ---------------------------------------------------------------- metin sorguları
+// ---------------------------------------------------------------- string queries
 
-/// Bellek metninin etkin kısmı (`#` ve `^` öncesi): gözlemcilerin gördüğü durum.
+/// The active part of a memory string (before `#` and `^`): the state observers see.
 pub fn active_part(s: &str) -> &str {
     s.find(['#', '^']).map_or(s, |i| &s[..i])
 }
 
-/// `sel`'in yaprağın yolundaki bitiş konumu (en derin), yoksa None.
+/// End position of `sel` in the leaf's path (deepest), else None.
 fn match_end(leaf: &str, sel: &str) -> Option<usize> {
     let segs: Vec<&str> = leaf.split('.').collect();
     let want: Vec<&str> = sel.split('.').collect();
@@ -908,13 +908,13 @@ fn match_end(leaf: &str, sel: &str) -> Option<usize> {
     (want.len()..=segs.len()).rev().find(|&end| segs[end - want.len()..end] == want[..]).map(|end| segs.len() - end)
 }
 
-/// Etkin durum metni (`Life.Awake.Work|Mood.Tired`) `sel` içinde mi?
+/// Is the active state string (`Life.Awake.Work|Mood.Tired`) inside `sel`?
 pub fn in_label(label: &str, sel: &str) -> bool {
     let label = active_part(label);
     label == sel || label.split('|').any(|leaf| match_end(leaf, sel).is_some())
 }
 
-/// Etkin yaprak `sel`'in kaç seviye altında; içinde değilse -1.
+/// How many levels below `sel` the active leaf is; -1 if not inside.
 pub fn depth_in_label(label: &str, sel: &str) -> i64 {
     active_part(label).split('|').filter_map(|leaf| match_end(leaf, sel)).min().map_or(-1, |d| d as i64)
 }

@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ron = "0.12"
 toml = "1"
-# no_float + only_i64: script aritmetiği platformdan bağımsız, deterministik kalır
-# sync: kurallar birden çok çekirdekte değerlendirilir
+# no_float + only_i64: script arithmetic stays platform-independent and deterministic
+# sync: rules are evaluated on multiple cores
 rhai = { version = "1.26", features = ["no_float", "only_i64", "sync"] }
 rayon = "1.12"

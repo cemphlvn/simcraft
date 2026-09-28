@@ -1,9 +1,9 @@
-//! Agent arayüzü: stdin'den satır başına bir JSON istek, stdout'a satır başına bir JSON cevap.
+//! Agent interface: one JSON request per line on stdin, one JSON response per line on stdout.
 //!
 //!   simcraft-agent [GAME_DIR] [--config engine.toml]
 //!   simcraft-agent [GAME_DIR] [--config engine.toml] --replay run.jsonl
 //!
-//! Komutlar: info · observe · act · step · hash · snapshot · restore · quit  (ayrıntı: docs/architecture.md)
+//! Commands: info · observe · act · step · hash · snapshot · restore · quit  (details: docs/architecture.md)
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -86,7 +86,7 @@ fn main() {
     }
 }
 
-/// Paneldeki `[bus]` çıkışlarını bağlar; nereye bağlandığını döner.
+/// Attaches the `[bus]` outputs from the config; returns where they were attached.
 fn attach_bus(engine: &mut Engine<Running, Game>) -> Result<Value, String> {
     let cfg = engine.rules().cfg.bus.clone();
     let mut info = json!({});
@@ -103,7 +103,7 @@ fn attach_bus(engine: &mut Engine<Running, Game>) -> Result<Value, String> {
     Ok(info)
 }
 
-/// Kayıttaki eylemleri aynı oyunda yeniden oynatır; her tick'in hash'ini karşılaştırır.
+/// Replays the recorded actions in the same game; compares each tick's hash.
 fn run_replay(engine: &mut Engine<Running, Game>, path: &Path) -> (bool, Value) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,

@@ -2,7 +2,7 @@ use super::*;
 
 type S = Spec<&'static str, &'static str>;
 
-/// Koşul adı → değer. Listede olmayan koşul yanlış, puanı 0.
+/// Guard name → value. A guard not in the list is false, with score 0.
 #[derive(Default)]
 struct Facts(BTreeMap<&'static str, i64>);
 

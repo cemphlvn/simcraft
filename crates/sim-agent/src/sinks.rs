@@ -1,4 +1,4 @@
-//! Veriyolu çıkışları (host tarafı I/O): JSONL dosyası ve canlı TCP yayını.
+//! Bus outputs (host-side I/O): JSONL file and live TCP stream.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use sim_core::{Msg, Sink};
 
-/// Her mesaj bir satır. Tick ve bitişte diske itilir: çökse bile kayıt tick sınırında tutarlı.
+/// One line per message. Flushed to disk on tick and end: even on a crash the log is consistent at a tick boundary.
 pub struct FileSink(BufWriter<File>);
 
 impl FileSink {
@@ -32,8 +32,8 @@ impl Sink for FileSink {
     }
 }
 
-/// Bağlanan her istemciye her mesajı yazar. Yavaş ya da kopan istemci düşürülür;
-/// simülasyon izleyiciyi beklemez (yazma zaman aşımı 200 ms).
+/// Writes every message to every connected client. Slow or disconnected clients are dropped;
+/// the simulation never waits for a viewer (write timeout 200 ms).
 pub struct TcpSink {
     clients: Arc<Mutex<Vec<TcpStream>>>,
 }

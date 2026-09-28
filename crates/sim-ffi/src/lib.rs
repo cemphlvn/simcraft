@@ -1,10 +1,10 @@
-//! simcraft C API. Başlık: `include/simcraft.h`. Host (Unity, Unreal, kendi motorumuz)
-//! bir oyunu metin olarak yükler, JSON istekleriyle konuşur, sıcak yolda (her kare)
-//! entity'leri JSON'suz bir diziye kopyalar.
+//! simcraft C API. Header: `include/simcraft.h`. The host (Unity, Unreal, our own engine)
+//! loads a game as text, talks via JSON requests, and on the hot path (every frame)
+//! copies entities into a JSON-free array.
 //!
-//! Kurallar: her fonksiyon NULL'a ve panic'e karşı güvenlidir (panic sınırı geçmez).
-//! Bu kütüphanenin döndürdüğü her `char*` `simcraft_string_free` ile bırakılır.
-//! ABI değişirse `SIMCRAFT_ABI_VERSION` artar.
+//! Rules: every function is NULL-safe and panic-safe (no panic crosses the boundary).
+//! Every `char*` returned by this library is freed with `simcraft_string_free`.
+//! If the ABI changes, `SIMCRAFT_ABI_VERSION` is bumped.
 
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -17,30 +17,30 @@ use sim_core::{Filter, Msg};
 
 pub const SIMCRAFT_ABI_VERSION: u32 = 1;
 
-/// Opak tutamaç.
+/// Opaque handle.
 pub struct SimcraftSim {
     session: Session,
-    /// `kind` alanının indeksi → ad (alfabetik, `info.kinds` ile aynı sıra).
+    /// Index of the `kind` field → name (alphabetical, same order as `info.kinds`).
     kinds: Vec<CString>,
-    /// Veriyolundan gelen, henüz boşaltılmamış mesajlar.
+    /// Messages from the bus not yet drained.
     inbox: Arc<Mutex<Vec<Msg>>>,
 }
 
-/// Bir kare için entity: konum, tür, durumun glyph'i (tasarımcının durum → görünüm eşlemesi).
+/// One entity for one frame: position, kind, state glyph (the designer's state → look map).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SimcraftEntity {
     pub id: u64,
     pub x: i64,
     pub y: i64,
-    /// `simcraft_kind_name` ile ada çevrilir.
+    /// Converted to a name with `simcraft_kind_name`.
     pub kind: u32,
-    /// Unicode kod noktası (ör. 'W', '*').
+    /// Unicode code point (e.g. 'W', '*').
     pub glyph: u32,
 }
 
 fn to_c(v: &Value) -> *mut c_char {
-    // JSON metninde NUL olamaz (serde_json kaçışlar); yine de güvenli taraf.
+    // JSON text cannot contain NUL (serde_json escapes it); stay on the safe side anyway.
     CString::new(v.to_string()).map_or(ptr::null_mut(), CString::into_raw)
 }
 
@@ -60,11 +60,11 @@ pub extern "C" fn simcraft_abi_version() -> u32 {
     SIMCRAFT_ABI_VERSION
 }
 
-/// `game.ron` ve `engine.toml` metinlerinden bir simülasyon. Başarısızsa NULL döner ve
-/// `out_error` NULL değilse oraya JSON hata yazılır (`{"ok":false,"stage":...,"errors":[...]}`).
+/// A simulation from `game.ron` and `engine.toml` texts. Returns NULL on failure and,
+/// if `out_error` is not NULL, writes a JSON error there (`{"ok":false,"stage":...,"errors":[...]}`).
 ///
 /// # Safety
-/// `game_ron`, `engine_toml` NUL ile biten UTF-8 metinler olmalı; `out_error` NULL ya da yazılabilir.
+/// `game_ron`, `engine_toml` must be NUL-terminated UTF-8 strings; `out_error` NULL or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_new(
     game_ron: *const c_char,
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn simcraft_new(
 }
 
 /// # Safety
-/// `sim`, `simcraft_new`'in döndürdüğü ve henüz bırakılmamış tutamaç ya da NULL olmalı.
+/// `sim` must be a handle returned by `simcraft_new` and not yet freed, or NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_free(sim: *mut SimcraftSim) {
     if !sim.is_null() {
@@ -103,10 +103,10 @@ pub unsafe extern "C" fn simcraft_free(sim: *mut SimcraftSim) {
     }
 }
 
-/// Bu kütüphanenin döndürdüğü metni bırakır.
+/// Frees a string returned by this library.
 ///
 /// # Safety
-/// `s` bu kütüphaneden gelmiş ve bırakılmamış olmalı ya da NULL.
+/// `s` must come from this library and not yet be freed, or be NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_string_free(s: *mut c_char) {
     if !s.is_null() {
@@ -114,11 +114,11 @@ pub unsafe extern "C" fn simcraft_string_free(s: *mut c_char) {
     }
 }
 
-/// Bir JSON istek → bir JSON cevap; `simcraft-agent` ile aynı protokol
-/// (info, observe, act, step, hash, snapshot, restore). Hata da JSON'dur (`"ok": false`).
+/// One JSON request → one JSON response; same protocol as `simcraft-agent`
+/// (info, observe, act, step, hash, snapshot, restore). Errors are JSON too (`"ok": false`).
 ///
 /// # Safety
-/// `sim` geçerli bir tutamaç, `request` NUL ile biten UTF-8 metin olmalı.
+/// `sim` must be a valid handle, `request` a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_request(sim: *mut SimcraftSim, request: *const c_char) -> *mut c_char {
     let Some(sim) = (unsafe { sim.as_mut() }) else {
@@ -133,11 +133,11 @@ pub unsafe extern "C" fn simcraft_request(sim: *mut SimcraftSim, request: *const
     to_c(&resp.unwrap_or_else(|| json!({ "ok": true, "quit": "close the handle with simcraft_free" })))
 }
 
-/// `n` tick ilerler (oyun bittiyse ya da `max_ticks`'e varıldıysa durur). Yeni tick'i döner;
-/// `sim` NULL ise -1. Olaylar veriyolundan `simcraft_drain` ile alınır.
+/// Advances `n` ticks (stops if the game ended or `max_ticks` was reached). Returns the new tick;
+/// -1 if `sim` is NULL. Events are taken from the bus with `simcraft_drain`.
 ///
 /// # Safety
-/// `sim` geçerli bir tutamaç olmalı.
+/// `sim` must be a valid handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_step(sim: *mut SimcraftSim, n: u32) -> i64 {
     let Some(sim) = (unsafe { sim.as_mut() }) else { return -1 };
@@ -154,11 +154,11 @@ pub unsafe extern "C" fn simcraft_step(sim: *mut SimcraftSim, n: u32) -> i64 {
     })
 }
 
-/// Sıcak yol: en fazla `cap` entity'yi (id sırasıyla) `out`'a kopyalar; toplam sayıyı döner.
-/// Toplam `cap`'ten büyükse daha büyük bir diziyle yeniden çağırın. `out` NULL olabilir (yalnızca sayı).
+/// Hot path: copies up to `cap` entities (in id order) into `out`; returns the total count.
+/// If the total exceeds `cap`, call again with a larger array. `out` may be NULL (count only).
 ///
 /// # Safety
-/// `sim` geçerli bir tutamaç; `out` NULL ya da en az `cap` elemanlık yazılabilir dizi olmalı.
+/// `sim` must be a valid handle; `out` NULL or a writable array of at least `cap` elements.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_entities(sim: *const SimcraftSim, out: *mut SimcraftEntity, cap: usize) -> usize {
     let Some(sim) = (unsafe { sim.as_ref() }) else { return 0 };
@@ -177,21 +177,21 @@ pub unsafe extern "C" fn simcraft_entities(sim: *const SimcraftSim, out: *mut Si
     })
 }
 
-/// `SimcraftEntity.kind` → kind adı. Aralık dışıysa NULL. Tutamaç yaşadıkça geçerlidir (bırakmayın).
+/// `SimcraftEntity.kind` → kind name. NULL if out of range. Valid while the handle lives (do not free).
 ///
 /// # Safety
-/// `sim` geçerli bir tutamaç olmalı.
+/// `sim` must be a valid handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_kind_name(sim: *const SimcraftSim, kind: u32) -> *const c_char {
     let Some(sim) = (unsafe { sim.as_ref() }) else { return ptr::null() };
     sim.kinds.get(kind as usize).map_or(ptr::null(), |c| c.as_ptr())
 }
 
-/// Son boşaltmadan beri veriyolundaki her mesaj, JSON dizi olarak
-/// (`start`, `act`, `event`, `tick`, `end`, `restore`; biçim: architecture.md, Event bus).
+/// Every bus message since the last drain, as a JSON array
+/// (`start`, `act`, `event`, `tick`, `end`, `restore`; format: architecture.md, Event bus).
 ///
 /// # Safety
-/// `sim` geçerli bir tutamaç olmalı.
+/// `sim` must be a valid handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn simcraft_drain(sim: *mut SimcraftSim) -> *mut c_char {
     let Some(sim) = (unsafe { sim.as_mut() }) else { return to_c(&json!([])) };

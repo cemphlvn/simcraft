@@ -1,4 +1,4 @@
-//! game.ron — oyun tasarımcısının dünyası: kind'lar, FSM'ler, kurallar.
+//! game.ron — the game designer's world: kinds, FSMs, rules.
 
 use std::collections::BTreeMap;
 
@@ -11,20 +11,20 @@ pub struct GameDef {
     pub kinds: BTreeMap<String, KindDef>,
     #[serde(default)]
     pub fsms: BTreeMap<String, FsmDef>,
-    /// Tasarımcının açtığı ayar düğmeleri ve varsayılanları. Yönetici engine.toml'dan ezer.
+    /// Knobs the designer exposes, with defaults. The operator overrides them from engine.toml.
     #[serde(default)]
     pub params: BTreeMap<String, i64>,
     pub rules: Vec<RuleDef>,
-    /// Elle çizilmiş harita. Varsa dünya boyutu buradan gelir.
+    /// Hand-drawn map. If present, the world size comes from it.
     #[serde(default)]
     pub layout: Option<Layout>,
-    /// Agent'ların isteyebileceği eylemler. Kuralla aynı yapı; yalnızca istenince çalışır.
+    /// Actions agents may request. Same shape as a rule; runs only when requested.
     #[serde(default)]
     pub actions: Vec<RuleDef>,
-    /// Oyun sonu koşulları; ilk doğru olan sonucu belirler.
+    /// End-of-game conditions; the first true one decides the outcome.
     #[serde(default)]
     pub end: Vec<EndDef>,
-    /// Kontrol edilebilir her entity için puan ifadesi; koltuk (seat) başına toplanır.
+    /// Score expression for each controllable entity; summed per seat.
     #[serde(default)]
     pub score: Option<String>,
 }
@@ -32,7 +32,7 @@ pub struct GameDef {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
-    /// glyph → kind ya da (kind, {prop: değer}). '.' ve ' ' boş hücredir.
+    /// glyph → kind or (kind, {prop: value}). '.' and ' ' are empty cells.
     pub legend: BTreeMap<char, Legend>,
     pub rows: Vec<String>,
 }
@@ -41,7 +41,7 @@ pub struct Layout {
 #[serde(untagged)]
 pub enum Legend {
     Kind(String),
-    /// Bu glyph'teki entity'lere özel prop'lar (ör. `("village", {"owner": 1})`).
+    /// Props specific to entities at this glyph (e.g. `("village", {"owner": 1})`).
     With(String, BTreeMap<String, i64>),
 }
 
@@ -69,7 +69,7 @@ impl Layout {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EndDef {
-    /// Dünya düzeyinde Rhai ifadesi (`count`, `p`, `tick`) → bool.
+    /// World-level Rhai expression (`count`, `p`, `tick`) → bool.
     pub when: String,
     pub result: String,
 }
@@ -82,36 +82,36 @@ pub struct KindDef {
     pub props: BTreeMap<String, i64>,
     #[serde(default)]
     pub fsm: Option<String>,
-    /// Aynı hücrede en fazla bir solid bulunur; solid'ler birbirinin içinden geçemez.
+    /// At most one solid per cell; solids cannot pass through each other.
     #[serde(default)]
     pub solid: bool,
-    /// Duruma göre glyph (yoksa `glyph`).
+    /// Glyph per state (else `glyph`).
     #[serde(default)]
     pub glyphs: BTreeMap<String, char>,
 }
 
-/// Bir makine ya da içindeki bir durum. Düz makine yalnızca `(initial, transitions)`;
-/// geri kalan her şey isteğe bağlı (bkz. architecture.md, State machines).
+/// A machine or a state inside one. A flat machine is just `(initial, transitions)`;
+/// everything else is optional (see architecture.md, State machines).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateDef {
     #[serde(default)]
     pub initial: Option<String>,
-    /// İç durumlar (alt makine).
+    /// Child states (submachine).
     #[serde(default)]
     pub states: BTreeMap<String, StateDef>,
-    /// Yan yana çalışan makineler.
+    /// Machines running side by side.
     #[serde(default)]
     pub layers: BTreeMap<String, StateDef>,
-    /// Başka bir makineyi buraya tak.
+    /// Mount another machine here.
     #[serde(default, rename = "use")]
     pub uses: Option<String>,
-    /// Geri gelince kaldığın çocuktan devam et.
+    /// On return, resume from the child you left.
     #[serde(default)]
     pub remember: bool,
     #[serde(default)]
     pub pick: Option<PickDef>,
-    /// `pick` her tick yeniden değerlendirilir.
+    /// `pick` is re-evaluated every tick.
     #[serde(default)]
     pub recheck: bool,
     #[serde(default)]
@@ -120,7 +120,7 @@ pub struct StateDef {
     pub exit: Vec<Do>,
     #[serde(default)]
     pub transitions: Vec<TransitionDef>,
-    /// Bu durumda yaşayan kurallar (`for` yazılmaz).
+    /// Rules living in this state (no `for`).
     #[serde(default)]
     pub rules: Vec<RuleDef>,
 }
@@ -129,27 +129,27 @@ pub type FsmDef = StateDef;
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum PickDef {
-    /// (durum, koşul): ilk tutan.
+    /// (state, condition): first that holds.
     First(Vec<(String, String)>),
-    /// (durum, puan): en yüksek.
+    /// (state, score): highest.
     Best(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransitionDef {
-    /// Çocuk ya da yol (`"Dev.Polish"`), `"*"` = herhangi biri.
+    /// Child or path (`"Dev.Polish"`), `"*"` = any.
     pub from: String,
     #[serde(default)]
     pub to: Option<String>,
-    /// Rhai ifadesi → bool. Aynı seviyede ilk eşleşen geçiş kazanır.
+    /// Rhai expression → bool. The first matching transition at a level wins.
     pub when: String,
     #[serde(default)]
     pub then: Vec<Do>,
-    /// Gitmeden önce bu seviyedeki yeri kaydet.
+    /// Remember the place at this level before leaving.
     #[serde(default)]
     pub interrupt: bool,
-    /// `to` yerine: kaydedilen yere dön.
+    /// Instead of `to`: return to the remembered place.
     #[serde(default)]
     pub back: bool,
 }
@@ -158,67 +158,67 @@ pub struct TransitionDef {
 #[serde(deny_unknown_fields)]
 pub struct RuleDef {
     pub name: String,
-    /// Hangi kind'a uygulanır; "*" hepsi. Durumun içine yazılan kurallarda yok.
+    /// Which kind it applies to; "*" for all. Absent in rules written inside a state.
     #[serde(rename = "for", default)]
     pub for_kind: Option<String>,
-    /// Durum seçici: `"Work"` Work'ü ve içindekileri kapsar; `"Awake.Work"` bir yol.
+    /// State selector: `"Work"` covers Work and everything inside it; `"Awake.Work"` is a path.
     #[serde(default)]
     pub state: Option<String>,
-    /// Etkin durum, bağlandığı durumun en fazla bu kadar altında olabilir.
+    /// The active state may be at most this deep below the bound state.
     #[serde(default)]
     pub depth: Option<usize>,
-    /// Hedef: `Nearest(kind)`. Yoksa kural ateşlenmez. İfadelerde `it` (`it.dist` dahil).
+    /// Target: `Nearest(kind)`. If none, the rule does not fire. `it` in expressions (incl. `it.dist`).
     #[serde(default)]
     pub target: Option<Target>,
-    /// Yalnızca eylemler: agent'ın vermesi gereken argümanlar. İfadelerde `arg.<ad>`.
+    /// Actions only: arguments the agent must give. `arg.<name>` in expressions.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Rhai ifadesi → bool. Yoksa her tick ateşlenir.
+    /// Rhai expression → bool. If absent, fires every tick.
     #[serde(default)]
     pub when: Option<String>,
-    /// A katmanı: bildirimsel eylemler.
+    /// Layer A: declarative actions.
     #[serde(default)]
     pub then: Vec<Do>,
-    /// B katmanı (kaçış kapısı): effect map dizisi döndüren Rhai script'i.
+    /// Layer B (escape hatch): a Rhai script returning an array of effect maps.
     #[serde(default)]
     pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum Do {
-    /// prop = ifade
+    /// prop = expr
     Set(String, String),
-    /// prop += ifade
+    /// prop += expr
     Add(String, String),
     Emit(String),
     Despawn(Target),
-    /// Kendi konumunda yeni bir kind doğurur.
+    /// Spawns a new kind at its own position.
     Spawn(String),
     MoveToward(String),
     MoveAway(String),
     Wander,
-    /// FSM durumunu değiştirir (etkisiyle birlikte: `[Goto("Fire"), Emit("lightning")]`).
+    /// Changes the FSM state (together with its effect: `[Goto("Fire"), Emit("lightning")]`).
     Goto(String),
-    /// Bir adım; dx, dy ifadedir (ör. `Move("arg.dx", "arg.dy")`).
+    /// One step; dx, dy are expressions (e.g. `Move("arg.dx", "arg.dy")`).
     Move(String, String),
-    /// İçindeki eylemleri başka bir entity'ye uygular: `On(It, [Add("hp", "-3")])`.
+    /// Applies the inner actions to another entity: `On(It, [Add("hp", "-3")])`.
     On(Target, Vec<Do>),
-    /// prop >= ifade olmalı. İstek anında ve uygulama anında (canlı durumda) denetlenir;
-    /// tutmazsa grubun tamamı düşer (aynı tick'te iki alıcı tek stok).
+    /// prop must be >= expr. Checked at request time and at apply time (on live state);
+    /// if it fails the whole group is dropped (two buyers, one stock, same tick).
     Need(String, String),
-    /// Bu seviyedeki yeri kaydedip duruma git; `Back` geri getirir.
+    /// Remember the place at this level and go to the state; `Back` returns.
     Interrupt(String),
-    /// En son kaydedilen kesmeye dön.
+    /// Return to the most recently remembered interrupt.
     Back,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum Target {
-    /// Kuralın sahibi.
+    /// The rule's owner.
     Me,
-    /// Kuralın `target`'ı.
+    /// The rule's `target`.
     It,
     Nearest(String),
-    /// O durumdaki en yakın kind: `NearestIn("project", "Blocked")`.
+    /// Nearest kind in that state: `NearestIn("project", "Blocked")`.
     NearestIn(String, String),
 }

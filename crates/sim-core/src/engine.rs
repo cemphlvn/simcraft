@@ -6,11 +6,11 @@ use crate::bus::{Bus, Msg};
 use crate::effect::{Event, Group, apply};
 use crate::world::{World, WorldSnapshot};
 
-/// Anlık görüntü biçimi. Değişirse artar; eski biçim reddedilir.
+/// Snapshot format. Bumped on change; old formats are rejected.
 pub const SNAPSHOT_FORMAT: u32 = 1;
 
-/// Bir tick sınırında motorun tamamı: dünya, kuyruktaki agent eylemleri, sonuç.
-/// Aynı kurallarla geri yüklenince gelecek tick'ler bit bit aynıdır.
+/// The whole engine at a tick boundary: world, queued agent actions, outcome.
+/// Restored with the same rules, future ticks are bit-for-bit identical.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub format: u32,
@@ -19,24 +19,24 @@ pub struct Snapshot {
     pub outcome: Option<String>,
 }
 
-/// Oyunun kuralları. Motor bunların nereden geldiğini (RON, Rhai, WASM) bilmez.
+/// The game's rules. The engine does not know where they come from (RON, Rhai, WASM).
 pub trait Rules {
-    /// Yükleme sonrası tüm tutarlılık kontrolleri. Hatalar tek listede döner.
+    /// All consistency checks after loading. Errors are returned in one list.
     fn validate(&self, world: &World) -> Result<(), Vec<String>>;
-    /// Salt okunur: dünyaya bakar, niyet (Group) üretir.
+    /// Read-only: looks at the world, produces intent (Group).
     fn eval(&self, world: &World) -> Vec<Group>;
-    /// Oyun bitti mi? Bittiyse sonuç (ör. "win"). Sonrasında tick işlemez.
+    /// Is the game over? If so, the outcome (e.g. "win"). No ticks run after that.
     fn outcome(&self, _world: &World) -> Option<String> {
         None
     }
-    /// Geri yüklenen bir dünya bu kurallara uyuyor mu (bilinen kind'lar, geçerli durumlar)?
+    /// Does a restored world fit these rules (known kinds, valid states)?
     fn check_world(&self, _world: &World) -> Result<(), Vec<String>> {
         Ok(())
     }
 }
 
-// Typestate: motorun yaşam döngüsü compile time'da korunur.
-// Engine<Loaded, _>::tick() yoktur → doğrulanmamış kural asla koşmaz.
+// Typestate: the engine lifecycle is enforced at compile time.
+// Engine<Loaded, _>::tick() does not exist → unvalidated rules never run.
 pub struct Loaded;
 pub struct Validated;
 pub struct Running;
@@ -97,7 +97,7 @@ impl<R: Rules> Engine<Validated, R> {
 }
 
 impl<R: Rules> Engine<Running, R> {
-    /// Dış dünyadan (agent) gelen niyet; bir sonraki tick'te kurallardan önce uygulanır.
+    /// Intent from outside (agent); applied before the rules on the next tick.
     pub fn queue(&mut self, group: Group) {
         self.pending.push(group);
     }
@@ -115,7 +115,7 @@ impl<R: Rules> Engine<Running, R> {
         }
     }
 
-    /// Motoru bir anlık görüntüye döndürür. Kurallar dünyayı kabul etmezse hiçbir şey değişmez.
+    /// Restores the engine to a snapshot. If the rules reject the world, nothing changes.
     pub fn restore(&mut self, s: Snapshot) -> Result<(), Vec<String>> {
         if s.format != SNAPSHOT_FORMAT {
             return Err(vec![format!("snapshot format {} (this engine reads {SNAPSHOT_FORMAT})", s.format)]);
@@ -132,8 +132,8 @@ impl<R: Rules> Engine<Running, R> {
         Ok(())
     }
 
-    /// Aboneler burada. Motor her tick'in olaylarını, hash'ini ve sonunu yayınlar;
-    /// host (agent katmanı) başlangıcı ve agent eylemlerini.
+    /// Subscribers live here. The engine publishes each tick's events, hash and end;
+    /// the host (agent layer) publishes the start and agent actions.
     pub fn bus(&mut self) -> &mut Bus {
         &mut self.bus
     }
@@ -144,8 +144,8 @@ impl<R: Rules> Engine<Running, R> {
             return TickReport { tick: w.tick, hash: w.hash(), events: Vec::new(), outcome: self.outcome.clone() };
         }
         let mut groups = std::mem::take(&mut self.pending);
-        groups.extend(self.rules.eval(&self.world)); // 1) oku
-        let events = apply(&mut self.world, groups); // 2) yaz
+        groups.extend(self.rules.eval(&self.world)); // 1) read
+        let events = apply(&mut self.world, groups); // 2) write
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
         let (tick, hash) = (self.world.tick, self.world.hash());
