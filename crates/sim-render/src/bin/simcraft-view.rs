@@ -5,7 +5,7 @@
 //!
 //! The simulation runs in-process at its own speed; frames are drawn at their own rate.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -92,18 +92,8 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, 
     }
     let series = { let s = view_series(&view); if s.is_empty() { default_series(engine.world()) } else { s } };
     let selected = pick(engine.world(), engine.rules(), None);
-    let ui = Ui {
-        tick: engine.world().tick,
-        speed: 10.0,
-        paused: false,
-        outcome: None,
-        selected,
-        history: BTreeMap::new(),
-        events: VecDeque::new(),
-        fps: 0.0,
-        worlds,
-        hits: Default::default(),
-    };
+    let mut ui = Ui::new(worlds);
+    ui.selected = selected;
     Ok(App { engine, view, registry, theme, assets, ui, series })
 }
 
@@ -123,9 +113,12 @@ fn pick(w: &World, g: &Game, after: Option<u64>) -> Option<u64> {
     let interesting = |kind: &str| {
         !g.is_hidden(kind) && g.def.kinds.get(kind).is_some_and(|k| k.fsm.is_some()) && w.count(kind) <= 200
     };
-    let ids: Vec<u64> = w.entities().values().filter(|e| interesting(&e.kind)).map(|e| e.id).collect();
+    // The most numerous individual kind first (ants before bushes), then by id.
+    let mut kinds: Vec<&str> = g.def.kinds.keys().map(String::as_str).filter(|k| interesting(k)).collect();
+    kinds.sort_by_key(|k| std::cmp::Reverse(w.count(k)));
+    let ids: Vec<u64> = kinds.iter().flat_map(|k| w.of_kind(k).map(|e| e.id)).collect();
     match after {
-        Some(a) => ids.iter().copied().find(|id| *id > a).or(ids.first().copied()),
+        Some(a) => ids.iter().position(|id| *id == a).and_then(|i| ids.get(i + 1)).or(ids.first()).copied(),
         None => ids.first().copied(),
     }
 }
@@ -171,8 +164,10 @@ impl App {
         }
     }
 
-    fn draw(&self, canvas: &mut Canvas) {
+    fn draw(&mut self, canvas: &mut Canvas) {
+        self.ui.frame += 1;
         self.ui.hits.borrow_mut().clear();
+        self.ui.images.borrow_mut().clear();
         let scene = Scene { world: self.engine.world(), game: self.engine.rules(), assets: &self.assets };
         self.view.draw(&self.registry, &self.theme, &scene, &self.ui, canvas);
     }
@@ -221,6 +216,8 @@ impl App {
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut ansi = false;
+    let mut blocks = false;
+    let mut png_out: Option<PathBuf> = None;
     let mut perspective = 0usize;
     let mut view_file: Option<PathBuf> = None;
     let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) = (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
@@ -231,6 +228,8 @@ fn main() {
             "--fps" => fps = args.next().and_then(|s| s.parse().ok()).unwrap_or(fps),
             "--dump" => dump = args.next().and_then(|s| s.parse::<u32>().ok()),
             "--ansi" => ansi = true,
+            "--blocks" => blocks = true,
+            "--png" => png_out = args.next().map(PathBuf::from),
             "--view" => view_file = args.next().map(PathBuf::from),
             "--perspective" => perspective = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--size" => {
@@ -249,6 +248,7 @@ fn main() {
         }
     };
     app.ui.speed = speed;
+    app.ui.graphics = !blocks && sim_render::pixel::kitty_supported();
 
     if let Some(ticks) = dump {
         app.step(ticks);
@@ -258,6 +258,18 @@ fn main() {
             }
         }
         let mut canvas = Canvas::new(size.0, size.1);
+        if let Some(path) = &png_out {
+            app.ui.graphics = true; // render the pixel images at full resolution
+            app.draw(&mut canvas);
+            let images = app.ui.images.borrow();
+            let Some((_, pm)) = images.first() else {
+                eprintln!("this view has no pixel component (Diorama)");
+                std::process::exit(2);
+            };
+            std::fs::write(path, sim_render::pixel::png(pm).expect("encodes")).expect("writes");
+            eprintln!("wrote {} ({}x{})", path.display(), pm.w, pm.h);
+            return;
+        }
         let t = Instant::now();
         app.draw(&mut canvas);
         let ms = t.elapsed().as_secs_f32() * 1000.0;
@@ -286,6 +298,19 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
     let mut renderer = Renderer::new();
     let (w, h) = crossterm::terminal::size()?;
     let mut canvas = Canvas::new(w, h);
+    let measure = |app: &mut App| {
+        if let Ok(ws) = crossterm::terminal::window_size()
+            && ws.columns > 0
+            && ws.rows > 0
+            && ws.width > 0
+        {
+            app.ui.cell_px = (ws.width / ws.columns, ws.height / ws.rows);
+        } else {
+            app.ui.graphics = false; // pixel size unknown: half-blocks
+        }
+    };
+    measure(app);
+    let mut sent: BTreeMap<usize, (u64, sim_render::Rect)> = BTreeMap::new();
     let frame = Duration::from_secs_f32(1.0 / fps.max(1.0));
     let mut sim_clock = 0.0f32;
     let mut last = Instant::now();
@@ -305,6 +330,19 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
         }
         app.draw(&mut canvas);
         renderer.present(&canvas, &mut out)?;
+        if app.ui.graphics {
+            // Pixel images after the cells; only the ones whose picture or place changed.
+            use std::io::Write;
+            let images = app.ui.images.borrow();
+            for (i, (rect, pm)) in images.iter().enumerate() {
+                let fp = pm.fingerprint();
+                if sent.get(&i) != Some(&(fp, *rect)) {
+                    sim_render::pixel::kitty(&mut out, pm, 100 + i as u32, rect.x, rect.y, rect.w, rect.h)?;
+                    sent.insert(i, (fp, *rect));
+                }
+            }
+            out.flush()?;
+        }
         frames += 1;
         if fps_clock.elapsed() >= Duration::from_secs(1) {
             app.ui.fps = frames as f32 / fps_clock.elapsed().as_secs_f32();
@@ -322,6 +360,8 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => app.click(m.column, m.row),
                 Event::Resize(w, h) => {
                     canvas = Canvas::new(w, h);
+                    measure(app);
+                    sent.clear();
                     renderer.invalidate();
                 }
                 _ => {}

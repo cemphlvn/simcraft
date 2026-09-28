@@ -15,18 +15,7 @@ fn setup(view_src: &str) -> Result<Setup, Vec<String>> {
 }
 
 fn ui(worlds: Vec<sim_render::Projection>) -> Ui {
-    Ui {
-        tick: 0,
-        speed: 1.0,
-        paused: false,
-        outcome: None,
-        selected: None,
-        history: Default::default(),
-        events: Default::default(),
-        fps: 0.0,
-        worlds,
-        hits: Default::default(),
-    }
+    Ui::new(worlds)
 }
 
 #[test]
@@ -143,4 +132,34 @@ fn bad_perspectives_fail_at_load() {
         let errs = v.resolve(&Registry::default(), depth).expect_err("must fail");
         assert!(errs.iter().any(|e| e.contains(want)), "want '{want}' in {errs:?}");
     }
+}
+
+#[test]
+fn the_diorama_paints_pixels_in_both_modes() {
+    let (world, game) = Game::load(std::path::Path::new(LAYERS), None).expect("loads");
+    let engine = Engine::<Loaded, _>::new(world, game).validate().expect("valid").start();
+    let src = std::fs::read_to_string(format!("{LAYERS}/views/diorama.ron")).unwrap();
+    let mut view: View = ron::from_str(&src).expect("parses");
+    let worlds = view.resolve(&Registry::default(), engine.world().depth).expect("resolves");
+    let dir = format!("{LAYERS}/../../assets");
+    let load = |n: &str| -> Assets { ron::from_str(&std::fs::read_to_string(format!("{dir}/{n}.ron")).unwrap()).unwrap() };
+    let assets = load("ants").merged(load("ants_pixel"));
+    assert!(assets.sprites.contains_key("ant_carry") && assets.palette.contains_key(&'k'));
+    let scene = Scene { world: engine.world(), game: engine.rules(), assets: &assets };
+    let theme = Theme::builtin("dark").unwrap();
+    let mut ui = Ui::new(worlds);
+    ui.graphics = true;
+    let mut canvas = Canvas::new(120, 40);
+    view.draw(&Registry::default(), &theme, &scene, &ui, &mut canvas);
+    let images = ui.images.borrow();
+    assert_eq!(images.len(), 1, "true-pixel mode hands the host one image");
+    assert!(images[0].1.w > 100, "{}x{}", images[0].1.w, images[0].1.h);
+    drop(images);
+    ui.graphics = false;
+    ui.images.borrow_mut().clear();
+    let mut canvas = Canvas::new(120, 40);
+    view.draw(&Registry::default(), &theme, &scene, &ui, &mut canvas);
+    assert!(ui.images.borrow().is_empty(), "half-block mode draws into cells");
+    let blocks = (0..40).map(|y| canvas.row_text(y)).filter(|r| r.contains('▀')).count();
+    assert!(blocks > 20, "the picture is made of half-blocks ({blocks} rows)");
 }

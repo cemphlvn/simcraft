@@ -244,6 +244,16 @@ A framework for game interfaces, in this workspace, with its own terminal render
 - **Asset libraries** (like game-dev asset packs): `assets/<pack>.ron` gives each kind its look, separate from its
   rules: glyph and colour per state, and a voxel colour for 3D. Packs are reusable across games; without one, the
   game's `glyphs` and a stable colour per kind are used.
+- **Pixel art** (the `Diorama` component): a side-view "ant farm" drawn into an RGBA pixel buffer, shown as true
+  pixels through the kitty graphics protocol (Ghostty, kitty, WezTerm; zlib-compressed, re-sent only when the
+  picture changed, integer-upscaled so pixels stay crisp) or as half-block characters anywhere else (`--blocks`).
+  - Sprites and tiles are data in asset packs: `palette: {'k': (r, g, b)}`, `sprites: {"ant_walk": (fps: 6,
+    frames: [[".kk.", ...], ...])}`; a kind's look names a sprite per state (`sprite: "ant_carry"`).
+  - Parallax backdrop layers are data in the view: `(kind: "hills" | "trees" | "clouds", color, height, detail,
+    seed, speed, haze)`; each scrolls at `speed` % of the camera (far layers move slower) and fades into the horizon.
+  - Props: `plane` (the world row cut open), `tile` (pixels per voxel), `sky` (pixels above the ground). The sky and
+    backdrop colours follow an environment's props (`season_env`), e.g. warmth and the season state.
+  - The camera follows the selected entity; `h` / `l` pan.
 - **Views as data:** `games/<name>/view.ron` names a theme and asset packs, defines composite components, and lays
   out components with props, the way `game.ron` defines the game:
   `C(name: "Series", props: {"names": ["nest.food"]}, class: "warning")`. The Rust API is the same in code.

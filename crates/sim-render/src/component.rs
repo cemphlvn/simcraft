@@ -28,9 +28,39 @@ pub struct Ui {
     pub worlds: Vec<Projection>,
     /// Where each `World` was drawn last frame (slot, rect): clicks are routed by it.
     pub hits: std::cell::RefCell<Vec<(usize, Rect)>>,
+    /// True pixels (kitty graphics protocol) instead of half-blocks.
+    pub graphics: bool,
+    /// Size of one terminal cell in screen pixels (for square pixels).
+    pub cell_px: (u16, u16),
+    /// Frames drawn so far (animation clock, independent of the simulation).
+    pub frame: u64,
+    /// Pixel images to show this frame: (where, picture). The host sends them after the cells.
+    pub images: std::cell::RefCell<Vec<(Rect, crate::pixel::Pixmap)>>,
+    /// Which way each entity faces (last x, facing left).
+    pub facing: std::cell::RefCell<std::collections::BTreeMap<EntityId, (i64, bool)>>,
 }
 
 impl Ui {
+    pub fn new(worlds: Vec<Projection>) -> Ui {
+        Ui {
+            tick: 0,
+            speed: 10.0,
+            paused: false,
+            outcome: None,
+            selected: None,
+            history: BTreeMap::new(),
+            events: VecDeque::new(),
+            fps: 0.0,
+            worlds,
+            hits: Default::default(),
+            graphics: false,
+            cell_px: (8, 16),
+            frame: 0,
+            images: Default::default(),
+            facing: Default::default(),
+        }
+    }
+
     /// The `World` slot under a screen cell.
     pub fn hit(&self, x: u16, y: u16) -> Option<usize> {
         self.hits.borrow().iter().rev().find(|(_, r)| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).map(|(s, _)| *s)
@@ -107,6 +137,7 @@ impl Default for Registry {
         r.register("Events", Events);
         r.register("Help", Help);
         r.register("Text", Text);
+        r.register("Diorama", crate::diorama::Diorama);
         r
     }
 }

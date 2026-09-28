@@ -1,0 +1,125 @@
+#![enable(implicit_some)]
+// Pixel art for ants, their food and their nest. Side view, facing right; '.' is transparent.
+// Palette characters are shared by every sprite in the pack.
+Assets(
+    palette: {
+        'k': (38, 22, 18),                         // outline, legs, antennae
+        'b': (150, 58, 32),  'h': (208, 112, 70),  // worker body, highlight
+        'c': (206, 150, 96), 'C': (238, 196, 146), // callow (young nurse): lighter, as in real colonies
+        'z': (104, 70, 62),  'Z': (140, 98, 84),   // dormant, curled up and dim
+        'r': (214, 44, 78),  'R': (252, 128, 150), // berry
+        'd': (34, 92, 44),   'g': (62, 142, 62),  'G': (104, 188, 84), // leaves: dark, mid, light
+        't': (96, 66, 42),                         // twig
+        'o': (168, 128, 58), 'y': (226, 190, 92), 'Y': (250, 228, 146), // seeds in the granary
+        'm': (116, 82, 54),  'M': (152, 112, 72), 'n': (24, 14, 12),    // mound and its hole
+    },
+    sprites: {
+        "ant_walk": (fps: 8, frames: [
+            [ ".....k.",
+              ".hb.hbk",
+              "bbbbbbb",
+              ".k..k.k" ],
+            [ ".....k.",
+              ".hb.hbk",
+              "bbbbbbb",
+              "..k.k.k" ],
+        ]),
+        "ant_ready": (fps: 3, frames: [
+            [ "....k.k",
+              ".hb.hbk",
+              "bbbbbbb",
+              ".k..k.k" ],
+            [ ".....kk",
+              ".hb.hbk",
+              "bbbbbbb",
+              ".k..k.k" ],
+        ]),
+        "ant_carry": (fps: 8, frames: [
+            [ "....Rr.",
+              "....rrk",
+              ".hb.hbk",
+              "bbbbbbb",
+              ".k..k.k" ],
+            [ "....Rr.",
+              "....rrk",
+              ".hb.hbk",
+              "bbbbbbb",
+              "..k.k.k" ],
+        ]),
+        "ant_nurse": (fps: 4, frames: [
+            [ ".....k.",
+              ".Cc.Cck",
+              "ccccccc",
+              ".k..k.k" ],
+            [ ".....k.",
+              ".Cc.Cck",
+              "ccccccc",
+              "..k.k.k" ],
+        ]),
+        "ant_dormant": (fps: 1, frames: [
+            [ ".ZZz.",
+              "zzzzk",
+              ".kkk." ],
+        ]),
+        "bush_ripe": (fps: 2, frames: [
+            [ "...dgd...",
+              "..dgGrd..",
+              ".dgRrggd.",
+              "dgggdgrGd",
+              "dgrRggGgd",
+              ".dgggrgd.",
+              "..ddtdd..",
+              "....t...." ],
+            [ "...dgd...",
+              "..dgGrd..",
+              ".dgRrggd.",
+              "dgggdgrGd",
+              "dgrRggGgd",
+              ".dgggrgd.",
+              "..ddtdd..",
+              "....t...." ],
+        ]),
+        "bush_bare": (frames: [
+            [ ".........",
+              "...t.t...",
+              "..t.tg...",
+              ".d.tt.t..",
+              "..t.t.dt.",
+              "...ttt...",
+              "....t....",
+              "....t...." ],
+        ]),
+        "granary": (frames: [
+            [ "...Yy...",
+              ".yYoyYy.",
+              "yoyYyoyY",
+              "oyoyoyoo" ],
+        ]),
+        "mound": (frames: [
+            [ "....MMMM....",
+              "..MMmmmmMM..",
+              ".Mmmmnnmmmm.",
+              "Mmmmnnnnmmmm" ],
+        ]),
+    },
+    kinds: {
+        "ant": (
+            glyph: 'a', color: (225, 120, 70), voxel: (200, 90, 50), sprite: "ant_walk",
+            states: {
+                "Nurse":   (glyph: 'n', color: (245, 200, 140), sprite: "ant_nurse"),
+                "Ready":   (glyph: 'r', color: (210, 150, 90), sprite: "ant_ready"),
+                "Search":  (glyph: 'a', color: (235, 110, 60), sprite: "ant_walk"),
+                "Carry":   (glyph: 'c', color: (255, 215, 80), voxel: (255, 200, 60), sprite: "ant_carry"),
+                "Dormant": (glyph: 'z', color: (120, 140, 210), voxel: (90, 110, 190), sprite: "ant_dormant"),
+            },
+        ),
+        "bush": (
+            glyph: '*', color: (90, 190, 90), sprite: "bush_ripe",
+            states: { "Ripe": (glyph: '*', color: (220, 60, 110), sprite: "bush_ripe"),
+                      "Bare": (glyph: 'o', color: (90, 130, 80), sprite: "bush_bare") },
+        ),
+        "nest": (glyph: 'N', color: (200, 160, 110), voxel: (150, 110, 70), sprite: "granary"),
+        "entrance": (glyph: 'O', color: (150, 110, 70), sprite: "mound"),
+        "ground": (glyph: ' ', states: { "Trail": (glyph: '·', color: (140, 200, 150)) }),
+    },
+)

@@ -160,6 +160,9 @@ cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
 cargo run --release -p sim-render -- games/colony3d     # surface, nest cross-section, 3D; tab selects an ant
 ```
 
+A pixel-art ant farm, with parallax hills and seasons (true pixels in Ghostty, kitty and WezTerm; half-blocks elsewhere):
+`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`.
+
 Layered 2.5D, with perspective states you define and switch by clicking:
 `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
 

@@ -1,0 +1,32 @@
+#![enable(implicit_some)]
+// The colony as a pixel-art ant farm: sky and parallax backdrops, the surface, the nest cut open below.
+// Backdrop layers are data: each scrolls at `speed` % of the camera (far = slow) and fades into the horizon (`haze`).
+View(
+    theme: "dark",
+    assets: ["ants", "ants_pixel"],
+    layout: Rows([
+        (Fixed(1), C(name: "Title")),
+        (Fill, Cols([
+            (Percent(72), C(name: "Diorama", props: (
+                title: "ant farm",
+                plane: 9, tile: 8, sky: 44,
+                season_env: "seasons",
+                tint: "temp", tint_max: 10000,
+                specks: "scent",
+                layers: [
+                    (kind: "clouds", color: (250, 250, 255), height: 12, detail: 5,  seed: 3,  speed: 8,  haze: 10),
+                    (kind: "hills",  color: (110, 130, 165), height: 20, detail: 2,  seed: 11, speed: 15, haze: 50),
+                    (kind: "hills",  color: (78, 118, 92),   height: 12, detail: 4,  seed: 23, speed: 35, haze: 25),
+                    (kind: "trees",  color: (52, 104, 58),   height: 16, detail: 30, seed: 41, speed: 60, haze: 10),
+                ],
+            ))),
+            (Fill, Rows([
+                (Fixed(5),  C(name: "Env")),
+                (Fill,      C(name: "Inspector")),
+                (Fixed(6),  C(name: "Counts")),
+            ])),
+        ])),
+        (Fixed(4), C(name: "Events", class: "calm")),
+        (Fixed(1), C(name: "Help")),
+    ]),
+)

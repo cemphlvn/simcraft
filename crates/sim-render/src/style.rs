@@ -97,6 +97,9 @@ pub struct Look {
     /// Colour in 3D views (else `color`).
     #[serde(default)]
     pub voxel: Option<(u8, u8, u8)>,
+    /// Pixel-art sprite (from the pack's `sprites`).
+    #[serde(default)]
+    pub sprite: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -108,6 +111,8 @@ pub struct KindLook {
     pub color: Option<(u8, u8, u8)>,
     #[serde(default)]
     pub voxel: Option<(u8, u8, u8)>,
+    #[serde(default)]
+    pub sprite: Option<String>,
     /// State selector (as in rules: "Carry", "Active.Nurse") → look. The most specific match wins.
     #[serde(default)]
     pub states: BTreeMap<String, Look>,
@@ -119,11 +124,16 @@ pub struct KindLook {
 pub struct Assets {
     #[serde(default)]
     pub kinds: BTreeMap<String, KindLook>,
+    /// Palette characters for sprites.
+    #[serde(default)]
+    pub palette: BTreeMap<char, (u8, u8, u8)>,
+    #[serde(default)]
+    pub sprites: BTreeMap<String, crate::pixel::Sprite>,
 }
 
 impl KindLook {
     pub fn base(&self) -> Look {
-        Look { glyph: self.glyph, color: self.color, voxel: self.voxel }
+        Look { glyph: self.glyph, color: self.color, voxel: self.voxel, sprite: self.sprite.clone() }
     }
 }
 
@@ -131,6 +141,8 @@ impl Assets {
     /// Later packs win, kind by kind.
     pub fn merged(mut self, over: Assets) -> Assets {
         self.kinds.extend(over.kinds);
+        self.palette.extend(over.palette);
+        self.sprites.extend(over.sprites);
         self
     }
 
@@ -147,6 +159,7 @@ impl Assets {
             out.glyph = l.glyph.or(out.glyph);
             out.color = l.color.or(out.color);
             out.voxel = l.voxel.or(out.voxel).or(l.color);
+            out.sprite = l.sprite.clone().or(out.sprite);
         }
         out
     }

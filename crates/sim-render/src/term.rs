@@ -95,6 +95,8 @@ impl TerminalGuard {
 }
 
 fn restore() {
+    // Also drop any pixel images we placed (kitty graphics protocol; ignored elsewhere).
+    let _ = write!(io::stdout(), "\x1b_Ga=d,d=A,q=2\x1b\\");
     let _ = execute!(io::stdout(), DisableMouseCapture, ResetColor, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
