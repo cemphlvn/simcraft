@@ -88,11 +88,7 @@ impl View {
                         (Size::Percent(62), cp("World", world)),
                         (
                             Size::Fill,
-                            Node::Rows(vec![
-                                (Size::Fixed(5), c("Env")),
-                                (Size::Fill, c("Inspector")),
-                                (Size::Fixed(9), c("Counts")),
-                            ]),
+                            Node::Rows(vec![(Size::Fixed(5), c("Env")), (Size::Fill, c("Inspector")), (Size::Fixed(9), c("Counts"))]),
                         ),
                     ]),
                 ),

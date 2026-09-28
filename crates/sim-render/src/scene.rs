@@ -56,5 +56,9 @@ impl Scene<'_> {
 pub fn heat(v: i64, base: Rgb) -> Rgb {
     let t = v.clamp(0, 100) as u32;
     let warm = Rgb((40 + t * 2) as u8, (30 + t / 2) as u8, (90u32.saturating_sub(t)) as u8);
-    Rgb(((base.0 as u32 + warm.0 as u32) / 2) as u8, ((base.1 as u32 + warm.1 as u32) / 2) as u8, ((base.2 as u32 + warm.2 as u32) / 2) as u8)
+    Rgb(
+        ((base.0 as u32 + warm.0 as u32) / 2) as u8,
+        ((base.1 as u32 + warm.1 as u32) / 2) as u8,
+        ((base.2 as u32 + warm.2 as u32) / 2) as u8,
+    )
 }

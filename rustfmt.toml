@@ -1,0 +1,4 @@
+# The house style: wide lines, compact expressions (closest to how the code was written by hand).
+edition = "2024"
+max_width = 140
+use_small_heuristics = "Max"

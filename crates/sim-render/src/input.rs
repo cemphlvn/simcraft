@@ -12,7 +12,12 @@ pub enum Binding {
     /// "minus", "[", "]".
     Key(String),
     /// Four keys as one 2D direction.
-    Dpad { up: String, down: String, left: String, right: String },
+    Dpad {
+        up: String,
+        down: String,
+        left: String,
+        right: String,
+    },
     Mouse(MouseButton),
     /// Any of several bindings (e.g. `Any([Key("q"), Key("esc")])`).
     Any(Vec<Binding>),
@@ -118,10 +123,7 @@ impl Binding {
 impl InputMap {
     /// Reads an input.ron (optional fields need no `Some(...)`).
     pub fn parse(src: &str) -> Result<InputMap, String> {
-        ron::Options::default()
-            .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
-            .from_str(src)
-            .map_err(|e| e.to_string())
+        ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME).from_str(src).map_err(|e| e.to_string())
     }
 
     /// The viewer's built-in controls, for games without an input.ron.
@@ -181,11 +183,15 @@ impl InputMap {
                 }
                 Binding::Dpad { .. } => "arrows".into(),
                 Binding::Mouse(m) => format!("{m:?} click").to_lowercase(),
-                Binding::Any(v) => v.iter().map(|b| match b {
-                    Binding::Key(k) => k.clone(),
-                    Binding::Mouse(m) => format!("{m:?} click").to_lowercase(),
-                    _ => "…".into(),
-                }).collect::<Vec<_>>().join("/"),
+                Binding::Any(v) => v
+                    .iter()
+                    .map(|b| match b {
+                        Binding::Key(k) => k.clone(),
+                        Binding::Mouse(m) => format!("{m:?} click").to_lowercase(),
+                        _ => "…".into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/"),
             }
         };
         let mut parts: Vec<String> = scheme.iter().map(|(action, b)| format!("{} {}", name(b), action.replace('_', " "))).collect();

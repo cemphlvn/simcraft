@@ -166,11 +166,8 @@ impl Assets {
     pub fn look(&self, e: &Entity, label: &str) -> Look {
         let Some(k) = self.kinds.get(&e.kind) else { return Look::default() };
         let mut out = k.base();
-        let best = k
-            .states
-            .iter()
-            .filter(|(sel, _)| sim_state::in_label(label, sel))
-            .min_by_key(|(sel, _)| sim_state::depth_in_label(label, sel));
+        let best =
+            k.states.iter().filter(|(sel, _)| sim_state::in_label(label, sel)).min_by_key(|(sel, _)| sim_state::depth_in_label(label, sel));
         if let Some((_, l)) = best {
             out.glyph = l.glyph.or(out.glyph);
             out.color = l.color.or(out.color);

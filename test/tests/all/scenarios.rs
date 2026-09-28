@@ -44,19 +44,15 @@ fn the_runner_reports_what_went_wrong() {
     assert_eq!(r.failures.len(), 1, "stops at the first failure: {:?}", r.failures);
     assert!(r.failures[0].contains("step 2") && r.failures[0].contains("false at tick 10"), "{}", r.failures[0]);
 
-    let s =
-        simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Until("count.wolf > 1000", 5) ])"#).unwrap();
+    let s = simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Until("count.wolf > 1000", 5) ])"#).unwrap();
     assert!(simtest::run(&s).failures[0].contains("not true within 5 ticks"));
 
-    let s =
-        simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Hash("0000000000000000") ])"#).unwrap();
+    let s = simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Hash("0000000000000000") ])"#).unwrap();
     assert!(simtest::run(&s).failures[0].contains("hash"));
 
-    let s =
-        simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Expect("cuont.wolf > 0") ])"#).unwrap();
+    let s = simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", steps: [ Expect("cuont.wolf > 0") ])"#).unwrap();
     assert!(simtest::run(&s).failures[0].contains("cuont"), "an expression typo names itself");
 
-    let s =
-        simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", expect_error: "nothing like this")"#).unwrap();
+    let s = simtest::parse_scenario(r#"Scenario(name: "x", game: "games/wolf_sheep", expect_error: "nothing like this")"#).unwrap();
     assert!(simtest::run(&s).failures[0].contains("but the game loaded"));
 }

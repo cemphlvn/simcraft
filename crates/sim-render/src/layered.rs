@@ -101,7 +101,14 @@ impl Layered {
 
     /// Without perspectives: every level, top level in front.
     pub fn all_levels(depth: i64) -> Perspective {
-        Perspective { name: "all levels".into(), order: (0..depth).rev().collect(), focus: -1, step: step(), fade: 70, click: String::new() }
+        Perspective {
+            name: "all levels".into(),
+            order: (0..depth).rev().collect(),
+            focus: -1,
+            step: step(),
+            fade: 70,
+            click: String::new(),
+        }
     }
 
     pub fn perspective(&self) -> &Perspective {

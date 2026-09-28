@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use sim_core::{Engine, Loaded, Running, World};
-use sim_render::projection::Projection;
 use sim_render::input::{self, InputMap, Target, ViewAction};
+use sim_render::projection::Projection;
 use sim_render::{Assets, Canvas, Registry, Renderer, Scene, TerminalGuard, Theme, Ui, View};
 use sim_rules::Game;
 
@@ -94,7 +94,10 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>, scheme: Option<
         pack.load_images(path.parent().unwrap_or(Path::new(".")))?;
         assets = assets.merged(pack);
     }
-    let series = { let s = view_series(&view); if s.is_empty() { default_series(engine.world()) } else { s } };
+    let series = {
+        let s = view_series(&view);
+        if s.is_empty() { default_series(engine.world()) } else { s }
+    };
     let selected = pick(engine.world(), engine.rules(), None);
     let mut ui = Ui::new(worlds);
     ui.feel = view.feel.clone();
@@ -125,9 +128,7 @@ fn default_series(w: &World) -> Vec<String> {
 
 /// Next entity to inspect: visible kinds with a state machine, sparse enough to be individuals.
 fn pick(w: &World, g: &Game, after: Option<u64>) -> Option<u64> {
-    let interesting = |kind: &str| {
-        !g.is_hidden(kind) && g.def.kinds.get(kind).is_some_and(|k| k.fsm.is_some()) && w.count(kind) <= 200
-    };
+    let interesting = |kind: &str| !g.is_hidden(kind) && g.def.kinds.get(kind).is_some_and(|k| k.fsm.is_some()) && w.count(kind) <= 200;
     // What the player controls first (the hero), then the most numerous individual kind (ants before bushes).
     let controllable = |k: &str| g.cfg.agent.controllable.iter().any(|c| c == k);
     let mut kinds: Vec<&str> =
@@ -249,7 +250,10 @@ impl App {
                 let args = args.iter().filter_map(|(k, v)| input::arg_value(v, fired.value).map(|n| (k.clone(), n))).collect();
                 let (w, g) = (self.engine.world(), self.engine.rules());
                 // With seats, act as the seat that owns the entity.
-                let seat = w.get(id).and_then(|e| e.props.get("owner")).and_then(|o| g.cfg.agent.seats.iter().find(|(_, n)| *n == o).map(|(s, _)| s.clone()));
+                let seat = w
+                    .get(id)
+                    .and_then(|e| e.props.get("owner"))
+                    .and_then(|o| g.cfg.agent.seats.iter().find(|(_, n)| *n == o).map(|(s, _)| s.clone()));
                 match g.act(w, seat.as_deref(), id, &action, &args) {
                     Ok(group) => self.engine.queue(group),
                     Err(why) => self.ui.events.push_back(format!("tick {:>5}  {action}: {why}", self.engine.world().tick)),
@@ -310,7 +314,8 @@ fn main() {
     let mut perspective = 0usize;
     let mut view_file: Option<PathBuf> = None;
     let mut scheme: Option<String> = None;
-    let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) = (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
+    let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) =
+        (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
     while let Some(a) = args.next() {
         match a.as_str() {
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()),

@@ -98,19 +98,14 @@ pub fn load_scenario(path: &Path) -> Result<Scenario, String> {
 
 /// A scenario from text (optional fields need no `Some(...)`).
 pub fn parse_scenario(src: &str) -> Result<Scenario, String> {
-    ron::Options::default()
-        .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
-        .from_str(src)
-        .map_err(|e| e.to_string())
+    ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME).from_str(src).map_err(|e| e.to_string())
 }
 
 /// The game's panel with the scenario's overrides applied.
 fn panel(dir: &Path, s: &Scenario) -> Result<String, String> {
     let src = std::fs::read_to_string(dir.join("engine.toml")).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut t: toml::Table = toml::from_str(&src).map_err(|e| format!("engine.toml: {e}"))?;
-    let section = |t: &mut toml::Table, name: &str| -> toml::Table {
-        t.get(name).and_then(|v| v.as_table()).cloned().unwrap_or_default()
-    };
+    let section = |t: &mut toml::Table, name: &str| -> toml::Table { t.get(name).and_then(|v| v.as_table()).cloned().unwrap_or_default() };
     if let Some(seed) = s.seed {
         let mut run = section(&mut t, "run");
         run.insert("seed".into(), toml::Value::Integer(seed as i64));
@@ -382,4 +377,3 @@ pub fn run(s: &Scenario) -> Report {
     r.ticks = run.engine.world().tick;
     r
 }
-

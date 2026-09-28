@@ -69,12 +69,7 @@ impl Rect {
 
     /// Shrink by `n` cells on every side.
     pub fn inner(self, n: u16) -> Rect {
-        Rect {
-            x: self.x + n,
-            y: self.y + n,
-            w: self.w.saturating_sub(2 * n),
-            h: self.h.saturating_sub(2 * n),
-        }
+        Rect { x: self.x + n, y: self.y + n, w: self.w.saturating_sub(2 * n), h: self.h.saturating_sub(2 * n) }
     }
 }
 

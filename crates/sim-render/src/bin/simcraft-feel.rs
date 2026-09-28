@@ -79,13 +79,8 @@ fn boot(dir: &Path, seed: u64) -> Result<Engine<Running, Game>, String> {
 
 /// The ant to follow: the first entity of the most numerous kind with a state machine (as the viewer picks).
 fn follow(w: &World, g: &Game) -> Option<u64> {
-    let mut kinds: Vec<&str> = g
-        .def
-        .kinds
-        .keys()
-        .map(String::as_str)
-        .filter(|k| !g.is_hidden(k) && g.def.kinds[*k].fsm.is_some() && w.count(k) <= 200)
-        .collect();
+    let mut kinds: Vec<&str> =
+        g.def.kinds.keys().map(String::as_str).filter(|k| !g.is_hidden(k) && g.def.kinds[*k].fsm.is_some() && w.count(k) <= 200).collect();
     kinds.sort_by_key(|k| std::cmp::Reverse(w.count(k)));
     kinds.first().and_then(|k| w.of_kind(k).next()).map(|e| e.id)
 }
@@ -120,15 +115,7 @@ fn run(dir: &Path, props: &DioramaProps, assets: &Assets, s: &Settings, seed: u6
         frame += 1;
         let t0 = Instant::now();
         let scene = sim_render::Scene { world: engine.world(), game: engine.rules(), assets };
-        let list = display::compose(
-            &scene,
-            props,
-            frame,
-            selected,
-            &mut facing,
-            s.feel.interpolate.then_some(&tween),
-            s.feel.walk_bob,
-        );
+        let list = display::compose(&scene, props, frame, selected, &mut facing, s.feel.interpolate.then_some(&tween), s.feel.walk_bob);
         if strips.as_ref().is_none_or(|(k, _)| *k != list.strips_key) {
             strips = Some((list.strips_key, display::cook_strips(&scene, props, &list)?));
         }
@@ -138,7 +125,15 @@ fn run(dir: &Path, props: &DioramaProps, assets: &Assets, s: &Settings, seed: u6
         let target = list.sprites.iter().find(|d| d.selected).map(|d| d.x + props.tile as f32 / 2.0);
         let goal = display::camera(list.world_px, target.map_or(list.world_px / 2, |t| t.round() as i64), VIEW_W) as f32;
         let cam = spring.update(goal, dt, s.feel.camera);
-        let _ = display::rasterize(&scene, &list, &strips.as_ref().unwrap().1, &section.as_ref().unwrap().1, VIEW_W as usize, cam.round() as i64, frame);
+        let _ = display::rasterize(
+            &scene,
+            &list,
+            &strips.as_ref().unwrap().1,
+            &section.as_ref().unwrap().1,
+            VIEW_W as usize,
+            cam.round() as i64,
+            frame,
+        );
         cost += t0.elapsed().as_secs_f64();
         cams.push(cam.round());
         lags.push((cam - goal).abs());
@@ -290,10 +285,7 @@ fn main() {
             ("min", Some(_)) => "worse",
             _ => "",
         };
-        println!(
-            "  {name:<16} {now:>9.3}   {:>9}  {verdict:<6}  {goal:<4}  {what}",
-            before.map_or("-".to_string(), |b| format!("{b:.3}"))
-        );
+        println!("  {name:<16} {now:>9.3}   {:>9}  {verdict:<6}  {goal:<4}  {what}", before.map_or("-".to_string(), |b| format!("{b:.3}")));
     }
     if let Some(note) = save {
         std::fs::create_dir_all(&history_dir).expect("creates feel-evals");

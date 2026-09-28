@@ -211,11 +211,8 @@ pub fn cook_strips(scene: &Scene, p: &DioramaProps, list: &DisplayList) -> Resul
                 (pm, list.ground - l.height - img.h as i64)
             }
         };
-        let image = Image {
-            w: pm.w,
-            h: pm.h,
-            px: pm.px.iter().map(|c| if *c == KEY { [0, 0, 0, 0] } else { [c.0, c.1, c.2, 255] }).collect(),
-        };
+        let image =
+            Image { w: pm.w, h: pm.h, px: pm.px.iter().map(|c| if *c == KEY { [0, 0, 0, 0] } else { [c.0, c.1, c.2, 255] }).collect() };
         out.push(Strip { image, top, speed: l.speed });
     }
     Ok(out)
@@ -289,7 +286,8 @@ pub fn cook_section(scene: &Scene, p: &DioramaProps, list: &DisplayList) -> Imag
                     Rgb(34, 24, 22)
                 }
             };
-            if !p.tint.is_empty() && inside
+            if !p.tint.is_empty()
+                && inside
                 && let Some(v) = world.field(&p.tint, vx, p.plane, level)
             {
                 let heat = (v * 100 / p.tint_max.max(1)).clamp(0, 100) as u32;
@@ -324,15 +322,7 @@ pub fn sun_color(season: Season) -> Rgb {
 }
 
 /// The CPU backend: draws the list into a `w`-pixel-wide picture with the camera at `cam`.
-pub fn rasterize(
-    scene: &Scene,
-    list: &DisplayList,
-    strips: &[Strip],
-    section: &Image,
-    w: usize,
-    cam: i64,
-    frame: u64,
-) -> Pixmap {
+pub fn rasterize(scene: &Scene, list: &DisplayList, strips: &[Strip], section: &Image, w: usize, cam: i64, frame: u64) -> Pixmap {
     let (sky_top, horizon) = list.sky;
     let ground = list.ground;
     let mut pm = Pixmap::new(w, list.height as usize, sky_top);

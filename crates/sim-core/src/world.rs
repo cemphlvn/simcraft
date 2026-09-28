@@ -199,15 +199,7 @@ impl World {
     }
 
     /// Nothing spawns inside terrain; a solid kind cannot spawn into an occupied voxel → None.
-    pub fn spawn3(
-        &mut self,
-        kind: &str,
-        state: &str,
-        x: i64,
-        y: i64,
-        z: i64,
-        props: BTreeMap<String, i64>,
-    ) -> Option<EntityId> {
+    pub fn spawn3(&mut self, kind: &str, state: &str, x: i64, y: i64, z: i64, props: BTreeMap<String, i64>) -> Option<EntityId> {
         let (x, y, z) = self.clamp3(x, y, z);
         if self.is_terrain(x, y, z) || (self.solid.contains(kind) && self.blocked3(x, y, z)) {
             return None;
@@ -242,9 +234,8 @@ impl World {
         let Some(e) = self.entities.get(&id) else { return false };
         let (dx, dy, dz) = (dx.signum(), dy.signum(), dz.signum());
         let solid = self.solid.contains(&e.kind);
-        let open = |(x, y, z): (i64, i64, i64)| {
-            (x, y, z) != (e.x, e.y, e.z) && !self.is_terrain(x, y, z) && !(solid && self.blocked3(x, y, z))
-        };
+        let open =
+            |(x, y, z): (i64, i64, i64)| (x, y, z) != (e.x, e.y, e.z) && !self.is_terrain(x, y, z) && !(solid && self.blocked3(x, y, z));
         let want = self.clamp3(e.x + dx, e.y + dy, e.z + dz);
         let target = if self.is_terrain(want.0, want.1, want.2) {
             // Slide along terrain: the first open axis-reduced step.
@@ -350,9 +341,7 @@ impl World {
         (cz - d..=cz + d)
             .filter(move |z| (0..self.depth).contains(z))
             .flat_map(move |z| (cy - d..=cy + d).flat_map(move |y| (cx - d..=cx + d).map(move |x| (x, y, z))))
-            .filter(move |&(x, y, z)| {
-                (x - cx).abs().max((y - cy).abs()).max((z - cz).abs()) == d && self.in_bounds3(x, y, z)
-            })
+            .filter(move |&(x, y, z)| (x - cx).abs().max((y - cy).abs()).max((z - cz).abs()) == d && self.in_bounds3(x, y, z))
     }
 
     /// Nearest `kind` (Chebyshev distance). On a tie the smaller id wins.

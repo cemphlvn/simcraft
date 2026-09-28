@@ -25,7 +25,9 @@ pub enum Request {
         seat: Option<String>,
         actions: Vec<ActionReq>,
     },
-    Step { n: Option<u64> },
+    Step {
+        n: Option<u64>,
+    },
     Hash,
     Snapshot,
     Restore {
@@ -169,11 +171,8 @@ impl Session {
         let r = self.game().cfg.agent.observe_radius;
         let (x0, y0) = w.clamp(me.x - r, me.y - r);
         let (x1, y1) = w.clamp(me.x + r, me.y + r);
-        let visible: Vec<_> = w
-            .entities()
-            .values()
-            .filter(|e| e.id != id && (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y))
-            .collect();
+        let visible: Vec<_> =
+            w.entities().values().filter(|e| e.id != id && (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y)).collect();
         Ok(json!({
             "tick": w.tick,
             "me": me,
@@ -205,8 +204,7 @@ impl Session {
     /// Each request is evaluated separately: if one is rejected, the others are still queued.
     fn act(&mut self, seat: Option<&str>, actions: Vec<ActionReq>) -> Result<Value, String> {
         let (world, game) = (self.engine.world(), self.engine.rules());
-        let outcomes: Vec<Result<Group, String>> =
-            actions.iter().map(|a| game.act(world, seat, a.entity, &a.action, &a.args)).collect();
+        let outcomes: Vec<Result<Group, String>> = actions.iter().map(|a| game.act(world, seat, a.entity, &a.action, &a.args)).collect();
         let mut results = Vec::new();
         for (a, out) in actions.iter().zip(outcomes) {
             let tick = self.engine.world().tick;
@@ -257,13 +255,11 @@ impl Session {
     }
 }
 
-
 impl Session {
     /// Setup from texts (the host reads files itself: Unity StreamingAssets, Unreal content).
     /// Errors come back in the same format as the stdio startup error.
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<Session, Value> {
-        let (world, game) =
-            Game::from_strs(game_ron, engine_toml).map_err(|e| json!({ "ok": false, "stage": "load", "errors": [e] }))?;
+        let (world, game) = Game::from_strs(game_ron, engine_toml).map_err(|e| json!({ "ok": false, "stage": "load", "errors": [e] }))?;
         let engine = Engine::<Loaded, _>::new(world, game)
             .validate()
             .map_err(|errors| json!({ "ok": false, "stage": "validate", "errors": errors }))?

@@ -302,7 +302,13 @@ impl Component for Series {
             let h = ctx.ui.history.get(name).cloned().unwrap_or_default();
             let now = h.back().copied().unwrap_or(0);
             let trend = now - h.front().copied().unwrap_or(now);
-            let (arrow, token) = if trend > 0 { ('▲', "trend_up") } else if trend < 0 { ('▼', "trend_down") } else { (' ', "text") };
+            let (arrow, token) = if trend > 0 {
+                ('▲', "trend_up")
+            } else if trend < 0 {
+                ('▼', "trend_down")
+            } else {
+                (' ', "text")
+            };
             ctx.text(inner, 0, i as u16, &format!("{name:<16}{now:>6}"), "text");
             ctx.text(inner, 23, i as u16, &arrow.to_string(), token);
             ctx.text(inner, 25, i as u16, &spark(&h, inner.w.saturating_sub(26) as usize), "bar");

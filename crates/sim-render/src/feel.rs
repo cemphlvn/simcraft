@@ -87,11 +87,9 @@ impl Tween {
         let a = self.alpha.clamp(0.0, 1.0);
         match self.prev.get(&id) {
             // A long jump (a spawn at the same id, a teleport) is not interpolated.
-            Some(&(x, y, z)) if (x - now.0).abs() <= 2 && (y - now.1).abs() <= 2 && (z - now.2).abs() <= 2 => (
-                x as f32 + (now.0 - x) as f32 * a,
-                y as f32 + (now.1 - y) as f32 * a,
-                z as f32 + (now.2 - z) as f32 * a,
-            ),
+            Some(&(x, y, z)) if (x - now.0).abs() <= 2 && (y - now.1).abs() <= 2 && (z - now.2).abs() <= 2 => {
+                (x as f32 + (now.0 - x) as f32 * a, y as f32 + (now.1 - y) as f32 * a, z as f32 + (now.2 - z) as f32 * a)
+            }
             _ => (now.0 as f32, now.1 as f32, now.2 as f32),
         }
     }

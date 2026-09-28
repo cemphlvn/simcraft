@@ -7,9 +7,20 @@ use crate::world::{EntityId, World};
 /// The rules' "intent" toward the world. Only `apply` changes the world.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
-    Set { e: EntityId, prop: String, v: i64 },
-    Add { e: EntityId, prop: String, d: i64 },
-    SetState { e: EntityId, state: String },
+    Set {
+        e: EntityId,
+        prop: String,
+        v: i64,
+    },
+    Add {
+        e: EntityId,
+        prop: String,
+        d: i64,
+    },
+    SetState {
+        e: EntityId,
+        state: String,
+    },
     Move {
         e: EntityId,
         dx: i64,
@@ -27,12 +38,33 @@ pub enum Effect {
         props: BTreeMap<String, i64>,
     },
     /// A field value at a voxel (no entity involved).
-    FieldSet { name: String, x: i64, y: i64, z: i64, v: i64 },
-    FieldAdd { name: String, x: i64, y: i64, z: i64, d: i64 },
-    Despawn { e: EntityId },
-    Emit { e: EntityId, name: String },
+    FieldSet {
+        name: String,
+        x: i64,
+        y: i64,
+        z: i64,
+        v: i64,
+    },
+    FieldAdd {
+        name: String,
+        x: i64,
+        y: i64,
+        z: i64,
+        d: i64,
+    },
+    Despawn {
+        e: EntityId,
+    },
+    Emit {
+        e: EntityId,
+        name: String,
+    },
     /// Before the group applies: prop >= min must hold (on live state). Otherwise the group is dropped.
-    Need { e: EntityId, prop: String, min: i64 },
+    Need {
+        e: EntityId,
+        prop: String,
+        min: i64,
+    },
 }
 
 impl Effect {

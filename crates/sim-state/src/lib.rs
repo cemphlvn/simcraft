@@ -255,9 +255,8 @@ impl<G: Clone, A: Clone> Builder<'_, G, A> {
         if !body.states.is_empty() && !body.layers.is_empty() {
             self.errors.push(format!("state '{path}': has both states and layers; put the states inside a layer"));
         }
-        let child_origin = |o: &(String, String), c: &str| {
-            (o.0.clone(), if o.1.is_empty() { c.to_string() } else { format!("{}.{c}", o.1) })
-        };
+        let child_origin =
+            |o: &(String, String), c: &str| (o.0.clone(), if o.1.is_empty() { c.to_string() } else { format!("{}.{c}", o.1) });
         let mut children = Vec::new();
         for (c, cs) in &body.states {
             children.push(self.add(c, Some(id), cs, child_origin(&body_origin, c)));
@@ -318,11 +317,7 @@ impl<G: Clone, A: Clone> Builder<'_, G, A> {
                 self.errors.push(format!("{what}: transitions belong to a state with `states`"));
                 continue;
             }
-            let from = if t.from == "*" {
-                Some(From::Any)
-            } else {
-                child(self, &t.from).map(From::Node)
-            };
+            let from = if t.from == "*" { Some(From::Any) } else { child(self, &t.from).map(From::Node) };
             let to = match (&t.to, t.back) {
                 (Some(to), false) => child(self, to).map(To::Node),
                 (None, true) => Some(To::Back),
@@ -434,9 +429,7 @@ impl<G, A: Clone> Chart<G, A> {
 
     /// Nodes originating from (machine, path in machine): where rules written on the machine apply.
     pub fn with_origin(&self, machine: &str, path: &str) -> Vec<NodeId> {
-        (0..self.nodes.len())
-            .filter(|&i| self.nodes[i].origins.iter().any(|(m, p)| m == machine && p == path))
-            .collect()
+        (0..self.nodes.len()).filter(|&i| self.nodes[i].origins.iter().any(|(m, p)| m == machine && p == path)).collect()
     }
 
     // ------------------------------------------------------------ memory string
@@ -446,8 +439,7 @@ impl<G, A: Clone> Chart<G, A> {
         let mut s = paths(&m.leaves);
         if !m.history.is_empty() {
             s.push('#');
-            let hs: Vec<String> =
-                m.history.iter().map(|(&h, &c)| format!("{}={}", self.nodes[h].path, self.nodes[c].name)).collect();
+            let hs: Vec<String> = m.history.iter().map(|(&h, &c)| format!("{}={}", self.nodes[h].path, self.nodes[c].name)).collect();
             s.push_str(&hs.join(","));
         }
         for (scope, ls) in &m.stack {
@@ -478,12 +470,7 @@ impl<G, A: Clone> Chart<G, A> {
         for h in hist.split(',').filter(|h| !h.is_empty()) {
             let (p, c) = h.split_once('=').ok_or_else(|| format!("bad history '{h}'"))?;
             let p = find(p)?;
-            let child = self
-                .children(p)
-                .iter()
-                .copied()
-                .find(|&x| self.nodes[x].name == c)
-                .ok_or_else(|| format!("bad history '{h}'"))?;
+            let child = self.children(p).iter().copied().find(|&x| self.nodes[x].name == c).ok_or_else(|| format!("bad history '{h}'"))?;
             m.history.insert(p, child);
         }
         for st in parts {
@@ -505,11 +492,8 @@ impl<G, A: Clone> Chart<G, A> {
 
     /// Is one of `ids` active; with `depth`, is the active leaf at most that far below.
     pub fn in_any(&self, m: &Memory, ids: &[NodeId], depth: Option<usize>) -> bool {
-        ids.iter().any(|&n| {
-            m.leaves
-                .iter()
-                .any(|&l| self.inside(n, l) && depth.is_none_or(|d| self.nodes[l].depth - self.nodes[n].depth <= d))
-        })
+        ids.iter()
+            .any(|&n| m.leaves.iter().any(|&l| self.inside(n, l) && depth.is_none_or(|d| self.nodes[l].depth - self.nodes[n].depth <= d)))
     }
 
     /// Depth of the deepest match among the active ones (for glyph selection).

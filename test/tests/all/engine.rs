@@ -460,10 +460,16 @@ fn state_chart_mistakes_are_reported() {
         (DEV.replace(r#"Interrupt("Cleanup")"#, r#"Interrupt("Cleenup")"#), "Interrupt to unknown state 'Cleenup'"),
         (DEV.replace(r#"(name: "concentrate", then"#, r#"(name: "concentrate", for: "dev", then"#), "drop `for`"),
         (DEV.replace(r#""Design":   (use: "focus""#, r#""Design":   (use: "fokus""#), "unknown machine 'fokus'"),
-        (DEV.replace(r#"On(NearestIn("project", "Blocked")"#, r#"On(NearestIn("project", "Blokked")"#), "state 'Blokked' does not exist for 'project'"),
+        (
+            DEV.replace(r#"On(NearestIn("project", "Blocked")"#, r#"On(NearestIn("project", "Blokked")"#),
+            "state 'Blokked' does not exist for 'project'",
+        ),
         (DEV.replace(r#"initial: "Warmup","#, r#"initial: "Warm","#), "initial 'Warm' is not one of its states"),
         (DEV.replace(r#""Vacation": 'v'"#, r#""Vacashun": 'v'"#), "glyph for unknown state 'Vacashun'"),
-        (DEV.replace(r#"(from: "Stuck", back: true,"#, r#"(from: "Stuck", to: "Work", back: true,"#), "exactly one of `to` and `back: true`"),
+        (
+            DEV.replace(r#"(from: "Stuck", back: true,"#, r#"(from: "Stuck", to: "Work", back: true,"#),
+            "exactly one of `to` and `back: true`",
+        ),
     ];
     for (game, want) in &cases {
         let errs = boot(game, DEV_PANEL).err().unwrap_or_else(|| panic!("must fail: {want}"));
@@ -651,8 +657,7 @@ const CALENDAR_PANEL: &str = "[run]\nseed = 1\nmax_ticks = 5000\n[world]\nwidth 
 #[test]
 fn a_native_environment_matches_its_ron_reference() {
     let envs = colony_envs();
-    let ticks = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &envs, "seasons", Arc::new(NativeSeasons), 1500)
-        .expect("bit-identical");
+    let ticks = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &envs, "seasons", Arc::new(NativeSeasons), 1500).expect("bit-identical");
     assert_eq!(ticks, 1500, "three years and more, every tick compared");
     // And inside a real game, up to its end.
     sim_rules::conformance(COLONY, COLONY_PANEL, &envs, "seasons", Arc::new(NativeSeasons), 1500).expect("bit-identical");
@@ -673,8 +678,7 @@ fn a_wrong_native_environment_is_caught() {
             NativeSeasons.step(tick.saturating_sub(1), p, props, state)
         }
     }
-    let err = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &colony_envs(), "seasons", Arc::new(Late), 1500)
-        .expect_err("must diverge");
+    let err = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &colony_envs(), "seasons", Arc::new(Late), 1500).expect_err("must diverge");
     assert!(err.contains("tick"), "{err}");
 }
 
@@ -795,8 +799,7 @@ fn field_mistakes_are_reported() {
 
 #[test]
 fn golden_colony3d_hash() {
-    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../games/colony3d")), None)
-        .expect("loads");
+    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../games/colony3d")), None).expect("loads");
     let mut e = Engine::<Loaded, _>::new(world, g).validate().expect("valid").start();
     for _ in 0..200 {
         e.tick();

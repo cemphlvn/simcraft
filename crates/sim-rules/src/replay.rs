@@ -39,10 +39,7 @@ pub fn replay(engine: &mut Engine<Running, Game>, log: &[Msg]) -> Result<ReplayR
             Msg::Tick { tick, hash } => {
                 let r = engine.tick();
                 if (r.tick, r.hash) != (*tick, *hash) {
-                    return Err(format!(
-                        "diverged at tick {tick}: log {hash:016x}, replay tick {} {:016x}",
-                        r.tick, r.hash
-                    ));
+                    return Err(format!("diverged at tick {tick}: log {hash:016x}, replay tick {} {:016x}", r.tick, r.hash));
                 }
                 report.ticks += 1;
             }

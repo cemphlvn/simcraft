@@ -6,8 +6,8 @@
 use serde::Deserialize;
 
 use crate::canvas::{Cell, Rect, Rgb};
-use crate::layered::{Layered, Perspective};
 use crate::component::Ctx;
+use crate::layered::{Layered, Perspective};
 use crate::scene::Scene;
 use crate::style::Style;
 
@@ -17,22 +17,13 @@ pub type Axis = usize;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Projection {
     /// One level, top-down.
-    Dim2 {
-        level: i64,
-        tint: Option<String>,
-    },
+    Dim2 { level: i64, tint: Option<String> },
     /// Every level a layer frame, stacked by perspective states (see `layered`).
     Layers(Layered),
     /// Voxels from an orbit camera.
     Dim3(Camera),
     /// `n` world axes; `x` and `y` go to the screen, `fixed` pins the others: (axis, value).
-    CustomDim {
-        n: usize,
-        x: Axis,
-        y: Axis,
-        fixed: Vec<(Axis, i64)>,
-        tint: Option<String>,
-    },
+    CustomDim { n: usize, x: Axis, y: Axis, fixed: Vec<(Axis, i64)>, tint: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -114,18 +105,14 @@ impl ProjectionSpec {
         Ok(match self.dim.as_str() {
             "2D" | "2d" => Projection::Dim2 { level: self.level, tint },
             "2.5D" | "2_5D" | "2.5d" => {
-                let perspectives =
-                    if self.perspectives.is_empty() { vec![Layered::all_levels(depth)] } else { self.perspectives };
+                let perspectives = if self.perspectives.is_empty() { vec![Layered::all_levels(depth)] } else { self.perspectives };
                 let l = Layered::new(perspectives, tint);
                 l.check(depth)?;
                 Projection::Layers(l)
             }
-            "3D" | "3d" => Projection::Dim3(Camera {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                zoom: self.zoom,
-                cut: (self.cut >= 0).then_some(self.cut),
-            }),
+            "3D" | "3d" => {
+                Projection::Dim3(Camera { yaw: self.yaw, pitch: self.pitch, zoom: self.zoom, cut: (self.cut >= 0).then_some(self.cut) })
+            }
             "custom" | "CustomDim" => Projection::CustomDim {
                 n: self.n,
                 x: usize::try_from(self.x).map_err(|_| "custom projection needs x (the world axis for screen x)")?,
@@ -277,7 +264,13 @@ fn cast(scene: &Scene, style: &Style, cam: &Camera, eye: V3, dir: V3, max: f32) 
             let fog = (100.0 - (t / max) * 60.0).max(35.0) as u32;
             return Some(col.shade(light * fog / 100));
         }
-        let i = if side[0] < side[1] { if side[0] < side[2] { 0 } else { 2 } } else if side[1] < side[2] { 1 } else { 2 };
+        let i = if side[0] < side[1] {
+            if side[0] < side[2] { 0 } else { 2 }
+        } else if side[1] < side[2] {
+            1
+        } else {
+            2
+        };
         t = side[i];
         side[i] += delta[i];
         v[i] += step[i];

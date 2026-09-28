@@ -68,14 +68,7 @@ impl<S, R: Rules> Engine<S, R> {
         &self.rules
     }
     fn into_state<T>(self) -> Engine<T, R> {
-        Engine {
-            world: self.world,
-            rules: self.rules,
-            pending: self.pending,
-            outcome: self.outcome,
-            bus: self.bus,
-            _state: PhantomData,
-        }
+        Engine { world: self.world, rules: self.rules, pending: self.pending, outcome: self.outcome, bus: self.bus, _state: PhantomData }
     }
 }
 
@@ -109,12 +102,7 @@ impl<R: Rules> Engine<Running, R> {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            format: SNAPSHOT_FORMAT,
-            world: self.world.snapshot(),
-            pending: self.pending.clone(),
-            outcome: self.outcome.clone(),
-        }
+        Snapshot { format: SNAPSHOT_FORMAT, world: self.world.snapshot(), pending: self.pending.clone(), outcome: self.outcome.clone() }
     }
 
     /// Restores the engine to a snapshot. If the rules reject the world, nothing changes.

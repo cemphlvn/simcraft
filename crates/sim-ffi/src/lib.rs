@@ -80,9 +80,7 @@ pub unsafe extern "C" fn simcraft_new(
     let (Some(game), Some(panel)) = (unsafe { from_c(game_ron) }, unsafe { from_c(engine_toml) }) else {
         return fail(json!({ "ok": false, "stage": "load", "errors": ["game_ron and engine_toml must be UTF-8 text"] }));
     };
-    let made = guard(Err(json!({ "ok": false, "stage": "load", "errors": ["panic while loading"] })), || {
-        Session::from_strs(game, panel)
-    });
+    let made = guard(Err(json!({ "ok": false, "stage": "load", "errors": ["panic while loading"] })), || Session::from_strs(game, panel));
     match made {
         Ok(mut session) => {
             let kinds = session.game().def.kinds.keys().filter_map(|k| CString::new(k.as_str()).ok()).collect();
@@ -127,9 +125,7 @@ pub unsafe extern "C" fn simcraft_request(sim: *mut SimcraftSim, request: *const
     let Some(req) = (unsafe { from_c(request) }) else {
         return to_c(&json!({ "ok": false, "error": "request must be UTF-8 text" }));
     };
-    let resp = guard(Some(json!({ "ok": false, "error": "panic while handling the request" })), || {
-        sim.session.handle_line(req)
-    });
+    let resp = guard(Some(json!({ "ok": false, "error": "panic while handling the request" })), || sim.session.handle_line(req));
     to_c(&resp.unwrap_or_else(|| json!({ "ok": true, "quit": "close the handle with simcraft_free" })))
 }
 
