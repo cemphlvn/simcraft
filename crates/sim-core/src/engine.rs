@@ -117,7 +117,7 @@ impl<R: Rules> Engine<Running, R> {
         self.outcome = s.outcome;
         if !self.bus.is_empty() {
             let (tick, hash) = (self.world.tick, self.world.hash());
-            self.bus.publish(Msg::Restore { tick, hash, snapshot: Box::new(self.snapshot()) });
+            self.bus.publish(&Msg::Restore { tick, hash, snapshot: Box::new(self.snapshot()) });
         }
         Ok(())
     }
@@ -142,11 +142,11 @@ impl<R: Rules> Engine<Running, R> {
         let (tick, hash) = (self.world.tick, self.world.hash());
         if !self.bus.is_empty() {
             for ev in &events {
-                self.bus.publish(Msg::Event(ev.clone()));
+                self.bus.publish(&Msg::Event(ev.clone()));
             }
-            self.bus.publish(Msg::Tick { tick, hash });
+            self.bus.publish(&Msg::Tick { tick, hash });
             if let Some(result) = &self.outcome {
-                self.bus.publish(Msg::End { tick, result: result.clone() });
+                self.bus.publish(&Msg::End { tick, result: result.clone() });
             }
         }
         TickReport { tick, hash, events, outcome: self.outcome.clone() }

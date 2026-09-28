@@ -1,0 +1,12 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (lanes)
+#  The car drives one cell per tick: tick_rate is its speed.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 2000
+tick_rate = 12
+
+[agent]
+controllable = ["car"]

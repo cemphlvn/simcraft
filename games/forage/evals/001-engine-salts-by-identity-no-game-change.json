@@ -1,0 +1,79 @@
+{
+ "step": 1,
+ "change": "engine: salts by identity (no game change)",
+ "seeds": {
+  "1": {
+   "early_rate": 52,
+   "late_rate": 371.2,
+   "per_ant": 7.89,
+   "first_breeding": 570,
+   "births": 2382,
+   "ants": 47.0
+  },
+  "2": {
+   "early_rate": 1,
+   "late_rate": 100.2,
+   "per_ant": 5.06,
+   "first_breeding": 712,
+   "births": 681,
+   "ants": 19.8
+  },
+  "3": {
+   "early_rate": 0,
+   "late_rate": 187.4,
+   "per_ant": 6.78,
+   "first_breeding": 4134,
+   "births": 1209,
+   "ants": 27.6
+  },
+  "4": {
+   "early_rate": 1,
+   "late_rate": 277.0,
+   "per_ant": 7.43,
+   "first_breeding": 534,
+   "births": 1806,
+   "ants": 37.3
+  },
+  "5": {
+   "early_rate": 1,
+   "late_rate": 89.2,
+   "per_ant": 3.78,
+   "first_breeding": 691,
+   "births": 1327,
+   "ants": 23.6
+  }
+ },
+ "metrics": {
+  "early_rate": {
+   "mean": 11.0,
+   "min": 0,
+   "max": 52
+  },
+  "late_rate": {
+   "mean": 205.0,
+   "min": 89.2,
+   "max": 371.2
+  },
+  "per_ant": {
+   "mean": 6.19,
+   "min": 3.78,
+   "max": 7.89
+  },
+  "first_breeding": {
+   "mean": 1328.2,
+   "min": 534,
+   "max": 4134
+  },
+  "births": {
+   "mean": 1481.0,
+   "min": 681,
+   "max": 2382
+  },
+  "ants": {
+   "mean": 31.06,
+   "min": 19.8,
+   "max": 47.0
+  }
+ },
+ "errors": {}
+}

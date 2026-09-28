@@ -4,8 +4,11 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::marker::PhantomData;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -19,6 +22,7 @@ use rhai::{AST, Array, Dynamic, Engine as Rhai, Map, Scope};
 use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, PickSpec, Spec, TransitionSpec};
 
+use crate::brain::Brain;
 use crate::config::EngineConfig;
 use crate::env::NativeEnv;
 use crate::game::{Do, EnvDef, GameDef, Perception, PickDef, RuleDef, StateDef, Target};
@@ -34,15 +38,66 @@ const FSM_SALT: u64 = 1 << 32;
 
 /// Senses draw their own randomness.
 const SENSE_SALT: u64 = 1 << 33;
+const BRAIN_SALT: u64 = 1 << 34;
+const ACTION_SALT: u64 = 1 << 35;
+const MACHINE_SALT: u64 = 1 << 36;
+const ENV_SALT: u64 = 1 << 37;
+
+/// A salt from a rule's identity: a range bit plus 32 bits of an FNV hash of its names.
+fn identity_salt(range: u64, parts: &[&str]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in parts {
+        for b in p.bytes().chain(std::iter::once(0)) {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    range | (h & 0xFFFF_FFFF)
+}
+const GENOME_SALT: u64 = 0x6E0E_6E0E;
+
+/// Work the rules do, counted exactly: the same run gives the same numbers on every machine and at any core count,
+/// so they can be snapshot-tested. What efficient code is measured by (time is noise; work is not).
+#[derive(Default)]
+pub struct WorkCounters {
+    evals: AtomicU64,
+    queries: AtomicU64,
+    maps: AtomicU64,
+}
+
+/// A reading of the counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Work {
+    /// Rhai expression evaluations (conditions, values, senses, scripts).
+    pub evals: u64,
+    /// Spatial and field queries (`near`, targets, `around`, `field`, `nearest_prop`, `toward_*`...).
+    pub queries: u64,
+    /// Entity maps built for expressions (`me`, `it`).
+    pub maps: u64,
+}
+
+/// Per rule: how often it was checked (an entity it applies to) and how often it fired (produced a group).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RuleWork {
+    pub name: String,
+    pub checks: u64,
+    pub fires: u64,
+}
+
+fn bump(c: &AtomicU64) {
+    c.fetch_add(1, Ordering::Relaxed);
+}
 
 /// A core takes this many entities as one chunk; small worlds pay no parallel overhead.
 const CHUNK: usize = 64;
 
 /// Context seen by world queries registered in Rhai (`around`, `rand`).
-/// Each core has its own context (thread-local): world snapshot, `me`, salt.
+/// Each core has its own context (thread-local): the world being read, `me`, salt.
 #[derive(Default)]
 struct QueryCtx {
-    world: Option<Arc<World>>,
+    /// Set only while a `Bound` guard lives (see `Game::bind_world`): borrowed, never copied.
+    world: Option<NonNull<World>>,
+    /// The game's work counters (queries are counted where they happen).
+    work: Option<Arc<WorkCounters>>,
     me: EntityId,
     pos: (i64, i64, i64),
     salt: u64,
@@ -53,8 +108,21 @@ struct QueryCtx {
 }
 
 impl QueryCtx {
+    fn world(&self) -> Option<&World> {
+        // SAFETY: `world` is set from a `&'w World` by `Game::bind_world` and reset when its `Bound<'w>` guard
+        // drops; queries run synchronously on this thread inside that call, so the borrow is still live.
+        self.world.map(|p| unsafe { p.as_ref() })
+    }
+
+    fn counted(&self) {
+        if let Some(w) = &self.work {
+            bump(&w.queries);
+        }
+    }
+
     fn around(&self, kind: &str, state: Option<&str>, r: i64) -> i64 {
-        let Some(w) = &self.world else { return 0 };
+        self.counted();
+        let Some(w) = self.world() else { return 0 };
         match state {
             None => w.around(self.pos, self.me, kind, None, r),
             Some(sel) => w.around_where(self.pos, self.me, kind, r, |e| sim_state::in_label(&e.state, sel)),
@@ -63,7 +131,8 @@ impl QueryCtx {
 
     /// A field's value at my voxel offset by (dx, dy, dz); 0 outside the world.
     fn field(&self, name: &str, dx: i64, dy: i64, dz: i64) -> Result<i64, String> {
-        let Some(w) = &self.world else { return Ok(0) };
+        self.counted();
+        let Some(w) = self.world() else { return Ok(0) };
         if w.field_values(name).is_none() {
             return Err(format!("no field '{name}' (declare it in `fields`)"));
         }
@@ -73,7 +142,8 @@ impl QueryCtx {
 
     /// A prop of the nearest `kind` within `r`; `default` if there is none that close.
     fn nearest_prop(&self, kind: &str, prop: &str, r: i64, default: i64) -> i64 {
-        let Some(w) = &self.world else { return default };
+        self.counted();
+        let Some(w) = self.world() else { return default };
         let Some(me) = w.get(self.me) else { return default };
         match w.nearest(me, kind) {
             Some((e, d)) if d <= r => e.props.get(prop).copied().unwrap_or(default),
@@ -81,26 +151,69 @@ impl QueryCtx {
         }
     }
 
+    /// Which way the nearest `kind` (in that state, if given) lies along x (`axis` 0) or y (1): -1, 0 or 1;
+    /// 0 if there is none.
+    fn toward(&self, kind: &str, sel: Option<&str>, axis: u8) -> i64 {
+        self.counted();
+        let Some(w) = self.world() else { return 0 };
+        let Some(me) = w.get(self.me) else { return 0 };
+        let found = match sel {
+            None => w.nearest(me, kind),
+            Some(sel) => w.nearest_where(me, kind, |e| sim_state::in_label(&e.state, sel)),
+        };
+        found.map_or(0, |(t, _)| if axis == 0 { (t.x - me.x).signum() } else { (t.y - me.y).signum() })
+    }
+
     /// Distance to the nearest `kind` in that state; FAR if none.
     fn near_in(&self, kind: &str, sel: &str) -> i64 {
-        let Some(w) = &self.world else { return FAR };
+        self.counted();
+        let Some(w) = self.world() else { return FAR };
         let Some(me) = w.get(self.me) else { return FAR };
         w.nearest_where(me, kind, |e| sim_state::in_label(&e.state, sel)).map_or(FAR, |(_, d)| d)
     }
 
+    /// True on `n` evenly spaced ticks out of every `secs` seconds of game time (Bresenham): an even cadence
+    /// at any tick rate, where `rand` would give uneven gaps. Each entity has its own phase.
+    fn pace(&self, n: i64, secs: i64, tick_rate: i64) -> bool {
+        let Some(w) = self.world() else { return false };
+        let period = secs.max(1) * tick_rate;
+        if n <= 0 {
+            return false;
+        }
+        if n >= period {
+            return true;
+        }
+        let phase = (sim_core::splitmix64(self.me) % period as u64) as i64;
+        let t = (w.tick as i64 + phase) % period;
+        (t + 1) * n / period > t * n / period
+    }
+
     /// 0..n. Multiple calls in one expression give different numbers; still fully deterministic.
     fn rand(&mut self, n: i64) -> i64 {
-        let Some(w) = &self.world else { return 0 };
-        if n <= 0 {
+        if n <= 0 || self.world.is_none() {
             return 0;
         }
         self.calls += 1;
+        let Some(w) = self.world() else { return 0 };
         (w.rand(self.me, self.salt ^ self.calls.wrapping_mul(0xA5A5_5A5A_1234_5678)) % n as u64) as i64
     }
 }
 
 thread_local! {
     static CTX: RefCell<QueryCtx> = RefCell::new(QueryCtx::default());
+}
+
+/// A world lent to this thread's queries; the lifetime keeps the world alive and unchanged while it is bound.
+#[must_use = "the world is unbound when this guard drops"]
+struct Bound<'w> {
+    prev: Option<NonNull<World>>,
+    _world: PhantomData<&'w World>,
+}
+
+impl Drop for Bound<'_> {
+    fn drop(&mut self) {
+        CTX.with(|c| c.borrow_mut().world = self.prev);
+    }
 }
 
 pub struct Game {
@@ -124,6 +237,8 @@ pub struct Game {
     kind_charts: Arc<BTreeMap<String, Arc<StateChart>>>,
     /// Condition/score expressions and action blocks of the charts.
     exprs: Vec<AST>,
+    /// `exprs[i]` checked natively, when it is a simple condition (see `native_guard`).
+    expr_guards: Vec<Option<Vec<Term>>>,
     blocks: Vec<Vec<CDo>>,
     /// Environment kinds (hidden singletons), in `environments` order.
     envs: Vec<String>,
@@ -133,6 +248,14 @@ pub struct Game {
     field_tops: Vec<(String, AST)>,
     /// Kind → its senses (name, expression).
     senses: BTreeMap<String, Vec<(String, AST)>>,
+    /// Kind → its brain (learning agents).
+    brains: BTreeMap<String, Arc<Brain>>,
+    /// Work done so far (see `work`).
+    work: Arc<WorkCounters>,
+    /// Kind → how it is evaluated each tick (see `Plan`). Computed on first use (natives attach after compiling).
+    plans: std::sync::OnceLock<BTreeMap<String, Plan>>,
+    /// Fast paths on (native guards). Off only to prove they change nothing (conformance tests).
+    fast: std::sync::atomic::AtomicBool,
     /// Environments whose own machine and rules are replaced by native code.
     natives: BTreeMap<String, Arc<dyn NativeEnv>>,
     /// Kind → state text at birth.
@@ -145,6 +268,9 @@ pub struct Game {
 
 struct CompiledRule {
     salt: u64,
+    /// Work: entities it was checked for, groups it produced.
+    checks: AtomicU64,
+    fires: AtomicU64,
     name: String,
     is_action: bool,
     enabled: bool,
@@ -160,8 +286,51 @@ struct CompiledRule {
     target: Option<Target>,
     args: Vec<String>,
     when: Option<AST>,
+    /// `when`, checked natively when it is simple (see `native_guard`).
+    guard: Option<Vec<Term>>,
     then: Vec<CDo>,
     script: Option<AST>,
+    /// Which per-entity names its expressions mention.
+    sees: Sees,
+}
+
+/// How a kind is evaluated each tick; every shortcut here is exact (`fast_paths_change_nothing` proves it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Plan {
+    /// Nothing to evaluate (no rule, machine, senses, brain or native step): skipped.
+    idle: bool,
+    /// Every rule has a native guard (no senses, brain or native step): when the machine stays put and every guard
+    /// is false, skipped before any scope is built.
+    guarded: bool,
+    /// Which per-entity maps to build.
+    sees: Sees,
+}
+
+impl Plan {
+    const FULL: Plan = Plan { idle: false, guarded: false, sees: Sees { me: true, near: true } };
+}
+
+/// Does a piece of source mention `me` / `near`? Read from the text, so it can only err towards building
+/// a map nobody reads (a word in a string literal), never towards leaving out one that is read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Sees {
+    me: bool,
+    near: bool,
+}
+
+impl Sees {
+    fn of(src: &str) -> Sees {
+        let mut out = Sees::default();
+        for w in src.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            out.me |= w == "me";
+            out.near |= w == "near";
+        }
+        out
+    }
+
+    fn or(self, o: Sees) -> Sees {
+        Sees { me: self.me || o.me, near: self.near || o.near }
+    }
 }
 
 enum CDo {
@@ -177,6 +346,7 @@ enum CDo {
     Goto(String),
     Move(AST, AST),
     Move3(AST, AST, AST),
+    MoveBy(AST, AST),
     SetField(String, AST),
     AddField(String, AST),
     SetFieldAt(String, AST, AST, AST, AST),
@@ -194,6 +364,7 @@ impl CDo {
             CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
             CDo::Move(dx, dy) => out.extend([dx, dy]),
             CDo::Move3(dx, dy, dz) => out.extend([dx, dy, dz]),
+            CDo::MoveBy(dx, dy) => out.extend([dx, dy]),
             CDo::SetField(_, a) | CDo::AddField(_, a) => out.push(a),
             CDo::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx, dy, dz, v]),
             CDo::On(_, ds) => ds.iter().for_each(|d| d.int_exprs(out)),
@@ -241,6 +412,7 @@ impl Compiler<'_> {
             Do::Goto(s) => CDo::Goto(s.clone()),
             Do::Move(dx, dy) => CDo::Move(self.expr(dx, ctx), self.expr(dy, ctx)),
             Do::Move3(dx, dy, dz) => CDo::Move3(self.expr(dx, ctx), self.expr(dy, ctx), self.expr(dz, ctx)),
+            Do::MoveBy(dx, dy) => CDo::MoveBy(self.expr(dx, ctx), self.expr(dy, ctx)),
             Do::SetField(f, e) => CDo::SetField(f.clone(), self.expr(e, ctx)),
             Do::AddField(f, e) => CDo::AddField(f.clone(), self.expr(e, ctx)),
             Do::SetFieldAt(f, dx, dy, dz, v) => {
@@ -263,6 +435,8 @@ impl Compiler<'_> {
             })
         });
         CompiledRule {
+            checks: AtomicU64::new(0),
+            fires: AtomicU64::new(0),
             salt,
             name: r.name.clone(),
             is_action,
@@ -276,8 +450,10 @@ impl Compiler<'_> {
             target: r.target.clone(),
             args: r.args.clone(),
             when: r.when.as_deref().map(|w| self.expr(w, &ctx)),
+            guard: r.when.as_deref().and_then(native_guard),
             then: r.then.iter().map(|d| self.doo(d, &ctx)).collect(),
             script,
+            sees: Sees::of(&format!("{r:?}")),
         }
     }
 }
@@ -286,6 +462,7 @@ impl Compiler<'_> {
 #[derive(Default)]
 struct Machines {
     exprs: Vec<AST>,
+    expr_guards: Vec<Option<Vec<Term>>>,
     blocks: Vec<Vec<CDo>>,
     /// (machine, path within machine, rule)
     rules: Vec<(String, String, RuleDef)>,
@@ -318,6 +495,7 @@ impl Compiler<'_> {
             let what = format!("transition {} -> {}", t.from, t.to.as_deref().unwrap_or("back"));
             let then = self.block(m, &t.then, &ctx(what.clone()));
             m.exprs.push(self.expr(&t.when, &ctx(what)));
+            m.expr_guards.push(native_guard(&t.when));
             transitions.push(TransitionSpec {
                 from: t.from.clone(),
                 to: t.to.clone(),
@@ -336,6 +514,7 @@ impl Compiler<'_> {
                 .iter()
                 .map(|(st, e)| {
                     m.exprs.push(self.expr(e, &ctx(format!("pick '{st}'"))));
+                    m.expr_guards.push(None);
                     (st.clone(), m.exprs.len() - 1)
                 })
                 .collect();
@@ -435,6 +614,7 @@ fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
         Do::Set(_, e) | Do::Add(_, e) | Do::Need(_, e) => out.push(e),
         Do::Move(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
         Do::Move3(dx, dy, dz) => out.extend([dx.as_str(), dy.as_str(), dz.as_str()]),
+        Do::MoveBy(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
         Do::SetField(_, e) | Do::AddField(_, e) => out.push(e),
         Do::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx.as_str(), dy.as_str(), dz.as_str(), v.as_str()]),
         Do::On(_, ds) => ds.iter().for_each(|d| do_sources(d, out)),
@@ -468,6 +648,96 @@ fn near_refs<'a>(sources: impl Iterator<Item = &'a str>) -> Option<BTreeSet<Stri
 }
 
 /// Entity view given to Rhai (`me`, `it`).
+/// A condition simple enough to check without the interpreter: comparisons of `me.<prop>` with a number or a
+/// `p.<param>`, joined by `&&` (`me.scent > 0`, `me.timer == 0 && me.over == 0`). Most guards look like this, and
+/// they are checked for every entity every tick.
+#[derive(Clone, Debug, PartialEq)]
+struct Term {
+    prop: String,
+    op: Cmp,
+    rhs: Operand,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Cmp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Operand {
+    Lit(i64),
+    Param(String),
+}
+
+fn ident(s: &str) -> bool {
+    let mut c = s.chars();
+    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_') && c.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The native form of a condition, or None (then the interpreter checks it).
+fn native_guard(src: &str) -> Option<Vec<Term>> {
+    if src.trim() == "true" {
+        return Some(Vec::new());
+    }
+    if src.contains("||") || src.contains('(') || src.contains('"') || src.contains('#') {
+        return None;
+    }
+    src.split("&&")
+        .map(|t| {
+            let t = t.trim();
+            let (op, at, len) = [(">=", Cmp::Ge), ("<=", Cmp::Le), ("==", Cmp::Eq), ("!=", Cmp::Ne), (">", Cmp::Gt), ("<", Cmp::Lt)]
+                .into_iter()
+                .find_map(|(sym, op)| t.find(sym).map(|at| (op, at, sym.len())))?;
+            let (lhs, rhs) = (t[..at].trim(), t[at + len..].trim());
+            let prop = lhs.strip_prefix("me.").filter(|p| ident(p))?;
+            let rhs = match rhs.strip_prefix("p.") {
+                Some(p) if ident(p) => Operand::Param(p.to_string()),
+                Some(_) => return None,
+                None => Operand::Lit(rhs.parse().ok()?),
+            };
+            Some(Term { prop: prop.to_string(), op, rhs })
+        })
+        .collect()
+}
+
+/// The guard's value for this entity, or None if a name is not there (the interpreter then reports it).
+fn check_guard(terms: &[Term], e: &Entity, params: &BTreeMap<String, i64>) -> Option<bool> {
+    for t in terms {
+        // As in `me`: props shadow the coordinates.
+        let l = match e.props.get(&t.prop) {
+            Some(v) => *v,
+            None => match t.prop.as_str() {
+                "x" => e.x,
+                "y" => e.y,
+                "z" => e.z,
+                "id" => e.id as i64,
+                _ => return None,
+            },
+        };
+        let r = match &t.rhs {
+            Operand::Lit(v) => *v,
+            Operand::Param(p) => *params.get(p)?,
+        };
+        let ok = match t.op {
+            Cmp::Gt => l > r,
+            Cmp::Ge => l >= r,
+            Cmp::Lt => l < r,
+            Cmp::Le => l <= r,
+            Cmp::Eq => l == r,
+            Cmp::Ne => l != r,
+        };
+        if !ok {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
 fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
     let mut m = Map::new();
     m.insert("id".into(), Dynamic::from(e.id as i64));
@@ -545,6 +815,9 @@ impl Game {
         rhai.register_fn("around", |kind: &str, r: i64| CTX.with(|c| c.borrow().around(kind, None, r)));
         rhai.register_fn("around", |kind: &str, state: &str, r: i64| CTX.with(|c| c.borrow().around(kind, Some(state), r)));
         rhai.register_fn("rand", |n: i64| CTX.with(|c| c.borrow_mut().rand(n)));
+        let rate = cfg.run.tick_rate;
+        rhai.register_fn("pace", move |n: i64| CTX.with(|c| c.borrow().pace(n, 1, rate)));
+        rhai.register_fn("pace", move |n: i64, secs: i64| CTX.with(|c| c.borrow().pace(n, secs, rate)));
         rhai.register_fn("clamp", |x: i64, lo: i64, hi: i64| x.max(lo).min(hi));
         rhai.register_fn("pct", |x: i64, percent: i64| x * percent / 100);
         rhai.register_fn("ramp", |x: i64, len: i64, peak: i64| if len <= 0 { 0 } else { (x * peak / len).clamp(0, peak) });
@@ -554,6 +827,10 @@ impl Game {
                 if len <= 0 || x < 0 || x > len { 0 } else { peak - (x * 2 * peak / len - peak).abs() }
             },
         );
+        rhai.register_fn("toward_x", |kind: &str| CTX.with(|c| c.borrow().toward(kind, None, 0)));
+        rhai.register_fn("toward_y", |kind: &str| CTX.with(|c| c.borrow().toward(kind, None, 1)));
+        rhai.register_fn("toward_x", |kind: &str, sel: &str| CTX.with(|c| c.borrow().toward(kind, Some(sel), 0)));
+        rhai.register_fn("toward_y", |kind: &str, sel: &str| CTX.with(|c| c.borrow().toward(kind, Some(sel), 1)));
         rhai.register_fn("near_in", |kind: &str, sel: &str| CTX.with(|c| c.borrow().near_in(kind, sel)));
         rhai.register_fn("field", |name: &str| -> Result<i64, Box<rhai::EvalAltResult>> {
             CTX.with(|c| c.borrow().field(name, 0, 0, 0)).map_err(Into::into)
@@ -580,20 +857,18 @@ impl Game {
         let mut mach = Machines::default();
         let specs: BTreeMap<String, Spec<usize, usize>> =
             def.fsms.iter().map(|(name, f)| (name.clone(), cc.spec(&mut mach, name, "", f, true))).collect();
-        // Salts: rule i → i+1 (so existing games keep their trajectory), actions after.
-        let n = def.rules.len() as u64;
+        // Salts: top-level rule i → i+1 (append new rules at the end and nothing shifts). Actions and rules written
+        // in states get a salt from who they are (name, machine, state), not from where they stand: adding an action
+        // or a rule anywhere never changes the dice of the others.
         let mut rules: Vec<CompiledRule> = def.rules.iter().enumerate().map(|(i, r)| cc.rule(r, i as u64 + 1, false, &cfg)).collect();
-        rules.extend(def.actions.iter().enumerate().map(|(i, r)| cc.rule(r, n + i as u64 + 1, true, &cfg)));
-        // Rules written in states come last: existing games' salts do not shift.
-        let base = rules.len() as u64;
-        for (i, (m, p, r)) in mach.rules.iter().enumerate() {
-            let mut c = cc.rule(r, base + i as u64 + 1, false, &cfg);
+        rules.extend(def.actions.iter().map(|r| cc.rule(r, identity_salt(ACTION_SALT, &["action", &r.name]), true, &cfg)));
+        for (m, p, r) in &mach.rules {
+            let mut c = cc.rule(r, identity_salt(MACHINE_SALT, &[m, p, &r.name]), false, &cfg);
             c.home = Some((m.clone(), p.clone()));
             rules.push(c);
         }
-        // Environment rules after everything: adding an environment never shifts a game's salts.
-        let base = rules.len() as u64;
-        rules.extend(def.env_rules.iter().enumerate().map(|(i, r)| cc.rule(r, base + i as u64 + 1, false, &cfg)));
+        // Environment rules after everything, salted by name too: an environment's dice do not depend on the game.
+        rules.extend(def.env_rules.iter().map(|r| cc.rule(r, identity_salt(ENV_SALT, &["env", &r.name]), false, &cfg)));
         let ends = def
             .end
             .iter()
@@ -611,7 +886,28 @@ impl Game {
                 (kind.clone(), compiled)
             })
             .collect();
+        let mut brain_inputs: BTreeMap<String, Vec<(String, AST)>> = BTreeMap::new();
+        for (kind, k) in &def.kinds {
+            if let Some(b) = &k.brain {
+                let inputs =
+                    b.inputs.iter().map(|(n, src)| (n.clone(), cc.expr(src, &format!("kind '{kind}' brain input '{n}'")))).collect();
+                brain_inputs.insert(kind.clone(), inputs);
+            }
+        }
         let mut errors = cc.errors;
+        let mut brains = BTreeMap::new();
+        for (kind, inputs) in brain_inputs {
+            let def_b = def.kinds[&kind].brain.as_ref().expect("has a brain");
+            if def.perception != Perception::Senses {
+                errors.push(format!("kind '{kind}': a brain needs `perception: Senses` (its inputs are what it senses)"));
+            }
+            match Brain::new(def_b, inputs) {
+                Ok(b) => {
+                    brains.insert(kind, Arc::new(b));
+                }
+                Err(e) => errors.push(format!("kind '{kind}' brain: {e}")),
+            }
+        }
 
         let mut charts = BTreeMap::new();
         for name in def.fsms.keys() {
@@ -675,6 +971,7 @@ impl Game {
         }
         sources.extend(def.end.iter().map(|e| e.when.as_str()));
         sources.extend(def.kinds.values().flat_map(|k| k.senses.values().map(String::as_str)));
+        sources.extend(def.kinds.values().filter_map(|k| k.brain.as_ref()).flat_map(|b| b.inputs.values().map(String::as_str)));
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
@@ -698,9 +995,14 @@ impl Game {
             strict,
             field_tops,
             senses,
+            brains,
+            work: Arc::default(),
+            plans: std::sync::OnceLock::new(),
+            fast: std::sync::atomic::AtomicBool::new(true),
             natives: BTreeMap::new(),
             machine_rules: mach.rules.into_iter().map(|(_, _, r)| r).collect(),
             exprs: mach.exprs,
+            expr_guards: mach.expr_guards,
             blocks: mach.blocks,
             initial_states,
         }
@@ -801,6 +1103,13 @@ impl Game {
                 c += 1;
             }
         }
+        // Learning agents start with random weights, each its own.
+        for (kind, b) in &self.brains {
+            let ids: Vec<u64> = world.of_kind(kind).map(|e| e.id).collect();
+            for id in ids {
+                world.set_genome(id, b.fresh(splitmix64(world.seed ^ GENOME_SALT ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15))));
+            }
+        }
         (world, errs)
     }
 
@@ -872,16 +1181,47 @@ impl Game {
         Ok(())
     }
 
+    /// The work done since the game was loaded (or since `reset_work`): exact, deterministic counts.
+    pub fn work(&self) -> Work {
+        let w = &self.work;
+        let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        Work { evals: g(&w.evals), queries: g(&w.queries), maps: g(&w.maps) }
+    }
+
+    /// Per rule (in salt order: rules, actions, rules in states, environment rules): checks and fires so far.
+    pub fn rule_work(&self) -> Vec<RuleWork> {
+        self.rules
+            .iter()
+            .map(|r| RuleWork { name: r.name.clone(), checks: r.checks.load(Ordering::Relaxed), fires: r.fires.load(Ordering::Relaxed) })
+            .collect()
+    }
+
+    /// Turns the fast paths (native guards, skipping idle kinds) off or on: the interpreter alone must give the
+    /// same world, tick for tick (see the conformance test).
+    pub fn set_fast_paths(&self, on: bool) {
+        self.fast.store(on, Ordering::Relaxed);
+    }
+
+    pub fn reset_work(&self) {
+        for c in [&self.work.evals, &self.work.queries, &self.work.maps] {
+            c.store(0, Ordering::Relaxed);
+        }
+        for r in &self.rules {
+            r.checks.store(0, Ordering::Relaxed);
+            r.fires.store(0, Ordering::Relaxed);
+        }
+    }
+
     /// What an entity senses right now (for inspectors): sense name → value as text.
     pub fn senses_of(&self, world: &World, e: &Entity) -> Vec<(String, String)> {
-        if !self.senses.contains_key(&e.kind) {
+        if !self.senses.contains_key(&e.kind) && !self.brains.contains_key(&e.kind) {
             return Vec::new();
         }
         let counts = self.counts(world);
-        self.bind_world(Some(world));
+        let bound = self.bind_world(world);
         let mut full = self.tick_scope(world, &counts);
         let (map, errs) = self.sense_map(&mut full, world, e);
-        self.bind_world(None);
+        drop(bound);
         let mut out: Vec<(String, String)> = map.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         out.extend(errs.into_iter().map(|m| ("error".to_string(), m)));
         out
@@ -895,9 +1235,9 @@ impl Game {
         for (k, v) in extra {
             scope.push_constant(k.to_string(), v);
         }
-        self.bind_world(Some(world));
+        let bound = self.bind_world(world);
         let out = self.rhai.eval_ast_with_scope::<Dynamic>(&mut scope, &ast).map_err(|e| format!("`{src}`: {e}"));
-        self.bind_world(None);
+        drop(bound);
         out
     }
 
@@ -942,12 +1282,12 @@ impl Game {
         }
 
         let counts = self.counts(world);
-        self.bind_world(Some(world));
+        let bound = self.bind_world(world);
         let mut scope = self.entity_scope(world, e, &counts);
         let arg: Map = args.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
         scope.push_constant("arg", arg);
         let out = self.eval_rule(world, e, rule, &mut scope);
-        self.bind_world(None);
+        drop(bound);
 
         let def = self.def.actions.iter().find(|a| a.name == name).expect("compiled from def");
         match out? {
@@ -977,7 +1317,7 @@ impl Game {
         let mut out = BTreeMap::new();
         let Some(score) = &self.score else { return out };
         let counts = self.counts(world);
-        self.bind_world(Some(world));
+        let bound = self.bind_world(world);
         let by_owner: BTreeMap<i64, &String> = self.cfg.agent.seats.iter().map(|(s, n)| (*n, s)).collect();
         for e in world.entities().values().filter(|e| self.cfg.agent.controllable.contains(&e.kind)) {
             let mut scope = self.base_scope(world, e, &counts);
@@ -989,7 +1329,7 @@ impl Game {
             };
             *out.entry(key).or_insert(0) += v;
         }
-        self.bind_world(None);
+        drop(bound);
         out
     }
 
@@ -1004,6 +1344,7 @@ impl Game {
         let mut scope = Scope::new();
         scope.push_constant("p", self.p_map.clone());
         scope.push_constant("tick", world.tick as i64);
+        scope.push_constant("tick_rate", self.cfg.run.tick_rate);
         scope.push_constant("count", counts.clone());
         scope.push_constant("env", self.env_map(world));
         scope
@@ -1024,14 +1365,28 @@ impl Game {
 
     /// Per entity: me, near.
     fn push_entity(&self, scope: &mut Scope<'static>, world: &World, e: &Entity) {
+        self.push_seen(scope, world, e, Sees { me: true, near: true });
+    }
+
+    /// `me` and `near`, each only if `sees` says an expression reads it.
+    fn push_seen(&self, scope: &mut Scope<'static>, world: &World, e: &Entity, sees: Sees) {
+        if sees.me {
+            bump(&self.work.maps);
+            scope.push_constant("me", entity_map(e, None));
+        }
+        if !sees.near {
+            return;
+        }
         let near: Map = self
             .def
             .kinds
             .keys()
             .filter(|k| self.near_kinds.as_ref().is_none_or(|ks| ks.contains(*k)))
-            .map(|k| (k.as_str().into(), Dynamic::from(world.nearest(e, k).map_or(FAR, |(_, d)| d))))
+            .map(|k| {
+                bump(&self.work.queries);
+                (k.as_str().into(), Dynamic::from(world.nearest(e, k).map_or(FAR, |(_, d)| d)))
+            })
             .collect();
-        scope.push_constant("me", entity_map(e, None));
         scope.push_constant("near", near);
     }
 
@@ -1047,10 +1402,12 @@ impl Game {
         self.strict && !self.envs.iter().any(|e| e == kind)
     }
 
-    /// What an agent's own expressions start from: its params, nothing external.
+    /// What an agent's own expressions start from: its params and the tick rate, nothing external.
+    /// (`pace` is the agent's own rhythm, like `rand`: allowed without a sense.)
     fn agent_scope(&self) -> Scope<'static> {
         let mut scope = Scope::new();
         scope.push_constant("p", self.p_map.clone());
+        scope.push_constant("tick_rate", self.cfg.run.tick_rate);
         scope
     }
 
@@ -1058,20 +1415,53 @@ impl Game {
     fn sense_map(&self, full: &mut Scope<'static>, world: &World, e: &Entity) -> (Map, Vec<String>) {
         let mut out = Map::new();
         let mut errs = Vec::new();
-        let Some(senses) = self.senses.get(&e.kind) else { return (out, errs) };
-        let len = full.len();
-        self.push_entity(full, world, e);
-        self.bind(e, SENSE_SALT);
-        for (name, ast) in senses {
-            match self.rhai.eval_ast_with_scope::<Dynamic>(full, ast) {
-                Ok(v) => {
-                    out.insert(name.as_str().into(), v);
+        if let Some(senses) = self.senses.get(&e.kind) {
+            let len = full.len();
+            self.push_entity(full, world, e);
+            self.bind(e, SENSE_SALT);
+            for (name, ast) in senses {
+                bump(&self.work.evals);
+                match self.rhai.eval_ast_with_scope::<Dynamic>(full, ast) {
+                    Ok(v) => {
+                        out.insert(name.as_str().into(), v);
+                    }
+                    Err(m) => errs.push(format!("sense '{name}': {m}")),
                 }
-                Err(m) => errs.push(format!("sense '{name}': {m}")),
+            }
+            full.rewind(len);
+        }
+        // The brain thinks after the senses, on what the kind's rules would see; its choice becomes a sense.
+        if let Some(b) = self.brains.get(&e.kind) {
+            match self.think(b, world, e, &out) {
+                Ok(choice) => {
+                    out.insert(b.def.sense.as_str().into(), Dynamic::from(choice));
+                }
+                Err(m) => errs.push(format!("brain: {m}")),
             }
         }
-        full.rewind(len);
         (out, errs)
+    }
+
+    /// The brain's choice for this entity: inputs evaluated in the agent's own view, then its genome runs.
+    fn think(&self, b: &Brain, world: &World, e: &Entity, sense: &Map) -> Result<String, String> {
+        let mut scope = self.agent_scope();
+        self.push_entity(&mut scope, world, e);
+        scope.push_constant("sense", sense.clone());
+        self.bind(e, BRAIN_SALT);
+        let values = b
+            .inputs
+            .iter()
+            .map(|(n, ast)| self.eval_int(&mut scope, ast).map_err(|m| format!("input '{n}': {m}")))
+            .collect::<Result<Vec<i64>, String>>()?;
+        let fresh;
+        let genome = if e.genome.len() == b.genes {
+            e.genome.as_slice()
+        } else {
+            fresh = b.fresh(splitmix64(world.seed ^ GENOME_SALT ^ e.id));
+            fresh.as_slice()
+        };
+        let i = b.think(genome, &values)?;
+        Ok(b.def.outputs[i.min(b.def.outputs.len() - 1)].clone())
     }
 
     /// The scope an entity's own expressions see: the full world, or (perception: Senses) me + sense.
@@ -1116,26 +1506,77 @@ impl Game {
         });
     }
 
-    /// Binds the world to this core's context (creates it if missing).
-    fn bind_world(&self, world: Option<&World>) {
-        self.bind_snapshot(world.map(|w| Arc::new(w.clone())).as_ref());
-    }
-
-    fn bind_snapshot(&self, snap: Option<&Arc<World>>) {
+    /// Lends `world` to this core's queries until the guard drops (then the previous binding is back).
+    /// Borrowed, not copied: binding is as cheap on a 10 000-entity world as on an empty one.
+    fn bind_world<'w>(&self, world: &'w World) -> Bound<'w> {
         CTX.with(|c| {
             let mut c = c.borrow_mut();
-            if c.world.as_ref().map(Arc::as_ptr) != snap.map(Arc::as_ptr) {
-                c.world = snap.cloned();
+            if c.work.as_ref().map(Arc::as_ptr) != Some(Arc::as_ptr(&self.work)) {
+                c.work = Some(self.work.clone());
             }
+            Bound { prev: c.world.replace(NonNull::from(world)), _world: PhantomData }
+        })
+    }
+
+    /// How a kind is evaluated each tick (computed on first use: natives attach after compiling).
+    fn plan(&self, kind: &str) -> Plan {
+        if !self.fast.load(Ordering::Relaxed) {
+            return Plan::FULL;
+        }
+        let plans = self.plans.get_or_init(|| {
+            // Machines are scanned whole (a kind's chart may be built from several); only errs towards `true`.
+            let machines = Sees::of(&format!("{:?}", self.def.fsms));
+            self.def
+                .kinds
+                .iter()
+                .map(|(k, def)| {
+                    let rules: Vec<&CompiledRule> =
+                        self.rules.iter().filter(|r| !r.is_action && r.enabled && Self::applies(r, k)).collect();
+                    let (native, chart) = (self.natives.contains_key(k), self.kind_charts.contains_key(k));
+                    let plain = !native && !self.senses.contains_key(k) && !self.brains.contains_key(k);
+                    let sees = if native {
+                        Sees::default()
+                    } else {
+                        let r = rules.iter().fold(Sees::default(), |a, r| a.or(r.sees));
+                        r.or(if chart { machines } else { Sees::default() }).or(Sees::of(&format!("{def:?}")))
+                    };
+                    let plan =
+                        Plan { idle: plain && !chart && rules.is_empty(), guarded: plain && rules.iter().all(|r| r.guard.is_some()), sees };
+                    (k.clone(), plan)
+                })
+                .collect()
         });
+        plans.get(kind).copied().unwrap_or(Plan::FULL)
+    }
+
+    /// A guarded kind produces nothing here if its machine (checked natively) stays put and every rule's guard is
+    /// false: known without building a scope. Anything that needs the interpreter goes the full way.
+    fn all_guards_false(&self, e: &Entity) -> bool {
+        let Ok(mem) = self.memory(e) else { return false };
+        if let (Some(c), Some(m)) = (self.kind_charts.get(&e.kind), &mem)
+            && !c.step(m, &mut GuardOracle { game: self, e }).is_ok_and(|o| !o.changed)
+        {
+            return false;
+        }
+        let mut rules =
+            self.rules.iter().filter(|r| !r.is_action && r.enabled && Self::applies(r, &e.kind) && self.bound(r, e, mem.as_ref()));
+        let quiet = rules.clone().all(|r| r.guard.as_deref().and_then(|g| check_guard(g, e, &self.params)) == Some(false));
+        if quiet {
+            rules.by_ref().for_each(|r| bump(&r.checks));
+        }
+        quiet
     }
 
     /// All of an entity's groups this tick: FSM transition first, then rules (in order).
     fn eval_entity(&self, world: &World, e: &Entity, scopes: &mut Scopes) -> Vec<Group> {
+        let plan = self.plan(&e.kind);
+        if plan.idle || (plan.guarded && self.all_guards_false(e)) {
+            return Vec::new();
+        }
         if !self.agent_view(&e.kind) {
             let scope = &mut scopes.full;
             let len = scope.len();
-            self.push_entity(scope, world, e);
+            self.push_seen(scope, world, e, plan.sees);
             let out = self.eval_entity_in(world, e, scope);
             scope.rewind(len);
             return out;
@@ -1143,7 +1584,7 @@ impl Game {
         let (sense, errs) = self.sense_map(&mut scopes.full, world, e);
         let scope = &mut scopes.agent;
         let len = scope.len();
-        self.push_entity(scope, world, e);
+        self.push_seen(scope, world, e, plan.sees);
         scope.push_constant("sense", sense);
         let mut out: Vec<Group> = errs
             .into_iter()
@@ -1191,7 +1632,7 @@ impl Game {
         };
         if let (Some(c), Some(m)) = (chart, &mem) {
             let stepped = c.step(m, &mut RhaiOracle { game: self, world, e, scope: base });
-            match stepped.and_then(|o| self.state_group(world, e, c, o, base)) {
+            match stepped.and_then(|o| self.state_group(world, e, c, &o, base)) {
                 Ok(Some(g)) => out.push(g),
                 Ok(None) => {}
                 Err(m) => out.push(error("fsm", m)),
@@ -1229,7 +1670,7 @@ impl Game {
         world: &World,
         e: &Entity,
         c: &StateChart,
-        o: Outcome<usize>,
+        o: &Outcome<usize>,
         scope: &mut Scope<'static>,
     ) -> Result<Option<Group>, String> {
         if !o.changed {
@@ -1313,10 +1754,12 @@ impl Game {
     }
 
     fn eval_bool(&self, scope: &mut Scope, ast: &AST) -> Result<bool, String> {
+        bump(&self.work.evals);
         self.rhai.eval_ast_with_scope::<bool>(scope, ast).map_err(|e| e.to_string())
     }
 
     fn eval_int(&self, scope: &mut Scope, ast: &AST) -> Result<i64, String> {
+        bump(&self.work.evals);
         self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string())
     }
 
@@ -1329,22 +1772,29 @@ impl Game {
     }
 
     fn eval_rule_in(&self, world: &World, e: &Entity, rule: &CompiledRule, scope: &mut Scope<'static>) -> Result<Option<Group>, String> {
+        bump(&rule.checks);
+        // A simple condition is checked without the interpreter; false ends here, before any other work.
+        let native = rule.guard.as_deref().filter(|_| self.fast.load(Ordering::Relaxed)).and_then(|g| check_guard(g, e, &self.params));
+        if native == Some(false) {
+            return Ok(None);
+        }
         scope.push_constant("roll", world.roll(e.id, rule.salt));
         self.bind(e, rule.salt);
 
         let it = match &rule.target {
             None => None,
-            Some(t @ (Target::Nearest(_) | Target::NearestIn(..))) => match nearest(world, e, t) {
-                Some((t, d)) => {
-                    scope.push_constant("it", entity_map(t, Some(d)));
-                    Some(t)
-                }
-                None => return Ok(None),
-            },
+            Some(t @ (Target::Nearest(_) | Target::NearestIn(..))) => {
+                bump(&self.work.queries);
+                let Some((t, d)) = nearest(world, e, t) else { return Ok(None) };
+                bump(&self.work.maps);
+                scope.push_constant("it", entity_map(t, Some(d)));
+                Some(t)
+            }
             Some(t) => return Err(format!("target must be Nearest(kind) or NearestIn(kind, state), got {t:?}")),
         };
 
-        if let Some(w) = &rule.when
+        if native.is_none()
+            && let Some(w) = &rule.when
             && !self.eval_bool(scope, w)?
         {
             return Ok(None);
@@ -1359,13 +1809,18 @@ impl Game {
         }
 
         if let Some(script) = &rule.script {
+            bump(&self.work.evals);
             let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
             for item in out {
                 effects.push(effect_from_map(e, item)?);
             }
         }
 
-        Ok((!effects.is_empty()).then(|| Group { source: rule.name.clone(), actor: Some(e.id), effects }))
+        if effects.is_empty() {
+            return Ok(None);
+        }
+        bump(&rule.fires);
+        Ok(Some(Group { source: rule.name.clone(), actor: Some(e.id), effects }))
     }
 
     fn resolve<'a>(&self, world: &'a World, who: &Who<'a>, t: &Target) -> Option<&'a Entity> {
@@ -1399,7 +1854,11 @@ impl Game {
             },
             CDo::Spawn(k) => {
                 let (state, props) = self.template(k);
-                out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x, y: subj.y, z: subj.z, props });
+                let genome = self.brains.get(k).map_or_else(Vec::new, |b| {
+                    let parent = (subj.kind == *k).then_some(subj.genome.as_slice());
+                    b.child(parent, world.rand(subj.id, salt ^ GENOME_SALT))
+                });
+                out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x, y: subj.y, z: subj.z, props, genome });
             }
             CDo::MoveToward(k) => {
                 if let Some((t, _)) = world.nearest(subj, k) {
@@ -1420,11 +1879,19 @@ impl Game {
             CDo::Goto(_) | CDo::Interrupt(_) | CDo::Back => self.change_state(world, who, subj, d, salt, scope, out)?,
             CDo::Move(dx, dy) => {
                 let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
+                // Move takes one step, whatever it is asked: say so, or a "move 2" silently becomes a move 1.
+                if dx.abs() > 1 || dy.abs() > 1 {
+                    out.push(Effect::Emit { e: subj.id, name: format!("clamped: Move({dx}, {dy}) takes one step; MoveBy moves exactly") });
+                }
                 out.push(Effect::Move { e: subj.id, dx, dy, dz: 0 });
             }
             CDo::Move3(dx, dy, dz) => {
                 let (dx, dy, dz) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?, self.eval_int(scope, dz)?);
                 out.push(Effect::Move { e: subj.id, dx, dy, dz });
+            }
+            CDo::MoveBy(dx, dy) => {
+                let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
+                out.push(Effect::MoveBy { e: subj.id, dx, dy, dz: 0 });
             }
             CDo::SetField(name, ast) => {
                 let v = self.eval_int(scope, ast)?;
@@ -1718,10 +2185,10 @@ impl Game {
     /// misspelled prop, undeclared parameter, wrong type → caught at load time.
     fn dry_run(&self, world: &World, errs: &mut Vec<String>) {
         let counts = self.counts(world);
-        self.bind_world(Some(world));
+        let bound = self.bind_world(world);
         let synthetic = |kind: &str| {
             let (state, props) = self.template(kind);
-            Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, z: 0, props }
+            Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, z: 0, props, genome: Vec::new() }
         };
         for kind in self.def.kinds.keys() {
             let e = synthetic(kind);
@@ -1729,6 +2196,13 @@ impl Game {
             for (name, ast) in self.senses.get(kind).into_iter().flatten() {
                 if let Err(m) = self.rhai.eval_ast_with_scope::<Dynamic>(&mut full, ast) {
                     errs.push(format!("kind '{kind}' sense '{name}': {m}"));
+                }
+            }
+            if let Some(b) = self.brains.get(kind) {
+                let mut full = self.tick_scope(world, &counts);
+                let (sense, _) = self.sense_map(&mut full, world, &e);
+                if let Err(m) = self.think(b, world, &e, &sense) {
+                    errs.push(format!("kind '{kind}' brain {m}"));
                 }
             }
             let base = self.entity_scope(world, &e, &counts);
@@ -1825,13 +2299,16 @@ impl Game {
                 }
             }
         }
-        self.bind_world(None);
+        drop(bound);
     }
 }
 
 impl Rules for Game {
     fn validate(&self, world: &World) -> Result<(), Vec<String>> {
         let mut errs = self.compile_errors.clone();
+        if self.cfg.run.tick_rate <= 0 {
+            errs.push(format!("engine.toml: tick_rate must be at least 1 (got {})", self.cfg.run.tick_rate));
+        }
         self.check_refs(&mut errs);
         if errs.is_empty() {
             self.dry_run(world, &mut errs);
@@ -1843,12 +2320,11 @@ impl Rules for Game {
     /// order, so the core count does not change the result.
     fn eval(&self, world: &World) -> Vec<Group> {
         let counts = self.counts(world);
-        let snap = Arc::new(world.clone());
         let entities: Vec<&Entity> = world.entities().values().collect();
         // Each worker builds its own scope once: no shared, locked values.
         let init = || Scopes { full: self.tick_scope(world, &counts), agent: self.agent_scope() };
         let per = |scope: &mut Scopes, e: &&Entity| {
-            self.bind_snapshot(Some(&snap));
+            let _bound = self.bind_world(world);
             self.eval_entity(world, e, scope)
         };
         // In a small world, distributing work costs more than the work: sequential path.
@@ -1970,6 +2446,11 @@ struct RhaiOracle<'g, 'a, 's> {
 
 impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
     fn test(&mut self, g: &usize, salt: u64) -> Result<bool, String> {
+        if self.game.fast.load(Ordering::Relaxed)
+            && let Some(v) = self.game.expr_guards[*g].as_deref().and_then(|t| check_guard(t, self.e, &self.game.params))
+        {
+            return Ok(v);
+        }
         let len = self.scope.len();
         self.scope.push_constant("roll", self.world.roll(self.e.id, FSM_SALT + salt));
         self.game.bind(self.e, FSM_SALT + salt);
@@ -1984,6 +2465,21 @@ impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
         let r = self.game.eval_int(self.scope, &self.game.exprs[*g]);
         self.scope.rewind(len);
         r
+    }
+}
+
+/// Answers chart conditions from native guards only; anything else is an error (the caller then takes the full path).
+struct GuardOracle<'g, 'a> {
+    game: &'g Game,
+    e: &'a Entity,
+}
+
+impl Oracle<usize> for GuardOracle<'_, '_> {
+    fn test(&mut self, g: &usize, _salt: u64) -> Result<bool, String> {
+        self.game.expr_guards[*g].as_deref().and_then(|t| check_guard(t, self.e, &self.game.params)).ok_or_else(String::new)
+    }
+    fn score(&mut self, _g: &usize, _salt: u64) -> Result<i64, String> {
+        Err(String::new())
     }
 }
 
@@ -2063,8 +2559,8 @@ fn wander(world: &World, e: &Entity, salt: u64) -> Effect {
 /// Script output: maps like `#{op: "add", prop: "hunger", value: -1}`.
 fn effect_from_map(e: &Entity, item: Dynamic) -> Result<Effect, String> {
     let m = item.try_cast::<Map>().ok_or("script must return an array of maps")?;
-    let s = |k: &str| m.get(k).and_then(|d| d.clone().into_string().ok()).ok_or(format!("effect map needs string '{k}'"));
-    let i = |k: &str| m.get(k).and_then(|d| d.as_int().ok()).ok_or(format!("effect map needs int '{k}'"));
+    let s = |k: &str| m.get(k).and_then(|d| d.clone().into_string().ok()).ok_or_else(|| format!("effect map needs string '{k}'"));
+    let i = |k: &str| m.get(k).and_then(|d| d.as_int().ok()).ok_or_else(|| format!("effect map needs int '{k}'"));
     Ok(match s("op")?.as_str() {
         "set" => Effect::Set { e: e.id, prop: s("prop")?, v: i("value")? },
         "add" => Effect::Add { e: e.id, prop: s("prop")?, d: i("value")? },

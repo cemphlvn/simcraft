@@ -1,0 +1,139 @@
+{
+ "step": 1,
+ "change": "engine: salts by identity; player actions and spoilage (off)",
+ "seeds": {
+  "1": {
+   "survived": 429,
+   "winters": 1,
+   "first_delivery": 78,
+   "deliveries": 23,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 0,
+   "income": 162,
+   "food_per_trip": 7.04,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "2": {
+   "survived": 293,
+   "winters": 0,
+   "first_delivery": 79,
+   "deliveries": 9,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 0,
+   "income": 76,
+   "food_per_trip": 8.44,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "3": {
+   "survived": 466,
+   "winters": 1,
+   "first_delivery": 93,
+   "deliveries": 18,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 1,
+   "income": 144,
+   "food_per_trip": 8.0,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "4": {
+   "survived": 492,
+   "winters": 1,
+   "first_delivery": 73,
+   "deliveries": 19,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 10,
+   "income": 155,
+   "food_per_trip": 8.16,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "5": {
+   "survived": 462,
+   "winters": 1,
+   "first_delivery": 107,
+   "deliveries": 10,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 1,
+   "income": 62,
+   "food_per_trip": 6.2,
+   "loop_closed": 0,
+   "spring_store": 0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 428.4,
+   "min": 293,
+   "max": 492
+  },
+  "winters": {
+   "mean": 0.8,
+   "min": 0,
+   "max": 1
+  },
+  "first_delivery": {
+   "mean": 86.0,
+   "min": 73,
+   "max": 107
+  },
+  "deliveries": {
+   "mean": 15.8,
+   "min": 9,
+   "max": 23
+  },
+  "peak_ants": {
+   "mean": 13.0,
+   "min": 13,
+   "max": 13
+  },
+  "births": {
+   "mean": 5.0,
+   "min": 5,
+   "max": 5
+  },
+  "starved": {
+   "mean": 13.0,
+   "min": 13,
+   "max": 13
+  },
+  "winter_store": {
+   "mean": 2.4,
+   "min": 0,
+   "max": 10
+  },
+  "income": {
+   "mean": 119.8,
+   "min": 62,
+   "max": 162
+  },
+  "food_per_trip": {
+   "mean": 7.57,
+   "min": 6.2,
+   "max": 8.44
+  },
+  "loop_closed": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "spring_store": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  }
+ },
+ "errors": {}
+}

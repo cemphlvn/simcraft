@@ -330,7 +330,7 @@ fn record_market(ticks: u64) -> Vec<Msg> {
         for (seat, id, action) in plan.into_iter().filter(|_| t % 5 == 4) {
             let tick = e.world().tick;
             let out = e.rules().act(e.world(), seat, id, action, &n(1));
-            e.bus().publish(Msg::Act {
+            e.bus().publish(&Msg::Act {
                 tick,
                 seat: seat.map(String::from),
                 entity: id,
@@ -543,7 +543,7 @@ fn a_log_with_a_restore_still_replays() {
     let mut e = boot(MARKET, MARKET_PANEL).expect("valid");
     let (game, seed, source_hash, hash) = (e.rules().def.name.clone(), 1, e.rules().source_hash, e.world().hash());
     e.bus().subscribe(Filter::All, Box::new(log.clone()));
-    e.bus().publish(Msg::Start { game, seed, source_hash, hash });
+    e.bus().publish(&Msg::Start { game, seed, source_hash, hash });
     for _ in 0..10 {
         e.tick();
     }
@@ -597,8 +597,8 @@ fn golden_colony_hash() {
     for _ in 0..200 {
         e.tick();
     }
-    // Recorded at eval step 017. Change only on purpose, together with the game (and its EVALS.md).
-    assert_eq!(format!("{:016x}", e.world().hash()), "1a081f5acc21b60a");
+    // Recorded at eval step 018 (identity salts). Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "ad127c69b7527bbc");
 }
 
 // --- environments ---
@@ -700,8 +700,8 @@ fn environments_are_checked_like_everything_else() {
 #[test]
 fn an_environment_is_one_hidden_entity() {
     let e = boot_colony(COLONY, &colony_envs()).expect("valid");
-    let seasons: Vec<_> = e.world().of_kind("seasons").collect();
-    assert_eq!(seasons.len(), 1);
+
+    assert_eq!(e.world().of_kind("seasons").count(), 1);
     assert!(e.rules().is_hidden("seasons") && !e.rules().is_hidden("ant"));
     // Unplaced by the layout: it appears once, at (0, 0).
     let game = COLONY.replace(r#"'S': "seasons""#, r#"'S': "ground""#);
@@ -804,6 +804,170 @@ fn golden_colony3d_hash() {
     for _ in 0..200 {
         e.tick();
     }
-    // Recorded at colony3d eval step 000. Change only on purpose, together with the game (and its EVALS.md).
-    assert_eq!(format!("{:016x}", e.world().hash()), "b001a456bb60dbd8");
+    // Recorded at colony3d eval step 001 (identity salts, player actions). Change only on purpose, together with the
+    // game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "8f913e43070d74a7");
+}
+
+// --- tick rate ---
+
+const PACER: &str = r#"#![enable(implicit_some)]
+    Game(name: "pacer",
+        kinds: { "walker": (glyph: 'w', props: { "steps": 0, "rate": 0 }) },
+        rules: [ (name: "walk", for: "walker", when: "pace(3)", then: [ Add("steps", "1") ]),
+                 (name: "rate", for: "walker", then: [ Set("rate", "tick_rate") ]) ])"#;
+
+fn pacer(tick_rate: i64) -> Engine<Running, Game> {
+    let panel =
+        format!("[run]\nseed = 1\nmax_ticks = 1000\ntick_rate = {tick_rate}\n[world]\nwidth = 4\nheight = 1\n[spawn]\nwalker = 4\n");
+    boot(PACER, &panel).expect("valid")
+}
+
+#[test]
+fn pace_keeps_speed_per_second_at_any_tick_rate() {
+    for rate in [10, 60] {
+        let mut e = pacer(rate);
+        for _ in 0..rate * 4 {
+            e.tick();
+        }
+        for w in e.world().entities().values() {
+            assert_eq!(w.props["steps"], 12, "3 steps a second for 4 seconds at {rate} ticks/s");
+            assert_eq!(w.props["rate"], rate);
+        }
+    }
+}
+
+#[test]
+fn pace_spaces_steps_evenly() {
+    let mut e = pacer(60);
+    let mut when: Vec<u64> = Vec::new();
+    let first = *e.world().entities().keys().next().unwrap();
+    let mut last = 0;
+    for t in 1..=240 {
+        e.tick();
+        let s = e.world().get(first).unwrap().props["steps"];
+        if s != last {
+            when.push(t);
+            last = s;
+        }
+    }
+    let gaps: Vec<u64> = when.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().all(|g| *g == 20), "one step every 20 ticks at 60 ticks/s: {gaps:?}");
+}
+
+#[test]
+fn tick_rate_must_be_positive() {
+    let panel = "[run]\nseed = 1\nmax_ticks = 10\ntick_rate = 0\n[world]\nwidth = 4\nheight = 1\n[spawn]\nwalker = 1\n";
+    let errs = boot(PACER, panel).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("tick_rate must be at least 1")), "{errs:?}");
+}
+
+// --- brains (games/forage) ---
+
+const FORAGE: &str = include_str!("../../../games/forage/game.ron");
+const FORAGE_PANEL: &str = include_str!("../../../games/forage/engine.toml");
+
+fn nest_food(e: &Engine<Running, Game>) -> i64 {
+    e.world().entities().values().find(|x| x.kind == "nest").map(|n| n.props["food"]).unwrap()
+}
+
+#[test]
+fn golden_forage_hash() {
+    let mut e = boot(FORAGE, FORAGE_PANEL).expect("valid");
+    for _ in 0..300 {
+        e.tick();
+    }
+    // Recorded at forage eval step 000. Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "bc993f622da59a35");
+}
+
+#[test]
+fn every_ant_has_its_own_brain() {
+    let e = boot(FORAGE, FORAGE_PANEL).expect("valid");
+    let genomes: Vec<&Vec<i8>> = e.world().of_kind("ant").map(|a| &a.genome).collect();
+    assert_eq!(genomes.len(), 8);
+    assert!(genomes.iter().all(|g| g.len() == 7 * 8 + 8 * 4), "(6 inputs + bias) × 8 hidden + 8 × 4 outputs, one byte each");
+    assert!(genomes.windows(2).all(|w| w[0] != w[1]), "no two alike");
+    assert!(e.world().of_kind("bush").all(|b| b.genome.is_empty()), "only learning kinds carry one");
+}
+
+#[test]
+fn a_colony_of_brains_learns_to_forage() {
+    let mut e = boot(FORAGE, FORAGE_PANEL).expect("valid");
+    for _ in 0..1000 {
+        e.tick();
+    }
+    let early = nest_food(&e);
+    for _ in 1000..3000 {
+        e.tick();
+    }
+    let before = nest_food(&e);
+    for _ in 3000..4000 {
+        e.tick();
+    }
+    let late = nest_food(&e) - before;
+    // Random brains average ~10 a thousand ticks (one seed's early luck can reach 50); without heredity the late
+    // rate stays near 1 (EVALS.md control). Learned brains: well above both.
+    assert!(late >= 150 && late > 2 * early, "deliveries per 1000 ticks: {early} at first, {late} after 3000 ticks");
+}
+
+#[test]
+fn brains_survive_save_and_load() {
+    let mut a = boot(FORAGE, FORAGE_PANEL).expect("valid");
+    for _ in 0..600 {
+        a.tick();
+    }
+    let json = serde_json::to_string(&a.snapshot()).expect("serializes");
+    assert!(json.contains("genome"));
+    let future: Vec<u64> = (0..100).map(|_| a.tick().hash).collect();
+    let mut b = boot(FORAGE, FORAGE_PANEL).expect("valid");
+    b.restore(serde_json::from_str(&json).expect("parses")).expect("restores");
+    assert_eq!(future, (0..100).map(|_| b.tick().hash).collect::<Vec<_>>(), "genomes are part of the saved world");
+}
+
+#[test]
+fn brain_mistakes_are_reported() {
+    let errs = boot(&FORAGE.replace("perception: Senses,", "perception: Direct,"), FORAGE_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("a brain needs `perception: Senses`")), "{errs:?}");
+    let errs = boot(&FORAGE.replace(r#""load": "me.load * 100""#, r#""load": "me.lod * 100""#), FORAGE_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("lod")), "{errs:?}");
+    let errs =
+        boot(&FORAGE.replace(r#"outputs: ["north", "east", "south", "west"]"#, "outputs: []"), FORAGE_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("at least one output")), "{errs:?}");
+}
+
+// --- lanes (first-person positions) ---
+
+#[test]
+fn golden_lanes_hash() {
+    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../games/lanes")), None).expect("loads");
+    let mut e = Engine::<Loaded, _>::new(world, g).validate().expect("valid").start();
+    for _ in 0..120 {
+        e.tick();
+    }
+    // Recorded when the game was made. Change only on purpose, together with the game.
+    assert_eq!(format!("{:016x}", e.world().hash()), "70ebfcf7985ff7a6");
+}
+
+#[test]
+fn lanes_goto_moves_one_position_per_tick_and_refuses_where_you_already_are() {
+    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../games/lanes")), None).expect("loads");
+    let mut e = Engine::<Loaded, _>::new(world, g).validate().expect("valid").start();
+    e.tick();
+    let car = e.world().of_kind("car").next().unwrap().id;
+    let x0 = e.world().get(car).unwrap().x;
+    let go = |e: &Engine<Running, Game>, lane: i64| {
+        let args = [("lane".to_string(), lane)].into_iter().collect();
+        e.rules().act(e.world(), None, car, "goto", &args)
+    };
+    assert!(go(&e, x0).is_err(), "the position you are headed to is not a move");
+    let group = go(&e, 3).expect("another position is");
+    e.queue(group);
+    let xs: Vec<i64> = (0..4)
+        .map(|_| {
+            e.tick();
+            e.world().get(car).unwrap().x
+        })
+        .collect();
+    assert_eq!(xs, vec![x0, x0 + 1, x0 + 2, 3].into_iter().map(|x| x.min(3)).collect::<Vec<_>>(), "one position a tick");
 }

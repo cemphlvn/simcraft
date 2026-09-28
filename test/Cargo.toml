@@ -15,7 +15,11 @@ rhai.workspace = true
 
 [dev-dependencies]
 sim-state.workspace = true
+sim-kernel.workspace = true
 sim-render = { path = "../crates/sim-render" }
 serde_json.workspace = true
 insta = "1.48"
 proptest = "1.11"
+
+[lints]
+workspace = true

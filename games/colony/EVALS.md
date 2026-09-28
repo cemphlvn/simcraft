@@ -23,6 +23,7 @@ Raw results: `evals/NNN-*.json`. Re-run the last step: `tools/eval.py games/colo
 | 015 | Brood grows with warmth (lay chance × felt warmth) | 2135.2 | 197.8 | 66 | Mixed: stores up (spring 85 → 102), one world lost (4 of 5). Births barely move (5.4 → 5.6): brood is limited by nurses, not warmth |
 | 016 | Ants move with warmth (walking speed ∝ temperature, min 10 %) | 1149.8 | 61.8 | 78 | **Loop 1 of 5.** Slow ants in the cool start of summer break recruitment and trails: scent evaporates per tick while ants crawl |
 | 017 | Fix: no walls. Ants are not solid, so "search outward" walked them into the wall ring (seen in the viewer) | 948.2 | 49 | 78 | Within the noise of 5 seeds (loop still 1 of 5). Correctness, not tuning |
+| 018 | **Engine, no game change:** state-machine and environment rules get their random salt from their identity (name, machine, state), not their position, so adding a rule or an action elsewhere never changes their dice (see colony3d EVALS, Next) | 836.4 | 43.4 | 540.6 | A reseed, not a change: every roll is new. It shows how luck-bound the colony is on 5 seeds: one seed never finds food (first delivery 2400), survival 948 → 836 |
 
 ## Probes after step 004 (one lever each, `--set`, not saved)
 

@@ -68,7 +68,7 @@ fn main() {
         let g = engine.rules();
         (g.def.name.clone(), g.cfg.run.seed, g.source_hash, engine.world().hash())
     };
-    engine.bus().publish(Msg::Start { game, seed, source_hash, hash });
+    engine.bus().publish(&Msg::Start { game, seed, source_hash, hash });
 
     let mut session = Session { engine };
     let hello = json!({ "ok": true, "ready": session.game().def.name, "bus": bus, "hint": "send {\"cmd\":\"info\"}" });

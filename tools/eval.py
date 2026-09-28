@@ -9,6 +9,7 @@ The designer declares the metrics in games/<name>/eval.toml (see docs/evals.md).
 the same seeds, and simcraft is deterministic, so a saved eval is also a regression test.
 Standard library only.
 """
+
 import argparse
 import collections
 import json
@@ -45,8 +46,9 @@ class Run:
     def __init__(self, game_dir: Path, seed: int, cfg: dict, tmp: Path):
         panel = tmp / f"panel_{seed}.toml"
         panel.write_text(panel_for((game_dir / "engine.toml").read_text(), seed, cfg["max_ticks"], cfg.get("set", ())))
-        sim = subprocess.Popen([str(AGENT), str(game_dir), "--config", str(panel)],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        sim = subprocess.Popen(
+            [str(AGENT), str(game_dir), "--config", str(panel)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        )
 
         def call(req):
             sim.stdin.write(json.dumps(req) + "\n")
@@ -100,12 +102,23 @@ class Run:
             return [v for _, v in s.get(name, [])] or [0]
 
         return {
-            "end_tick": self.end_tick, "result": self.result, "p": self.p,
-            "events": self.events, "first": lambda name, default=None: self.first.get(name, self.end_tick if default is None else default),
-            "peak": lambda name: max(values(name)), "low": lambda name: min(values(name)),
-            "mean": lambda name: sum(values(name)) / len(values(name)), "last": lambda name: values(name)[-1],
+            "end_tick": self.end_tick,
+            "result": self.result,
+            "p": self.p,
+            "events": self.events,
+            "first": lambda name, default=None: self.first.get(name, self.end_tick if default is None else default),
+            "peak": lambda name: max(values(name)),
+            "low": lambda name: min(values(name)),
+            "mean": lambda name: sum(values(name)) / len(values(name)),
+            "last": lambda name: values(name)[-1],
             "at": lambda tick, name: min(s.get(name, [(0, 0)]), key=lambda tv: abs(tv[0] - tick))[1],
-            "min": min, "max": max, "abs": abs, "round": round, "sum": sum, "len": len, "range": range,
+            "min": min,
+            "max": max,
+            "abs": abs,
+            "round": round,
+            "sum": sum,
+            "len": len,
+            "range": range,
         }
 
 
@@ -151,8 +164,13 @@ def main():
     ap.add_argument("game", type=Path)
     ap.add_argument("--save", metavar="CHANGE", help="record this run as the next step, described by CHANGE")
     ap.add_argument("--check", action="store_true", help="re-run the last saved step and fail if any metric moved")
-    ap.add_argument("--set", action="append", default=[], metavar="PARAM=VALUE",
-                    help="try a param without editing the game (repeatable); not allowed with --save")
+    ap.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="PARAM=VALUE",
+        help="try a param without editing the game (repeatable); not allowed with --save",
+    )
     a = ap.parse_args()
     game_dir = (ROOT / a.game).resolve() if not a.game.is_absolute() else a.game
     cfg = tomllib.loads((game_dir / "eval.toml").read_text())
@@ -170,22 +188,27 @@ def main():
         if not last:
             sys.exit("nothing saved yet: run with --save first")
         # Only metrics both runs have: adding a metric is not a regression.
-        moved = {k: (last["seeds"][str(s)][k], per_seed[s][k]) for s in cfg["seeds"] for k in cfg["metrics"]
-                 if k in last["seeds"][str(s)] and last["seeds"][str(s)][k] != per_seed[s][k]}
+        moved = {
+            k: (last["seeds"][str(s)][k], per_seed[s][k])
+            for s in cfg["seeds"]
+            for k in cfg["metrics"]
+            if k in last["seeds"][str(s)] and last["seeds"][str(s)][k] != per_seed[s][k]
+        }
         print(f"check against {history[-1].name}: " + ("OK, identical" if not moved else f"{len(moved)} values moved"))
         for k, (b, n) in list(moved.items())[:10]:
             print(f"  {k}: {b} -> {n}")
         sys.exit(1 if moved else 0)
 
-    print(f"{game_dir.name}: {len(cfg['seeds'])} seeds, up to {cfg['max_ticks']} ticks"
-          + (f"   (vs {history[-1].name})" if last else ""))
+    print(f"{game_dir.name}: {len(cfg['seeds'])} seeds, up to {cfg['max_ticks']} ticks" + (f"   (vs {history[-1].name})" if last else ""))
     print(f"  {'metric':<18} {'mean':>9} {'min':>7} {'max':>7}   {'before':>9}  {'':<6}  goal")
     for name, m in cfg["metrics"].items():
         now = agg[name]
         before = last["metrics"].get(name, {}).get("mean") if last else None
         v = verdict(m.get("goal", ""), before, now["mean"]) if before is not None else ""
-        print(f"  {name:<18} {fmt(now['mean']):>9} {fmt(now['min']):>7} {fmt(now['max']):>7}   "
-              f"{fmt(before) if before is not None else '-':>9}  {v:<6}  {m.get('goal', 'info')}")
+        print(
+            f"  {name:<18} {fmt(now['mean']):>9} {fmt(now['min']):>7} {fmt(now['max']):>7}   "
+            f"{fmt(before) if before is not None else '-':>9}  {v:<6}  {m.get('goal', 'info')}"
+        )
     if errors:
         print(f"  runtime errors: {errors}")
 
@@ -194,8 +217,12 @@ def main():
         slug = re.sub(r"[^a-z0-9]+", "-", a.save.lower()).strip("-")[:40]
         out = game_dir / "evals" / f"{n:03d}-{slug}.json"
         out.parent.mkdir(exist_ok=True)
-        out.write_text(json.dumps({"step": n, "change": a.save, "seeds": {str(k): v for k, v in per_seed.items()},
-                                   "metrics": agg, "errors": errors}, indent=1) + "\n")
+        out.write_text(
+            json.dumps(
+                {"step": n, "change": a.save, "seeds": {str(k): v for k, v in per_seed.items()}, "metrics": agg, "errors": errors}, indent=1
+            )
+            + "\n"
+        )
         print(f"saved {out.relative_to(ROOT)}")
 
 

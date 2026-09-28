@@ -48,6 +48,14 @@ pub struct RunCfg {
     /// Does not change the result: the same seed gives the same hash at any core count.
     #[serde(default)]
     pub threads: usize,
+    /// Ticks per second of game time: how fast a viewer plays the game at 1x, and what `tick_rate` / `pace`
+    /// mean in rules. Changing it changes the game only through rules that read it.
+    #[serde(default = "ten")]
+    pub tick_rate: i64,
+}
+
+fn ten() -> i64 {
+    10
 }
 
 #[derive(Debug, Clone, Deserialize)]

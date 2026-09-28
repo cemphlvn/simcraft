@@ -15,6 +15,9 @@ pub struct Entity {
     #[serde(default)]
     pub z: i64,
     pub props: BTreeMap<String, i64>,
+    /// A learning agent's own weights (int8, one byte each): opaque to the core, inherited by its young.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genome: Vec<i8>,
 }
 
 fn one() -> i64 {
@@ -206,7 +209,7 @@ impl World {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let e = Entity { id, kind: kind.into(), state: state.into(), x, y, z, props };
+        let e = Entity { id, kind: kind.into(), state: state.into(), x, y, z, props, genome: Vec::new() };
         self.entities.insert(id, e);
         let c = self.cell(x, y, z);
         self.grid[c].push(id); // ids are issued ascending, so order is preserved
@@ -259,8 +262,34 @@ impl World {
         true
     }
 
+    /// Exactly (dx, dy, dz) cells in one go (a dash, a leap): if the destination is inside the world, not terrain
+    /// and (for a solid entity) free. Nothing between is checked. True if it moved.
+    pub fn leap(&mut self, id: EntityId, dx: i64, dy: i64, dz: i64) -> bool {
+        let Some(e) = self.entities.get(&id) else { return false };
+        let (x, y, z) = self.clamp3(e.x + dx, e.y + dy, e.z + dz);
+        let solid = self.solid.contains(&e.kind);
+        if (x, y, z) == (e.x, e.y, e.z) || self.is_terrain(x, y, z) || (solid && self.blocked3(x, y, z)) {
+            return false;
+        }
+        let from = self.cell(e.x, e.y, e.z);
+        let to = self.cell(x, y, z);
+        self.grid[from].retain(|&i| i != id);
+        let cell = &mut self.grid[to];
+        let pos = cell.partition_point(|&i| i < id);
+        cell.insert(pos, id);
+        let e = self.entities.get_mut(&id).expect("checked above");
+        (e.x, e.y, e.z) = (x, y, z);
+        true
+    }
+
     pub fn props_mut(&mut self, id: EntityId) -> Option<&mut BTreeMap<String, i64>> {
         self.entities.get_mut(&id).map(|e| &mut e.props)
+    }
+
+    pub fn set_genome(&mut self, id: EntityId, genome: Vec<i8>) {
+        if let Some(e) = self.entities.get_mut(&id) {
+            e.genome = genome;
+        }
     }
 
     pub fn set_state(&mut self, id: EntityId, state: String) {
@@ -454,6 +483,11 @@ impl World {
             for (k, v) in &e.props {
                 h.str(k);
                 h.u64(*v as u64);
+            }
+            // Only learning agents have a genome: other games keep their hashes.
+            if !e.genome.is_empty() {
+                h.str("genome");
+                e.genome.iter().for_each(|g| h.u64(*g as u8 as u64));
             }
         }
         for (name, values) in &self.fields {

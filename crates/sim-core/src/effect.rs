@@ -28,6 +28,14 @@ pub enum Effect {
         #[serde(default)]
         dz: i64,
     },
+    /// Exactly (dx, dy, dz) cells (a dash); counts as the entity's one move this tick.
+    MoveBy {
+        e: EntityId,
+        dx: i64,
+        dy: i64,
+        #[serde(default)]
+        dz: i64,
+    },
     Spawn {
         kind: String,
         state: String,
@@ -36,6 +44,9 @@ pub enum Effect {
         #[serde(default)]
         z: i64,
         props: BTreeMap<String, i64>,
+        /// The newborn's genome (a learning kind), else empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        genome: Vec<i8>,
     },
     /// A field value at a voxel (no entity involved).
     FieldSet {
@@ -74,6 +85,7 @@ impl Effect {
             | Effect::Add { e, .. }
             | Effect::SetState { e, .. }
             | Effect::Move { e, .. }
+            | Effect::MoveBy { e, .. }
             | Effect::Despawn { e }
             | Effect::Emit { e, .. }
             | Effect::Need { e, .. } => Some(*e),
@@ -146,15 +158,22 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
                         world.move3(e, dx, dy, dz);
                     }
                 }
+                Effect::MoveBy { e, dx, dy, dz } => {
+                    if moved.insert(e) {
+                        world.leap(e, dx, dy, dz);
+                    }
+                }
                 Effect::FieldSet { name, x, y, z, v } => world.set_field(&name, x, y, z, v),
                 Effect::FieldAdd { name, x, y, z, d } => {
                     if let Some(v) = world.field(&name, x, y, z) {
                         world.set_field(&name, x, y, z, v + d);
                     }
                 }
-                Effect::Spawn { kind, state, x, y, z, props } => {
+                Effect::Spawn { kind, state, x, y, z, props, genome } => {
                     let parent = g.actor.unwrap_or(0);
-                    if world.spawn3(&kind, &state, x, y, z, props).is_none() {
+                    if let Some(id) = world.spawn3(&kind, &state, x, y, z, props) {
+                        world.set_genome(id, genome);
+                    } else {
                         // a solid kind could not spawn into an occupied cell
                         events.push(Event { tick: world.tick, source: g.source.clone(), entity: parent, name: "blocked".into() });
                     }

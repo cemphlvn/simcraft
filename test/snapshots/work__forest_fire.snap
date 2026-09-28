@@ -1,0 +1,9 @@
+---
+source: test/tests/all/work.rs
+expression: profile(&dir)
+---
+ticks 60, entities per tick 2048.0
+per tick:        evals    2119.2  queries     71.2  maps      0.0
+per entity-tick: evals      1.03  queries     0.03  maps     0.00
+hottest rules (checks per tick, % that fired):
+  lightning                     71.2    0.0%

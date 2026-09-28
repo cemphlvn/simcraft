@@ -1,0 +1,15 @@
+---
+source: test/tests/all/work.rs
+expression: profile(&dir)
+---
+ticks 60, entities per tick 580.3
+per tick:        evals     262.5  queries    118.1  maps    102.2
+per entity-tick: evals      0.45  queries     0.20  maps     0.18
+hottest rules (checks per tick, % that fired):
+  evaporate                    559.0    0.0%
+  appetite                      12.3  100.0%
+  eat                           12.3    0.0%
+  eat_by_warmth                 12.3    2.7%
+  go_hungry                     12.3   18.7%
+  grow_older                    12.3  100.0%
+checked but never fired: eat, starve, thatch, follow_scent, deliver

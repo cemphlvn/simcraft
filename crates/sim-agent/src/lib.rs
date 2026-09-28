@@ -58,7 +58,7 @@ impl Session {
         match req {
             Request::Info { seat } => Ok(self.info(seat.as_deref())),
             Request::Observe { entity, seat } => self.observe(entity, seat.as_deref()),
-            Request::Act { seat, actions } => self.act(seat.as_deref(), actions),
+            Request::Act { seat, actions } => self.act(seat.as_deref(), &actions),
             Request::Step { n } => Ok(self.step(n.unwrap_or(1))),
             Request::Hash => {
                 let w = self.engine.world();
@@ -106,6 +106,7 @@ impl Session {
             "game": g.def.name,
             "world": { "width": w.width, "height": w.height },
             "max_ticks": g.cfg.run.max_ticks,
+            "tick_rate": g.cfg.run.tick_rate,
             "kinds": kinds,
             "controllable": g.cfg.agent.controllable,
             "seats": g.cfg.agent.seats.keys().collect::<Vec<_>>(),
@@ -167,7 +168,7 @@ impl Session {
                 "entities": w.entities().values().collect::<Vec<_>>(),
             }));
         };
-        let me = w.get(id).ok_or(format!("entity {id} does not exist"))?;
+        let me = w.get(id).ok_or_else(|| format!("entity {id} does not exist"))?;
         let r = self.game().cfg.agent.observe_radius;
         let (x0, y0) = w.clamp(me.x - r, me.y - r);
         let (x1, y1) = w.clamp(me.x + r, me.y + r);
@@ -202,14 +203,14 @@ impl Session {
     }
 
     /// Each request is evaluated separately: if one is rejected, the others are still queued.
-    fn act(&mut self, seat: Option<&str>, actions: Vec<ActionReq>) -> Result<Value, String> {
+    fn act(&mut self, seat: Option<&str>, actions: &[ActionReq]) -> Result<Value, String> {
         let (world, game) = (self.engine.world(), self.engine.rules());
         let outcomes: Vec<Result<Group, String>> = actions.iter().map(|a| game.act(world, seat, a.entity, &a.action, &a.args)).collect();
         let mut results = Vec::new();
         for (a, out) in actions.iter().zip(outcomes) {
             let tick = self.engine.world().tick;
             let error = out.as_ref().err().cloned();
-            self.engine.bus().publish(Msg::Act {
+            self.engine.bus().publish(&Msg::Act {
                 tick,
                 seat: seat.map(String::from),
                 entity: a.entity,

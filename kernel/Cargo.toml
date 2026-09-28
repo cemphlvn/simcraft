@@ -1,0 +1,13 @@
+[package]
+name = "sim-kernel"
+description = "Integer tensor kernel: runs ONNX graphs bit-identically on every platform (brains and rules)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Protobuf without protoc: the ONNX messages we read are declared by hand in `proto.rs`.
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+
+[lints]
+workspace = true

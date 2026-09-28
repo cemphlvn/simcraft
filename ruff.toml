@@ -1,0 +1,7 @@
+# Same house style as rustfmt.toml: one width across the repo.
+line-length = 140
+target-version = "py311"
+
+[lint]
+# Defaults (pyflakes, pycodestyle errors) + bugbear: likely bugs show as findings, not in review.
+extend-select = ["B"]

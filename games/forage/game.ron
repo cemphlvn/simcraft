@@ -1,0 +1,114 @@
+#![enable(implicit_some)]
+// Forage. Ants are born with a brain and nothing else: no rule tells them where food or home is.
+// Each ant's brain is its own small network (its genome). An ant that carries berries home lives longer and has
+// young; the young inherit its brain with small mutations. Ants that wander starve. Over generations the colony
+// learns to forage: natural selection, deterministic, replayable.
+Game(
+    name: "forage",
+    perception: Senses,
+
+    kinds: {
+        "nest": (glyph: 'N', solid: true, fsm: "nest", props: { "food": 0 },
+                 senses: { "population": "count.ant", "clock": "tick" }),
+        "bush": (glyph: '*', solid: true, fsm: "bush", props: { "berries": 3 },
+                 glyphs: { "Ripe": '*', "Bare": 'o' },
+                 senses: { "clock": "tick" }),
+        "ant":  (glyph: 'a', fsm: "ant",
+                 props: { "life": 0, "load": 0, "age": 0, "delivered": 0 },
+                 glyphs: { "Carry": 'c' },
+                 // Where things are, felt as a direction (-1, 0, 1) on each axis.
+                 senses: { "food_x": r#"toward_x("bush", "Ripe")"#, "food_y": r#"toward_y("bush", "Ripe")"#,
+                           "home_x": r#"toward_x("nest")"#, "home_y": r#"toward_y("nest")"#,
+                           "population": "count.ant" },
+                 // Five numbers in, one of four steps out. Nothing says which step is good.
+                 brain: (inputs: { "food_x": "sense.food_x * 100", "food_y": "sense.food_y * 100",
+                                   "home_x": "sense.home_x * 100", "home_y": "sense.home_y * 100",
+                                   "load": "me.load * 100",
+                                   // A coin to flip: lets a brain explore instead of looping.
+                                   "noise": "rand(201) - 100" },
+                         hidden: [8],
+                         outputs: ["north", "east", "south", "west"],
+                         mutation: 40, step: 12)),
+    },
+
+    params: {
+        "start_life": 150,     // ticks an ant lives without food
+        "snack": 60,           // life from a berry eaten on the spot (finding food already pays)
+        "meal": 120,           // life a delivery gives
+        "max_life": 400,
+        "lifespan": 1500,      // old age: generations must turn over
+        "birth_at": 250,       // an ant this well fed has one young...
+        "birth_cost": 120,     // ...and pays for it with life
+        "max_ants": 60,
+        "min_ants": 20,        // below this, a newcomer with a random brain arrives now and then
+        "arrive_every": 10,
+        "bush_max": 3, "regrow_every": 20,
+    },
+
+    layout: (
+        legend: { 'N': "nest", '*': "bush", 'a': "ant" },
+        rows: [
+            "..............................",
+            "..*........................*..",
+            "..............................",
+            "..............................",
+            ".........*..........*.........",
+            "..............................",
+            "..............aaa.............",
+            "..............aNa.............",
+            "..............aaa.............",
+            "..............................",
+            ".........*..........*.........",
+            "..............................",
+            "..............................",
+            "..*........................*..",
+            "..............................",
+        ],
+    ),
+
+    fsms: {
+        "nest": (initial: "Open", transitions: [], states: { "Open": () }),
+        "bush": (
+            initial: "Ripe",
+            transitions: [
+                (from: "Ripe", to: "Bare", when: "me.berries == 0"),
+                (from: "Bare", to: "Ripe", when: "me.berries > 0"),
+            ],
+        ),
+        "ant": (
+            initial: "Search",
+            states: {
+                "Search": (rules: [
+                    (name: "pick", target: NearestIn("bush", "Ripe"), when: "it.dist <= 1",
+                     then: [ On(It, [ Need("berries", "1"), Add("berries", "-1") ]), Set("load", "1"),
+                             Set("life", "min(p.max_life, me.life + p.snack)"), Goto("Carry") ]),
+                ]),
+                "Carry": (rules: [
+                    (name: "deliver", target: Nearest("nest"), when: "it.dist <= 1",
+                     then: [ On(It, [ Add("food", "1") ]), Set("load", "0"),
+                             Set("life", "min(p.max_life, me.life + p.meal)"), Add("delivered", "1"),
+                             Goto("Search"), Emit("delivered") ]),
+                ]),
+            },
+            transitions: [],
+            rules: [
+                (name: "born", when: "me.life == 0 && me.age == 0", then: [ Set("life", "p.start_life") ]),
+                (name: "north", when: r#"sense.choice == "north""#, then: [ Move("0", "-1") ]),
+                (name: "east",  when: r#"sense.choice == "east""#,  then: [ Move("1", "0") ]),
+                (name: "south", when: r#"sense.choice == "south""#, then: [ Move("0", "1") ]),
+                (name: "west",  when: r#"sense.choice == "west""#,  then: [ Move("-1", "0") ]),
+                (name: "live", then: [ Add("life", "-1"), Add("age", "1") ]),
+                (name: "young", when: "me.life >= p.birth_at && sense.population < p.max_ants",
+                 then: [ Add("life", "-p.birth_cost"), Spawn("ant"), Emit("born") ]),
+                (name: "die", when: "me.age > 0 && (me.life <= 0 || me.age >= p.lifespan)", then: [ Emit("died"), Despawn(Me) ]),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "regrow", for: "bush", when: "sense.clock % p.regrow_every == 0 && me.berries < p.bush_max",
+         then: [ Add("berries", "1") ]),
+        (name: "arrive", for: "nest", when: "sense.population < p.min_ants && sense.clock % p.arrive_every == 0",
+         then: [ Spawn("ant") ]),
+    ],
+)

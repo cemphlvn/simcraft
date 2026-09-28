@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "test"]
+members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "kernel", "test"]
 
 [workspace.package]
 edition = "2024"
@@ -11,6 +11,7 @@ license = "MIT"
 sim-core = { path = "crates/sim-core" }
 sim-rules = { path = "crates/sim-rules" }
 sim-state = { path = "crates/sim-state" }
+sim-kernel = { path = "kernel" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ron = "0.12"
@@ -25,6 +26,32 @@ rayon = "1.12"
 # debugger by raising its `debug` here.
 [profile.dev]
 debug = "line-tables-only"
+# No incremental cache: every build here goes through sccache, which cannot cache incremental compiles (it refused
+# 46 of them, 0 hits) while the incremental cache itself grew to ~2 GB. Without it our crates are cached like
+# dependencies, and target/ stays small. Tests use the dev profile.
+incremental = false
+# On macOS the default ("unpacked") keeps our crates' line tables in thousands of loose object files next to every
+# build (~600 MB here). "packed" gathers them into one small .dSYM per binary; backtraces keep their line numbers.
+split-debuginfo = "packed"
 
 [profile.dev.package."*"]
 debug = false
+
+# Performance lints: work the code does for nothing (a clone that is dropped, an allocation per call, a value moved
+# where a borrow would do). On for every crate, so efficient code is the default and waste shows up in clippy.
+[workspace.lints.clippy]
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+or_fun_call = "warn"
+implicit_clone = "warn"
+assigning_clones = "warn"
+trivially_copy_pass_by_ref = "warn"
+inefficient_to_string = "warn"
+unnecessary_to_owned = "warn"
+needless_collect = "warn"
+large_types_passed_by_value = "warn"
+format_collect = "warn"
+iter_overeager_cloned = "warn"
+redundant_allocation = "warn"
+box_collection = "warn"
+vec_box = "warn"

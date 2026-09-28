@@ -99,10 +99,10 @@ impl Bus {
         self.subs.is_empty()
     }
 
-    pub fn publish(&mut self, msg: Msg) {
+    pub fn publish(&mut self, msg: &Msg) {
         for (filter, sink) in &mut self.subs {
-            if filter.accepts(&msg) {
-                sink.publish(&msg);
+            if filter.accepts(msg) {
+                sink.publish(msg);
             }
         }
     }

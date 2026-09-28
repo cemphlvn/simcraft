@@ -1,0 +1,79 @@
+{
+ "step": 0,
+ "change": "baseline: brains, snack, noise input",
+ "seeds": {
+  "1": {
+   "early_rate": 41,
+   "late_rate": 286.8,
+   "per_ant": 5.62,
+   "first_breeding": 570,
+   "births": 2960,
+   "ants": 51.1
+  },
+  "2": {
+   "early_rate": 2,
+   "late_rate": 97.6,
+   "per_ant": 4.93,
+   "first_breeding": 712,
+   "births": 821,
+   "ants": 19.8
+  },
+  "3": {
+   "early_rate": 0,
+   "late_rate": 195.8,
+   "per_ant": 6.7,
+   "first_breeding": 4134,
+   "births": 1305,
+   "ants": 29.2
+  },
+  "4": {
+   "early_rate": 1,
+   "late_rate": 145.6,
+   "per_ant": 6.31,
+   "first_breeding": 534,
+   "births": 1008,
+   "ants": 23.1
+  },
+  "5": {
+   "early_rate": 1,
+   "late_rate": 238.2,
+   "per_ant": 6.64,
+   "first_breeding": 691,
+   "births": 2173,
+   "ants": 35.9
+  }
+ },
+ "metrics": {
+  "early_rate": {
+   "mean": 9.0,
+   "min": 0,
+   "max": 41
+  },
+  "late_rate": {
+   "mean": 192.8,
+   "min": 97.6,
+   "max": 286.8
+  },
+  "per_ant": {
+   "mean": 6.04,
+   "min": 4.93,
+   "max": 6.7
+  },
+  "first_breeding": {
+   "mean": 1328.2,
+   "min": 534,
+   "max": 4134
+  },
+  "births": {
+   "mean": 1653.4,
+   "min": 821,
+   "max": 2960
+  },
+  "ants": {
+   "mean": 31.82,
+   "min": 19.8,
+   "max": 51.1
+  }
+ },
+ "errors": {}
+}

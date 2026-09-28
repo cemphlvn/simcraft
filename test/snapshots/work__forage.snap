@@ -1,0 +1,15 @@
+---
+source: test/tests/all/work.rs
+expression: profile(&dir)
+---
+ticks 60, entities per tick 20.4
+per tick:        evals     270.5  queries     57.0  maps     63.6
+per entity-tick: evals     13.26  queries     2.79  maps     3.12
+hottest rules (checks per tick, % that fired):
+  born                          11.4    2.0%
+  die                           11.4    0.0%
+  east                          11.4   41.1%
+  live                          11.4  100.0%
+  north                         11.4   25.6%
+  south                         11.4   17.8%
+checked but never fired: die, young, deliver

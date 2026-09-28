@@ -20,8 +20,8 @@ Game(
 
     kinds: {
         "entrance": (glyph: 'O'),
-        "nest":   (glyph: 'N', fsm: "nest", props: { "food": 0, "born": 0, "income": 0 },
-                   senses: { "first_tick": "tick == 0" }),
+        "nest":   (glyph: 'N', fsm: "nest", props: { "food": 0, "born": 0, "income": 0, "spoiled": 0, "rally": 0 },
+                   senses: { "first_tick": "tick == 0", "clock": "tick" }),
         "bush":   (glyph: '*', solid: true, fsm: "bush", props: { "berries": 0, "quality": -1, "value": 1 },
                    glyphs: { "Ripe": '*', "Bare": 'o' },
                    senses: { "clock": "tick", "summer": r#"env.seasons.state == "Summer""#,
@@ -42,6 +42,13 @@ Game(
         "scent_max": 200,
         // Food.
         "start_food": 40,
+        // The player (the colony's will; `play.toml` makes the nest controllable).
+        "lay_cost": 8,            // food for an egg laid on command
+        "rally_ticks": 40,        // a rally sends waiting foragers out for this long
+        "warm_cost": 4, "warm_heat": 1500,  // food burnt to warm the nest chamber (centidegrees)
+        // Spoilage: stored food above spoil_above goes off, one unit every spoil_every ticks in warm weather (0 = never);
+        // spoiled food rots away, one unit every rot_every ticks.
+        "spoil_every": 0, "spoil_above": 30, "rot_every": 25,
         "bush_max": 6,            // berries on a full bush
         "berry_value": 6,         // average food a berry is worth (one trip must feed more than the forager eats)
         "quality_min": 50, "quality_spread": 101,  // each bush's quality, % of average
@@ -252,7 +259,7 @@ Game(
                             transitions: [
                                 // Interaction rate: enough loaded foragers passing by, or a scout's whim.
                                 (from: "Ready", to: "Search",
-                                 when: r#"around("ant", "Carry", p.entrance_r) >= p.contacts || roll < p.scout_chance"#),
+                                 when: r#"around("ant", "Carry", p.entrance_r) >= p.contacts || roll < p.scout_chance || nearest_prop("nest", "rally", 999, 0) > 0"#),
                                 (from: "Search", to: "Ready", when: "me.searched >= p.patience"),
                             ],
                         ),
@@ -313,6 +320,20 @@ Game(
         (name: "ripen", for: "bush",
          then: [ Set("value", "max(1, 2 * p.berry_value * max(0, me.quality) * sense.ripeness / 10000)") ]),
         (name: "provision", for: "nest", when: "sense.first_tick", then: [ Set("food", "p.start_food") ]),
+        (name: "rally_fades", for: "nest", when: "me.rally > 0", then: [ Add("rally", "-1") ]),
+        (name: "spoil", for: "nest",
+         when: "p.spoil_every > 0 && me.food > p.spoil_above && sense.clock % p.spoil_every == 0 && field(\"temp\") > 1500",
+         then: [ Add("food", "-1"), Add("spoiled", "1"), Emit("spoiled") ]),
+        (name: "rot", for: "nest", when: "me.spoiled > 0 && sense.clock % p.rot_every == 0", then: [ Add("spoiled", "-1") ]),
+    ],
+
+    // What the player can do (buttons on the stage). The nest acts for the colony.
+    actions: [
+        (name: "lay_egg", for: "nest", when: "me.food >= p.lay_cost",
+         then: [ Need("food", "p.lay_cost"), Add("food", "-p.lay_cost"), Add("born", "1"), Spawn("ant"), Emit("laid") ]),
+        (name: "rally", for: "nest", when: "me.rally == 0", then: [ Set("rally", "p.rally_ticks"), Emit("rally") ]),
+        (name: "warm", for: "nest", when: "me.food >= p.warm_cost",
+         then: [ Need("food", "p.warm_cost"), Add("food", "-p.warm_cost"), AddField("temp", "p.warm_heat"), Emit("warmed") ]),
     ],
 
     end: [ (when: "count.ant == 0", result: "extinct") ],

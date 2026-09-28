@@ -1,0 +1,9 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (forage)
+#  Watch deliveries per 1000 ticks rise as generations of brains are selected.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 30000
+tick_rate = 20

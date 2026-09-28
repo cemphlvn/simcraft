@@ -1,0 +1,15 @@
+---
+source: test/tests/all/work.rs
+expression: profile(&dir)
+---
+ticks 60, entities per tick 57.5
+per tick:        evals      49.8  queries     17.1  maps     15.4
+per entity-tick: evals      0.87  queries     0.30  maps     0.27
+hottest rules (checks per tick, % that fired):
+  speed                          3.0  100.0%
+  aging                          2.5  100.0%
+  awake_drain                    1.9  100.0%
+  hit_wall                       1.9    2.7%
+  night_stress                   1.9    8.1%
+  crunch_mode                    1.7   85.3%
+checked but never fired: pep_talk, bugs_from_debt, new_feature, unblocked, too_much_debt

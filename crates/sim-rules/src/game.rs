@@ -113,6 +113,7 @@ impl GameDef {
                     hidden: true,
                     glyphs: BTreeMap::new(),
                     senses: BTreeMap::new(),
+                    brain: None,
                 },
             );
             for (k, v) in &env.params {
@@ -224,6 +225,53 @@ pub struct KindDef {
     /// What this kind perceives: name → expression over the world. Seen as `sense.<name>`.
     #[serde(default)]
     pub senses: BTreeMap<String, String>,
+    /// A learning agent: a small network picks one of `outputs` each tick from `inputs`. Each entity has its own
+    /// weights (its genome), inherited with mutation by the young it spawns.
+    #[serde(default)]
+    pub brain: Option<BrainDef>,
+}
+
+/// A kind's brain (docs/architecture.md, Brains). Integer network run by `sim-kernel`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrainDef {
+    /// Name → expression (sees what the kind's rules see: `me`, `p`, `sense`...). Clamped to -127..127.
+    pub inputs: BTreeMap<String, String>,
+    /// The choices. The chosen one's name is `sense.<sense>` for the kind's rules this tick.
+    pub outputs: Vec<String>,
+    /// Hidden layer sizes.
+    #[serde(default = "default_hidden")]
+    pub hidden: Vec<usize>,
+    #[serde(default = "default_sense")]
+    pub sense: String,
+    /// Per mille of a newborn's genes that change, and by how much at most.
+    #[serde(default = "default_mutation")]
+    pub mutation: u32,
+    #[serde(default = "default_step")]
+    pub step: i8,
+    /// false = a newborn gets fresh random weights (the control: no heredity, no learning).
+    #[serde(default = "yes")]
+    pub inherit: bool,
+}
+
+fn default_hidden() -> Vec<usize> {
+    vec![8]
+}
+
+fn default_sense() -> String {
+    "choice".into()
+}
+
+fn default_mutation() -> u32 {
+    50
+}
+
+fn default_step() -> i8 {
+    8
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A machine or a state inside one. A flat machine is just `(initial, transitions)`;
@@ -341,6 +389,8 @@ pub enum Do {
     Move(String, String),
     /// One step in 3D: dx, dy, dz are expressions.
     Move3(String, String, String),
+    /// Exactly dx, dy cells in one tick (a dash, a leap): `MoveBy("0", "me.stride")`. `Move` takes one step at most.
+    MoveBy(String, String),
     /// Field value at the subject's voxel: `SetField("soil", "0")` digs.
     SetField(String, String),
     AddField(String, String),

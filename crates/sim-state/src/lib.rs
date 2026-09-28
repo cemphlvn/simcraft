@@ -720,7 +720,7 @@ impl<'c, 'o, G, A: Clone, O: Oracle<G>> Run<'c, 'o, G, A, O> {
         let chart = self.chart;
         let fallback = || match &chart.nodes[n].shape {
             Shape::Or { initial: Some(i), .. } => *i,
-            _ => p.options.first().map_or(chart.children(n)[0], |o| o.0),
+            _ => p.options.first().map_or_else(|| chart.children(n)[0], |o| o.0),
         };
         match p.kind {
             PickKind::First => {

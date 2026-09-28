@@ -13,3 +13,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 sim-core.workspace = true
 sim-agent = { path = "../sim-agent" }
 serde_json.workspace = true
+
+[lints]
+workspace = true

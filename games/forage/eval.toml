@@ -1,0 +1,30 @@
+# What "better" means for this game: the colony learns to forage (tools/eval.py, docs/evals.md).
+# Food in the nest counts every delivery ever made, so its slope is the foraging rate.
+
+seeds = [1, 2, 3, 4, 5]
+max_ticks = 20000
+sample_every = 100
+
+[metrics.early_rate]
+expr = "at(1000, 'sum.nest.food')"
+goal = "info"             # deliveries in the first 1000 ticks: random brains
+
+[metrics.late_rate]
+expr = "round((last('sum.nest.food') - at(end_tick - 5000, 'sum.nest.food')) / 5, 1)"
+goal = "max"              # deliveries per 1000 ticks over the last 5000: learned brains
+
+[metrics.per_ant]
+expr = "round((last('sum.nest.food') - at(end_tick - 5000, 'sum.nest.food')) / 5 / max(1, mean('count.ant')), 2)"
+goal = "max"              # how good one brain is, not how many ants there are
+
+[metrics.first_breeding]
+expr = "first('born', end_tick)"
+goal = "min"              # when selection starts (end_tick if never)
+
+[metrics.births]
+expr = "events['born']"
+goal = "info"
+
+[metrics.ants]
+expr = "round(mean('count.ant'), 1)"
+goal = "info"
