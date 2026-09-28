@@ -8,3 +8,5 @@ adapters/unreal/Simcraft/Source/ThirdParty/SimcraftLib/lib/
 adapters/unreal/Simcraft/Source/ThirdParty/SimcraftLib/include/simcraft.h
 adapters/unity/tests/bin/
 adapters/unity/tests/obj/
+# skills/install.sh output (machine-specific symlinks)
+.claude/skills/
