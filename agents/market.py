@@ -11,8 +11,9 @@ alice's village grows wood, bob's grows stone; a house needs both.
 import json
 import subprocess
 import sys
+from pathlib import Path
 
-root = __file__.rsplit("/agents/", 1)[0]
+root = Path(__file__).resolve().parent.parent
 strategies = {"alice": sys.argv[1] if len(sys.argv) > 1 else "builder",
               "bob": sys.argv[2] if len(sys.argv) > 2 else "builder"}
 grows = {"alice": "wood", "bob": "stone"}

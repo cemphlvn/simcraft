@@ -12,10 +12,11 @@ import json
 import subprocess
 import sys
 from collections import Counter, deque
+from pathlib import Path
 
 policy = sys.argv[1] if len(sys.argv) > 1 else "pacifist"
 seed = sys.argv[sys.argv.index("--seed") + 1] if "--seed" in sys.argv else None
-root = __file__.rsplit("/agents/", 1)[0]
+root = Path(__file__).resolve().parent.parent
 
 panel = None
 if seed:  # the operator's panel with another seed
