@@ -1,0 +1,14 @@
+{
+  "step": 3,
+  "change": "metric: stutter counts only motion the side view shows (x, levels)",
+  "interpolate": true,
+  "stiffness": 40,
+  "damping": 1,
+  "walk_bob": 0,
+  "cam_jump": 1.6667,
+  "cam_jerk": 0.1464,
+  "cam_lag": 2.0611,
+  "sprite_step_p95": 2.0000,
+  "stutter": 0.0652,
+  "frame_ms": 0.0747
+}

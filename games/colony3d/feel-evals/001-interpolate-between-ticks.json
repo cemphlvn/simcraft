@@ -1,0 +1,14 @@
+{
+  "step": 1,
+  "change": "interpolate between ticks",
+  "interpolate": true,
+  "stiffness": 0,
+  "damping": 1,
+  "walk_bob": 0,
+  "cam_jump": 13.6667,
+  "cam_jerk": 0.1756,
+  "cam_lag": 0.0000,
+  "sprite_step_p95": 2.0000,
+  "stutter": 0.1388,
+  "frame_ms": 0.0744
+}

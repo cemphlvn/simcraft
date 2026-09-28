@@ -4,6 +4,8 @@
 View(
     theme: "dark",
     assets: ["ants", "ants_pixel"],
+    // Game feel, tuned eval-driven on generated.ron (games/colony3d/FEEL.md).
+    feel: (interpolate: true, camera: (stiffness: 40, damping: 1.0), walk_bob: 1),
     layout: Rows([
         (Fixed(1), C(name: "Title")),
         (Fill, Cols([

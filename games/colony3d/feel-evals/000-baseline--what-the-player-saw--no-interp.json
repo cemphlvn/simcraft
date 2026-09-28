@@ -1,0 +1,14 @@
+{
+  "step": 0,
+  "change": "baseline: what the player saw (no interpolation, snapping camera)",
+  "interpolate": false,
+  "stiffness": 0,
+  "damping": 1,
+  "walk_bob": 0,
+  "cam_jump": 17.6667,
+  "cam_jerk": 0.4992,
+  "cam_lag": 0.0000,
+  "sprite_step_p95": 8.0000,
+  "stutter": 0.8440,
+  "frame_ms": 0.0766
+}

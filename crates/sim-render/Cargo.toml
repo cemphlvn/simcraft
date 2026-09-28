@@ -23,3 +23,7 @@ png = "0.18"
 [[bin]]
 name = "simcraft-pixelate"
 path = "src/bin/simcraft-pixelate.rs"
+
+[[bin]]
+name = "simcraft-feel"
+path = "src/bin/simcraft-feel.rs"

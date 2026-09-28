@@ -24,6 +24,9 @@ pub struct View {
     /// Composite components: a name for a layout of other components.
     #[serde(default)]
     pub components: BTreeMap<String, Node>,
+    /// Game feel (interpolation between ticks, camera spring): docs/architecture.md, "Presentation".
+    #[serde(default)]
+    pub feel: crate::feel::Feel,
     pub layout: Node,
 }
 
@@ -76,6 +79,7 @@ impl View {
             theme: dark(),
             assets: Vec::new(),
             components: BTreeMap::new(),
+            feel: Default::default(),
             layout: Node::Rows(vec![
                 (Size::Fixed(1), c("Title")),
                 (

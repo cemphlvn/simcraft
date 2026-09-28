@@ -35,10 +35,10 @@ pub struct Strip {
 pub struct SpriteDraw {
     pub sprite: String,
     pub frame: usize,
-    /// Left edge, world pixels.
-    pub x: i64,
-    /// Bottom row (the floor it stands on).
-    pub floor: i64,
+    /// Left edge, world pixels (fractional between ticks).
+    pub x: f32,
+    /// Bottom row (the floor it stands on), fractional between ticks.
+    pub floor: f32,
     pub flip: bool,
     pub shade: u32,
     pub selected: bool,
@@ -78,12 +78,15 @@ fn fnv(h: &mut u64, v: u64) {
 }
 
 /// Builds the display list. `facing` remembers which way each entity last moved (the caller keeps it).
+#[allow(clippy::too_many_arguments)]
 pub fn compose(
     scene: &Scene,
     p: &DioramaProps,
     frame: u64,
     selected: Option<EntityId>,
     facing: &mut BTreeMap<EntityId, (i64, bool)>,
+    tween: Option<&crate::feel::Tween>,
+    bob: i64,
 ) -> DisplayList {
     let world = scene.world;
     let t = p.tile;
@@ -137,8 +140,30 @@ pub fn compose(
             continue; // underground and far from the cut: hidden in the soil
         }
         let (sw, _) = sprite.size();
-        let depth_off = if e.z == 0 { (e.y - p.plane) / 2 } else { 0 };
-        let floor = if e.z == 0 { ground - 1 + depth_off.min(0) - depth_off.max(0) / 2 } else { ground + e.z * t - 2 };
+        // Where the sprite stands for a voxel position; between ticks, lerp the two.
+        let place = |x: i64, y: i64, z: i64| -> (f32, f32) {
+            let depth_off = if z == 0 { (y - p.plane) / 2 } else { 0 };
+            let floor = if z == 0 { ground - 1 + depth_off.min(0) - depth_off.max(0) / 2 } else { ground + z * t - 2 };
+            ((x * t + (t - sw as i64) / 2) as f32, floor as f32)
+        };
+        let now = (e.x, e.y, e.z);
+        let (mut x, mut floor) = place(e.x, e.y, e.z);
+        let mut moving = false;
+        if let Some(tw) = tween
+            && let Some(&before) = tw.prev.get(&e.id)
+            && before != now
+            && (before.0 - now.0).abs() <= 2
+            && (before.2 - now.2).abs() <= 2
+        {
+            let a = tw.alpha.clamp(0.0, 1.0);
+            let (x0, f0) = place(before.0, before.1, before.2);
+            x = x0 + (x - x0) * a;
+            floor = f0 + (floor - f0) * a;
+            moving = true;
+        }
+        if moving && bob > 0 && (frame / 4 + e.id).is_multiple_of(2) {
+            floor -= bob as f32;
+        }
         let entry = facing.entry(e.id).or_insert((e.x, false));
         if e.x != entry.0 {
             entry.1 = e.x < entry.0;
@@ -147,7 +172,7 @@ pub fn compose(
         let shade = if e.z == 0 { (100 - (p.plane - e.y).max(0) * 4).clamp(60, 100) as u32 } else { 100 };
         sprites.push(SpriteDraw {
             frame: (frame * sprite.fps as u64 / 30 + e.id) as usize,
-            x: e.x * t + (t - sw as i64) / 2,
+            x,
             floor,
             flip: entry.1,
             shade,
@@ -362,10 +387,11 @@ pub fn rasterize(
     }
     for d in &list.sprites {
         let Some(sprite) = scene.assets.sprites.get(&d.sprite) else { continue };
-        sprite.blit(&mut pm, &scene.assets.palette, d.frame, d.x - cam, d.floor, d.flip, d.shade);
+        let (x, floor) = (d.x.round() as i64, d.floor.round() as i64);
+        sprite.blit(&mut pm, &scene.assets.palette, d.frame, x - cam, floor, d.flip, d.shade);
         if d.selected {
             let (sw, sh) = sprite.size();
-            let (mx, my) = (d.x - cam + sw as i64 / 2, d.floor - sh as i64 - 2);
+            let (mx, my) = (x - cam + sw as i64 / 2, floor - sh as i64 - 2);
             for (dx, dy) in [(0, 0), (-1, -1), (1, -1)] {
                 pm.set(mx + dx, my + dy, Rgb(255, 255, 255));
             }

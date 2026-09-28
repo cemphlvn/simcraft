@@ -95,6 +95,7 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, 
     let series = { let s = view_series(&view); if s.is_empty() { default_series(engine.world()) } else { s } };
     let selected = pick(engine.world(), engine.rules(), None);
     let mut ui = Ui::new(worlds);
+    ui.feel = view.feel.clone();
     ui.selected = selected;
     Ok(App { engine, view, registry, theme, assets, ui, series })
 }
@@ -131,6 +132,7 @@ impl App {
             if self.engine.outcome().is_some() || self.engine.world().tick >= self.engine.rules().cfg.run.max_ticks {
                 break;
             }
+            self.ui.tween.borrow_mut().remember(self.engine.world());
             let report = self.engine.tick();
             if !report.events.is_empty() {
                 let mut c: BTreeMap<&str, usize> = BTreeMap::new();
@@ -321,6 +323,7 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
     loop {
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
+        app.ui.dt = dt;
         last = now;
         if !app.ui.paused {
             sim_clock += dt * app.ui.speed;
@@ -330,6 +333,8 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
                 app.step(n.min(2000));
             }
         }
+        // How far into the next tick we are: sprites are drawn between the last two ticks.
+        app.ui.tween.borrow_mut().alpha = if app.ui.paused { 1.0 } else { sim_clock.clamp(0.0, 1.0) };
         app.draw(&mut canvas);
         renderer.present(&canvas, &mut out)?;
         if app.ui.graphics {

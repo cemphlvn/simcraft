@@ -41,6 +41,11 @@ pub struct Ui {
     /// Cooked diorama parts: backdrop strips and the world's section, with the key they were cooked for.
     pub strips: std::cell::RefCell<Option<(u64, Vec<crate::display::Strip>)>>,
     pub section: std::cell::RefCell<Option<(u64, crate::image::Image)>>,
+    /// Game feel: the view's settings, positions of the previous tick, the camera spring, seconds since last frame.
+    pub feel: crate::feel::Feel,
+    pub tween: std::cell::RefCell<crate::feel::Tween>,
+    pub camera: std::cell::RefCell<crate::feel::Spring>,
+    pub dt: f32,
 }
 
 impl Ui {
@@ -63,6 +68,10 @@ impl Ui {
             facing: Default::default(),
             strips: Default::default(),
             section: Default::default(),
+            feel: Default::default(),
+            tween: Default::default(),
+            camera: Default::default(),
+            dt: 1.0 / 60.0,
         }
     }
 

@@ -395,6 +395,42 @@ name, e.g. `states.ant.Carry`), `sum.<kind>.<prop>`, `events.<name>` (since the 
 Run: `cargo test -p simtest` (everything), `cargo run -p simtest -- test/scenarios/wolf_sheep.ron` (one file),
 `cargo insta review` (accept snapshot changes).
 
+## Presentation: capabilities and game feel
+
+Between the simulation and the pixels sit two layers. Neither changes the simulation (it stays deterministic);
+both only decide how it is shown.
+
+**Capabilities** (`sim_render::caps`): what this machine can do, detected once at start.
+
+| Probe | Values | Used for |
+|---|---|---|
+| Window + GPU | Metal / Vulkan / DX12 / WebGPU / WebGL2 / none | the GPU renderer (`sim-gpu`) when there is one |
+| Display refresh | Hz of the monitor | frame pacing (vsync) |
+| Terminal graphics | kitty protocol, true colour, half-blocks | the terminal renderer's path |
+| Cell size | pixels per terminal cell | square pixels in the terminal |
+
+`simcraft-play` opens a GPU window when it can and falls back to the terminal; the title says which path was
+chosen and why. `--terminal` / `--window` force one.
+
+**Game feel** (`sim_render::feel`): the simulation ticks at a fixed rate; frames are drawn at the display's rate and
+**interpolate** between the last two ticks, so an ant glides from cell to cell instead of jumping ("fix your
+timestep"). A view declares its feel as data:
+
+```ron
+feel: (
+    interpolate: true,                          // positions between ticks
+    camera: (stiffness: 60, damping: 1.0),      // critically damped spring follow (damping 1 = no overshoot)
+    walk_bob: 1,                                // pixels a walking sprite bobs
+),
+```
+
+Feel is a component library like the rest of the renderer: new feel components (easing, tweens, screen shake,
+hit-stop, particles) are added there, used by every backend, and switched on per view.
+
+Feel is developed **eval-driven**, like rules: `simcraft-feel <game> --view <view>` plays the game headless at a
+fixed frame rate with the viewer's own code and measures camera jumps, jerk and lag, sprite steps and stutter;
+`--set` tries a setting, `--save` records a step (`games/<name>/feel-evals/`, log in `games/<name>/FEEL.md`).
+
 ## Platforms and builds
 
 One game, every platform: the rule file and the core never change; a thin shell per platform does
@@ -445,6 +481,8 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Gradients (`Climb`) + game 5 (colony); eval-driven development (`tools/eval.py`, `docs/evals.md`)
 - [x] Environments (`envs/`, `env.<name>`, native implementations with conformance), maths helpers
 - [x] Test suite (`test/`, `simtest`): scenarios, insta snapshots, proptest properties
+- [x] Game feel: tick interpolation, spring camera, walk bob; `simcraft-feel` evals
+- [ ] Capabilities: pick renderer and quality per machine
 - [ ] Platforms: core on wasm32, `sim-gpu` (wgpu), `simcraft-build` (web, macOS, Linux, Windows, Steam; iOS and Android next)
 - [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)
 - [x] 3D worlds (depth, z, 26-neighbourhood) and fields (per-voxel numbers, native diffusion, decay, terrain)
