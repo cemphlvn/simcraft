@@ -12,8 +12,9 @@ Each day, queue orders, then press Enter to end the day. Orders apply at the sta
 import json
 import subprocess
 import sys
+from pathlib import Path
 
-root = __file__.rsplit("/agents/", 1)[0]
+root = Path(__file__).resolve().parent.parent
 bot = sys.argv[1] if len(sys.argv) > 1 else "builder"
 sim = subprocess.Popen([f"{root}/target/release/simcraft-agent", f"{root}/games/market"],
                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
