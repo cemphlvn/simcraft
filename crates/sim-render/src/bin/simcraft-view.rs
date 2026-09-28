@@ -1,6 +1,6 @@
 //! simcraft-view: run a game with its view, in the terminal, at a high refresh rate.
 //!
-//!   simcraft-view games/colony [--seed N] [--speed TICKS_PER_SEC] [--fps N]
+//!   simcraft-view games/colony [--seed N] [--speed TICKS_PER_SEC] [--fps N] [--view FILE]
 //!   simcraft-view games/colony --dump TICKS [--size WxH]     (one frame as text, no terminal)
 //!
 //! The simulation runs in-process at its own speed; frames are drawn at their own rate.
@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use sim_core::{Engine, Loaded, Running, World};
 use sim_render::projection::Projection;
 use sim_render::{Assets, Canvas, Registry, Renderer, Scene, TerminalGuard, Theme, Ui, View};
@@ -50,7 +50,7 @@ fn view_series(view: &View) -> Vec<String> {
     out
 }
 
-fn load(dir: &Path, seed: Option<u64>) -> Result<App, String> {
+fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, String> {
     let config = match seed {
         Some(s) => {
             let panel = std::fs::read_to_string(dir.join("engine.toml")).map_err(|e| e.to_string())?;
@@ -72,12 +72,14 @@ fn load(dir: &Path, seed: Option<u64>) -> Result<App, String> {
     let (world, game) = Game::load(dir, config.as_deref())?;
     let engine = Engine::<Loaded, _>::new(world, game).validate().map_err(|e| e.join("\n"))?.start();
     let depth = engine.world().depth;
-    let mut view = match std::fs::read_to_string(dir.join("view.ron")) {
-        Ok(src) => ron::from_str::<View>(&src).map_err(|e| format!("view.ron: {e}"))?,
-        Err(_) => View::default_for(depth),
+    let view_path = view_file.map_or_else(|| dir.join("view.ron"), Path::to_path_buf);
+    let mut view = match std::fs::read_to_string(&view_path) {
+        Ok(src) => ron::from_str::<View>(&src).map_err(|e| format!("{}: {e}", view_path.display()))?,
+        Err(_) if view_file.is_none() => View::default_for(depth),
+        Err(e) => return Err(format!("{}: {e}", view_path.display())),
     };
     let registry = Registry::default();
-    let worlds = view.resolve(&registry).map_err(|e| format!("view.ron:\n  {}", e.join("\n  ")))?;
+    let worlds = view.resolve(&registry, depth).map_err(|e| format!("view.ron:\n  {}", e.join("\n  ")))?;
     let mut theme = Theme::builtin(&view.theme).ok_or_else(|| format!("view.ron: unknown theme '{}' (dark, light)", view.theme))?;
     if let Ok(src) = std::fs::read_to_string(dir.join("theme.ron")) {
         theme = theme.merged(ron::from_str(&src).map_err(|e| format!("theme.ron: {e}"))?);
@@ -100,6 +102,7 @@ fn load(dir: &Path, seed: Option<u64>) -> Result<App, String> {
         events: VecDeque::new(),
         fps: 0.0,
         worlds,
+        hits: Default::default(),
     };
     Ok(App { engine, view, registry, theme, assets, ui, series })
 }
@@ -169,8 +172,16 @@ impl App {
     }
 
     fn draw(&self, canvas: &mut Canvas) {
+        self.ui.hits.borrow_mut().clear();
         let scene = Scene { world: self.engine.world(), game: self.engine.rules(), assets: &self.assets };
         self.view.draw(&self.registry, &self.theme, &scene, &self.ui, canvas);
+    }
+
+    /// A click on a component: a 2.5D world goes to its perspective's `click` state.
+    fn click(&mut self, x: u16, y: u16) {
+        if let Some(Projection::Layers(l)) = self.ui.hit(x, y).and_then(|i| self.ui.worlds.get_mut(i)) {
+            l.click();
+        }
     }
 
     fn key(&mut self, code: KeyCode) -> bool {
@@ -181,6 +192,11 @@ impl App {
             KeyCode::Char('-') => self.ui.speed = (self.ui.speed / 2.0).max(0.5),
             KeyCode::Char('s') => self.step(1),
             KeyCode::Tab => self.ui.selected = pick(self.engine.world(), self.engine.rules(), self.ui.selected),
+            KeyCode::Char('p') => self.ui.worlds.iter_mut().for_each(|p| {
+                if let Projection::Layers(l) = p {
+                    l.click();
+                }
+            }),
             _ => {
                 let depth = self.engine.world().depth;
                 for p in self.ui.worlds.iter_mut() {
@@ -205,6 +221,8 @@ impl App {
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut ansi = false;
+    let mut perspective = 0usize;
+    let mut view_file: Option<PathBuf> = None;
     let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) = (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -213,6 +231,8 @@ fn main() {
             "--fps" => fps = args.next().and_then(|s| s.parse().ok()).unwrap_or(fps),
             "--dump" => dump = args.next().and_then(|s| s.parse::<u32>().ok()),
             "--ansi" => ansi = true,
+            "--view" => view_file = args.next().map(PathBuf::from),
+            "--perspective" => perspective = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--size" => {
                 if let Some((w, h)) = args.next().and_then(|s| s.split_once('x').map(|(w, h)| (w.to_string(), h.to_string()))) {
                     size = (w.parse().unwrap_or(size.0), h.parse().unwrap_or(size.1));
@@ -221,7 +241,7 @@ fn main() {
             _ => dir = PathBuf::from(a),
         }
     }
-    let mut app = match load(&dir, seed) {
+    let mut app = match load(&dir, seed, view_file.as_deref()) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}");
@@ -232,6 +252,11 @@ fn main() {
 
     if let Some(ticks) = dump {
         app.step(ticks);
+        for p in app.ui.worlds.iter_mut() {
+            if let Projection::Layers(l) = p {
+                (0..perspective).for_each(|_| l.click());
+            }
+        }
         let mut canvas = Canvas::new(size.0, size.1);
         let t = Instant::now();
         app.draw(&mut canvas);
@@ -294,6 +319,7 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
                         return Ok(());
                     }
                 }
+                Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => app.click(m.column, m.row),
                 Event::Resize(w, h) => {
                     canvas = Canvas::new(w, h);
                     renderer.invalidate();

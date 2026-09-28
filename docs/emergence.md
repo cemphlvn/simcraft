@@ -185,6 +185,7 @@ scent are fields. Also the first game built on perception (`senses`) from the st
 | 6.2 | Soil temperature never moved (all levels 50 while the air went 0 → 99) | Slow flows must not round to zero | **Not an engine change.** Integer diffusion truncates; the game stores centidegrees (0..10000). Documented as a rule for fields | deep chamber lags the seasons by ~¼ year |
 | 6.3 | 559 ground entities carried the scent; they had to evaporate by rule | Pheromone as a field that evaporates | Field `decay` (% per tick, after diffusion) | scent trails in the surface view |
 | 6.4 | Ants heading to the nest stopped dead against the soil ceiling | Movers follow tunnels | A step into terrain **slides** (dx,dy,0) → (0,0,dz) → (dx,0,0) → (0,dy,0); only worlds with terrain | ants go down the shaft and up again |
+| 6.6 | The nest's levels need to be seen together, from changing angles, without re-rendering the world every frame | Layered 2.5D with perspective states | `Layers` projection: one cached frame per level, perspective states (order, focus, step, fade, `click`), click / `p` to switch, lazy redraw per level | `layers_redraw_lazily` (first frame 3 of 6 layers, unchanged frame reused, a tick redraws only changed layers); `games/colony3d/views/layers.ron` |
 | 6.5 | Nothing could show the nest's inside | Interfaces as reusable components | `sim-render`: diffing terminal renderer, projections 2D / 2.5D / 3D / custom, components with props, themes, asset packs, `view.ron` | `simcraft-view games/colony3d`; frame in ~1.4 ms |
 
 ---

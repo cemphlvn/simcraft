@@ -1,35 +1,28 @@
 //! How a world is shown: dimensionality is a view, not the world.
 //!
-//! `Dim2(level)` top-down · `Dim2_5` levels stacked · `Dim3` ray-cast voxels with an orbit camera and a cutaway ·
+//! `Dim2(level)` top-down · `Layers` 2.5D frames stacked by perspective · `Dim3` ray-cast voxels with an orbit camera and a cutaway ·
 //! `CustomDim` any world axis to screen x / y, the rest fixed (cross-sections, and worlds with more axes later).
 
 use serde::Deserialize;
 
 use crate::canvas::{Cell, Rect, Rgb};
+use crate::layered::{Layered, Perspective};
 use crate::component::Ctx;
-use crate::layout::{Size, cols, rows};
 use crate::scene::Scene;
 use crate::style::Style;
 
 /// A world axis: 0 = x, 1 = y, 2 = z (level).
 pub type Axis = usize;
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Projection {
     /// One level, top-down.
     Dim2 {
-        #[serde(default)]
         level: i64,
-        #[serde(default)]
         tint: Option<String>,
     },
-    /// Every level, stacked: side by side (`across: true`) or one above the other.
-    Dim2_5 {
-        #[serde(default)]
-        across: bool,
-        #[serde(default)]
-        tint: Option<String>,
-    },
+    /// Every level a layer frame, stacked by perspective states (see `layered`).
+    Layers(Layered),
     /// Voxels from an orbit camera.
     Dim3(Camera),
     /// `n` world axes; `x` and `y` go to the screen, `fixed` pins the others: (axis, value).
@@ -37,9 +30,7 @@ pub enum Projection {
         n: usize,
         x: Axis,
         y: Axis,
-        #[serde(default)]
         fixed: Vec<(Axis, i64)>,
-        #[serde(default)]
         tint: Option<String>,
     },
 }
@@ -84,7 +75,6 @@ impl Default for Camera {
 pub struct ProjectionSpec {
     pub dim: String,
     pub level: i64,
-    pub across: bool,
     pub tint: String,
     pub yaw: f32,
     pub pitch: f32,
@@ -94,6 +84,8 @@ pub struct ProjectionSpec {
     pub x: i64,
     pub y: i64,
     pub fixed: Vec<(Axis, i64)>,
+    /// 2.5D perspective states.
+    pub perspectives: Vec<Perspective>,
 }
 
 impl Default for ProjectionSpec {
@@ -101,7 +93,6 @@ impl Default for ProjectionSpec {
         ProjectionSpec {
             dim: "2D".into(),
             level: 0,
-            across: false,
             tint: String::new(),
             yaw: yaw(),
             pitch: pitch(),
@@ -111,16 +102,24 @@ impl Default for ProjectionSpec {
             x: -1,
             y: -1,
             fixed: Vec::new(),
+            perspectives: Vec::new(),
         }
     }
 }
 
 impl ProjectionSpec {
-    pub fn build(self) -> Result<Projection, String> {
+    /// `depth`: levels of the world (2.5D checks its perspectives against it).
+    pub fn build(self, depth: i64) -> Result<Projection, String> {
         let tint = (!self.tint.is_empty()).then_some(self.tint);
         Ok(match self.dim.as_str() {
             "2D" | "2d" => Projection::Dim2 { level: self.level, tint },
-            "2.5D" | "2_5D" | "2.5d" => Projection::Dim2_5 { across: self.across, tint },
+            "2.5D" | "2_5D" | "2.5d" => {
+                let perspectives =
+                    if self.perspectives.is_empty() { vec![Layered::all_levels(depth)] } else { self.perspectives };
+                let l = Layered::new(perspectives, tint);
+                l.check(depth)?;
+                Projection::Layers(l)
+            }
             "3D" | "3d" => Projection::Dim3(Camera {
                 yaw: self.yaw,
                 pitch: self.pitch,
@@ -143,16 +142,7 @@ impl Projection {
     pub fn draw(&self, ctx: &mut Ctx, r: Rect) {
         match self {
             Projection::Dim2 { level, tint } => plane(ctx, r, (0, 1), &[(2, *level)], tint.as_deref()),
-            Projection::Dim2_5 { across, tint } => {
-                let d = ctx.scene.world.depth.max(1) as usize;
-                let parts = vec![Size::Fill; d];
-                let areas = if *across { cols(r, &parts) } else { rows(r, &parts) };
-                for (z, area) in areas.into_iter().enumerate() {
-                    plane(ctx, area, (0, 1), &[(2, z as i64)], tint.as_deref());
-                    let dim = ctx.style.color("dim");
-                    ctx.canvas.text(area, 0, 0, &format!("level {z}"), dim);
-                }
-            }
+            Projection::Layers(l) => l.draw(ctx, r),
             Projection::CustomDim { x, y, fixed, tint, .. } => plane(ctx, r, (*x, *y), fixed, tint.as_deref()),
             Projection::Dim3(cam) => voxels(ctx, r, cam),
         }
@@ -161,7 +151,7 @@ impl Projection {
     pub fn title(&self) -> String {
         match self {
             Projection::Dim2 { level, .. } => format!("world · 2D · level {level}"),
-            Projection::Dim2_5 { .. } => "world · 2.5D · all levels".into(),
+            Projection::Layers(l) => l.title(),
             Projection::Dim3(cam) => format!(
                 "world · 3D · yaw {:.0}° pitch {:.0}°{}",
                 cam.yaw,

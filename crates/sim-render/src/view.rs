@@ -101,21 +101,24 @@ impl View {
 
     /// Expands composites, checks every component name and props, and returns the live projections
     /// (one per `World`, in layout order).
-    pub fn resolve(&mut self, registry: &Registry) -> Result<Vec<Projection>, Vec<String>> {
+    /// `depth`: the world's levels (projections are checked against it).
+    pub fn resolve(&mut self, registry: &Registry, depth: i64) -> Result<Vec<Projection>, Vec<String>> {
         let mut errs = Vec::new();
         let mut worlds = Vec::new();
         let components = self.components.clone();
+        #[allow(clippy::too_many_arguments)]
         fn walk(
             n: &mut Node,
             components: &BTreeMap<String, Node>,
             registry: &Registry,
+            depth: i64,
             path: &mut Vec<String>,
             worlds: &mut Vec<Projection>,
             errs: &mut Vec<String>,
         ) {
             match n {
                 Node::Rows(v) | Node::Cols(v) => {
-                    v.iter_mut().for_each(|(_, child)| walk(child, components, registry, path, worlds, errs))
+                    v.iter_mut().for_each(|(_, child)| walk(child, components, registry, depth, path, worlds, errs))
                 }
                 Node::C { name, props, class, slot } => {
                     if let Some(body) = components.get(name.as_str()) {
@@ -125,7 +128,7 @@ impl View {
                         }
                         path.push(name.clone());
                         let mut inner = body.clone();
-                        walk(&mut inner, components, registry, path, worlds, errs);
+                        walk(&mut inner, components, registry, depth, path, worlds, errs);
                         path.pop();
                         // A composite used with a class: wrap by giving its root the class if it has none.
                         if let (Some(cl), Node::C { class: inner_class @ None, .. }) = (class.clone(), &mut inner) {
@@ -140,7 +143,7 @@ impl View {
                         return;
                     }
                     if name == "World" {
-                        match props.clone().into_rust::<WorldProps>().map_err(|e| e.to_string()).and_then(|p| p.projection.build()) {
+                        match props.clone().into_rust::<WorldProps>().map_err(|e| e.to_string()).and_then(|p| p.projection.build(depth)) {
                             Ok(p) => {
                                 *slot = Some(worlds.len());
                                 worlds.push(p);
@@ -151,7 +154,7 @@ impl View {
                 }
             }
         }
-        walk(&mut self.layout, &components, registry, &mut Vec::new(), &mut worlds, &mut errs);
+        walk(&mut self.layout, &components, registry, depth, &mut Vec::new(), &mut worlds, &mut errs);
         if errs.is_empty() { Ok(worlds) } else { Err(errs) }
     }
 

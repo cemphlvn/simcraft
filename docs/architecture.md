@@ -222,7 +222,14 @@ A framework for game interfaces, in this workspace, with its own terminal render
 - **Dimensionality is a view, not the world:** the core is as many dimensions as the game needs (depth 1 = 2D); a
   world view picks a **projection**:
   - `(dim: "2D", level: 0)`: one level, top-down.
-  - `(dim: "2.5D")`: levels stacked (side by side with `across: true`), e.g. the nest's levels under the surface.
+  - `(dim: "2.5D", perspectives: [...])`: **layered frames**. Each world level is one layer frame; a perspective
+    state stacks them: `(name: "nest", order: [5, 4, 3, 0], focus: 3, step: (2, -1), fade: 45, click: "surface")`.
+    `order` is back to front (unlisted levels are not drawn), each layer is shifted by `step` × its place in the stack,
+    empty voxels are transparent, layers other than `focus` are faded to `fade` %. Clicking the component (or `p`)
+    goes to the `click` state (default: the next one). Without `perspectives` all levels stack top-down.
+    **Lazy:** a layer frame is re-rendered only when its level changed (entities, terrain or the tint field on that
+    level), invisible layers are never rendered, and an unchanged frame reuses the last composite. The panel title
+    reports how many layers were redrawn.
   - `(dim: "3D", yaw, pitch, zoom, cut)`: voxels and entities ray-cast from an orbit camera, with a cutaway to see inside.
   - `(dim: "custom", n: 3, x, y, fixed: [(axis, value)])`: world axes to screen x / y, the rest fixed ("slice" any
     axis: a vertical cross-section is x → screen x, z → screen y, y fixed). Any view may `tint` by a field.

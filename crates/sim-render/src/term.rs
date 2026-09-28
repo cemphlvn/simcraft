@@ -3,6 +3,7 @@
 use std::io::{self, Write};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{
     BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
@@ -83,7 +84,7 @@ pub struct TerminalGuard;
 impl TerminalGuard {
     pub fn enter() -> io::Result<TerminalGuard> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, Hide, EnableMouseCapture)?;
         let default = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             restore();
@@ -94,7 +95,7 @@ impl TerminalGuard {
 }
 
 fn restore() {
-    let _ = execute!(io::stdout(), ResetColor, Show, LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, ResetColor, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
 

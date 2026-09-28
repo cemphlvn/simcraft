@@ -10,7 +10,7 @@ fn setup(view_src: &str) -> Result<Setup, Vec<String>> {
     let (world, game) = Game::load(std::path::Path::new(DIR), None).map_err(|e| vec![e])?;
     let engine = Engine::<Loaded, _>::new(world, game).validate()?.start();
     let mut view: View = ron::from_str(view_src).map_err(|e| vec![e.to_string()])?;
-    let worlds = view.resolve(&Registry::default())?;
+    let worlds = view.resolve(&Registry::default(), engine.world().depth)?;
     Ok((engine, view, worlds))
 }
 
@@ -25,6 +25,7 @@ fn ui(worlds: Vec<sim_render::Projection>) -> Ui {
         events: Default::default(),
         fps: 0.0,
         worlds,
+        hits: Default::default(),
     }
 }
 
@@ -69,4 +70,77 @@ fn a_class_overrides_theme_tokens() {
     assert_ne!(base.color("text"), warn.color("text"));
     assert_eq!(base.color("bg"), warn.color("bg"), "only the class's tokens change");
     assert_eq!(base.color("no-such-token"), sim_render::Rgb(255, 0, 255), "missing tokens are visible");
+}
+
+// --- 2.5D layers ---
+
+const LAYERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/colony3d");
+
+fn layered_setup() -> (Engine<sim_core::Running, Game>, View, Vec<sim_render::Projection>, Assets) {
+    let (world, game) = Game::load(std::path::Path::new(LAYERS), None).expect("loads");
+    let engine = Engine::<Loaded, _>::new(world, game).validate().expect("valid").start();
+    let src = std::fs::read_to_string(format!("{LAYERS}/views/layers.ron")).unwrap();
+    let mut view: View = ron::from_str(&src).expect("parses");
+    let worlds = view.resolve(&Registry::default(), engine.world().depth).expect("resolves");
+    let assets: Assets = ron::from_str(&std::fs::read_to_string(format!("{LAYERS}/../../assets/ants.ron")).unwrap()).unwrap();
+    (engine, view, worlds, assets)
+}
+
+fn stats(ui: &Ui) -> sim_render::layered::Stats {
+    match &ui.worlds[0] {
+        sim_render::Projection::Layers(l) => l.stats(),
+        _ => panic!("the demo's first world is 2.5D"),
+    }
+}
+
+#[test]
+fn layers_redraw_lazily() {
+    let (mut engine, view, worlds, assets) = layered_setup();
+    let mut ui = ui(worlds);
+    let theme = Theme::builtin("dark").unwrap();
+    let mut canvas = Canvas::new(120, 40);
+    let mut draw = |engine: &Engine<sim_core::Running, Game>, ui: &Ui| {
+        let scene = Scene { world: engine.world(), game: engine.rules(), assets: &assets };
+        view.draw(&Registry::default(), &theme, &scene, ui, &mut canvas);
+    };
+    draw(&engine, &ui);
+    let first = stats(&ui);
+    assert_eq!((first.redrawn, first.visible, first.reused), (3, 3, false), "first frame: the 3 visible layers only (of 6)");
+    draw(&engine, &ui);
+    assert!(stats(&ui).reused, "nothing changed: the last composite is reused");
+    engine.tick();
+    ui.tick = engine.world().tick;
+    draw(&engine, &ui);
+    let s = stats(&ui);
+    assert!(!s.reused && s.redrawn < s.visible, "a tick redraws only the layers that changed: {s:?}");
+}
+
+#[test]
+fn a_click_follows_the_perspective_states() {
+    let (_, _, mut worlds, _) = layered_setup();
+    let sim_render::Projection::Layers(l) = &mut worlds[0] else { panic!("2.5D") };
+    let names: Vec<String> = (0..5)
+        .map(|_| {
+            let n = l.perspective().name.clone();
+            l.click();
+            n
+        })
+        .collect();
+    assert_eq!(names, ["surface", "granary", "deep", "stack", "surface"]);
+}
+
+#[test]
+fn bad_perspectives_fail_at_load() {
+    let (engine, ..) = layered_setup();
+    let depth = engine.world().depth;
+    for (src, want) in [
+        (r#"(name: "a", order: [9])"#, "level 9 does not exist"),
+        (r#"(name: "a", order: [0, 1], focus: 3)"#, "focus 3 is not in its order"),
+        (r#"(name: "a", order: [0], click: "b")"#, "unknown perspective 'b'"),
+    ] {
+        let view = format!(r#"View(layout: C(name: "World", props: (projection: (dim: "2.5D", perspectives: [{src}]))))"#);
+        let mut v: View = ron::from_str(&view).unwrap();
+        let errs = v.resolve(&Registry::default(), depth).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.contains(want)), "want '{want}' in {errs:?}");
+    }
 }

@@ -160,6 +160,9 @@ cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
 cargo run --release -p sim-render -- games/colony3d     # surface, nest cross-section, 3D; tab selects an ant
 ```
 
+Layered 2.5D, with perspective states you define and switch by clicking:
+`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
+
 The interface is data too: `games/colony3d/view.ron` lays out components (world views in 2D, 2.5D, 3D or any
 cross-section, inspector, trends) with a theme and an asset pack (`assets/ants.ron`).
 

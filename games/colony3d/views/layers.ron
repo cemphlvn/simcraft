@@ -1,0 +1,32 @@
+#![enable(implicit_some)]
+// 2.5D demo: the colony's six levels as layer frames, stacked by perspective states.
+// Click the world (or press p) to move to the state named in `click`.
+//   order: levels back to front (unlisted levels are not drawn) · focus: the opaque, temperature-tinted layer
+//   step: screen shift per place in the stack · fade: brightness of the other layers, %
+View(
+    theme: "dark",
+    assets: ["ants"],
+    layout: Rows([
+        (Fixed(1), C(name: "Title")),
+        (Fill, Cols([
+            (Percent(64), C(name: "World", props: (projection: (dim: "2.5D", tint: "temp", perspectives: [
+                // The surface in front; the nest shows through where the stack is offset.
+                (name: "surface", order: [5, 3, 0], focus: 0, step: (3, -2), fade: 40, click: "granary"),
+                // The granary in front, soil tinted by temperature; the deep chamber and the surface behind it.
+                (name: "granary", order: [0, 5, 3], focus: 3, step: (3, -2), fade: 35, click: "deep"),
+                // The winter cluster's chamber.
+                (name: "deep", order: [0, 3, 5], focus: 5, step: (3, -2), fade: 35, click: "stack"),
+                // Every level as an isometric stack: the shaft lines up through all of them.
+                (name: "stack", order: [0, 1, 2, 3, 4, 5], focus: 0, step: (3, -2), fade: 90, click: "surface"),
+            ])))),
+            (Fill, Rows([
+                (Fixed(5),  C(name: "Env")),
+                (Fill,      C(name: "Inspector")),
+                (Fixed(6),  C(name: "Counts")),
+            ])),
+        ])),
+        (Fixed(1), C(name: "Legend")),
+        (Fixed(4), C(name: "Events", class: "calm")),
+        (Fixed(1), C(name: "Help")),
+    ]),
+)

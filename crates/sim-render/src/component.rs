@@ -26,6 +26,15 @@ pub struct Ui {
     pub fps: f32,
     /// Live projections of the view's `World` components (keys orbit and change level).
     pub worlds: Vec<Projection>,
+    /// Where each `World` was drawn last frame (slot, rect): clicks are routed by it.
+    pub hits: std::cell::RefCell<Vec<(usize, Rect)>>,
+}
+
+impl Ui {
+    /// The `World` slot under a screen cell.
+    pub fn hit(&self, x: u16, y: u16) -> Option<usize> {
+        self.hits.borrow().iter().rev().find(|(_, r)| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h).map(|(s, _)| *s)
+    }
 }
 
 pub struct Ctx<'a, 'c> {
@@ -144,9 +153,14 @@ pub struct World;
 impl Component for World {
     fn draw(&self, ctx: &mut Ctx, _: &ron::Value, slot: Option<usize>, r: Rect) -> Result<(), String> {
         let ui = ctx.ui;
-        let p = slot.and_then(|i| ui.worlds.get(i)).ok_or("World without a projection")?;
-        let inner = ctx.panel(r, &p.title());
+        let i = slot.ok_or("World without a projection")?;
+        let p = ui.worlds.get(i).ok_or("World without a projection")?;
+        ui.hits.borrow_mut().push((i, r));
+        // Draw first, then the title: a 2.5D title reports this frame's work.
+        let inner = ctx.panel(r, "");
         p.draw(ctx, inner);
+        let title = p.title();
+        ctx.panel(r, &title);
         Ok(())
     }
 }
@@ -319,7 +333,7 @@ impl Component for Events {
 pub struct Help;
 impl Component for Help {
     fn draw(&self, ctx: &mut Ctx, _: &ron::Value, _: Option<usize>, r: Rect) -> Result<(), String> {
-        ctx.text(r, 1, 0, "space pause · +/- speed · s step · ←→↑↓ orbit / level · [ ] cut · tab select · q quit", "dim");
+        ctx.text(r, 1, 0, "space pause · +/- speed · s step · click/p perspective · ←→↑↓ orbit / level · [ ] cut · tab select · q quit", "dim");
         Ok(())
     }
 }

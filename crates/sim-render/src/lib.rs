@@ -3,6 +3,7 @@
 
 pub mod canvas;
 pub mod component;
+pub mod layered;
 pub mod layout;
 pub mod projection;
 pub mod scene;
