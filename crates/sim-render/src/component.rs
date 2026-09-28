@@ -38,6 +38,9 @@ pub struct Ui {
     pub images: std::cell::RefCell<Vec<(Rect, crate::pixel::Pixmap)>>,
     /// Which way each entity faces (last x, facing left).
     pub facing: std::cell::RefCell<std::collections::BTreeMap<EntityId, (i64, bool)>>,
+    /// Cooked diorama parts: backdrop strips and the world's section, with the key they were cooked for.
+    pub strips: std::cell::RefCell<Option<(u64, Vec<crate::display::Strip>)>>,
+    pub section: std::cell::RefCell<Option<(u64, crate::image::Image)>>,
 }
 
 impl Ui {
@@ -58,6 +61,8 @@ impl Ui {
             frame: 0,
             images: Default::default(),
             facing: Default::default(),
+            strips: Default::default(),
+            section: Default::default(),
         }
     }
 

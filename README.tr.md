@@ -184,6 +184,27 @@ inceleyici, eğilimler) bir tema ve bir asset paketiyle (`assets/ants.ron`) yerl
 
 Host gösterir; çekirdek karar verir. Aynı `game.ron` her yerde çalışır.
 
+## Test et
+
+Bir oyun, oynanarak test edilir, bir dosyada (`test/scenarios/*.ron`): adım at, oyuncu gibi davran, dünyadan bir şey
+bekle, gördüğünün snapshot'ını al. Rust gerekmez; motor geliştiricileri aynı kütüphaneyi (`test/`, `simtest` crate'i)
+[insta](https://github.com/mitsuhiko/insta) snapshot'ları ve [proptest](https://github.com/proptest-rs/proptest)
+özellikleriyle kullanır.
+
+```ron
+Scenario(
+    name: "wolf_sheep: predation off means no kills",
+    game: "games/wolf_sheep",
+    switches: { "predation": false },
+    steps: [ Step(150), Expect("events.kill == 0") ],
+)
+```
+
+```bash
+cargo run -p simtest          # bütün senaryolar, raporla
+cargo test                    # hepsi, snapshot'lar ve özellikler dahil
+```
+
 ## Durum
 
 simcraft genç. Bugün ne çalışıyor, ne henüz çalışmıyor:

@@ -2,7 +2,7 @@ use sim_core::{Engine, Loaded};
 use sim_render::{Assets, Canvas, Registry, Scene, Theme, Ui, View};
 use sim_rules::Game;
 
-const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/colony");
+const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../games/colony");
 
 type Setup = (Engine<sim_core::Running, Game>, View, Vec<sim_render::Projection>);
 
@@ -63,7 +63,7 @@ fn a_class_overrides_theme_tokens() {
 
 // --- 2.5D layers ---
 
-const LAYERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/colony3d");
+const LAYERS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../games/colony3d");
 
 fn layered_setup() -> (Engine<sim_core::Running, Game>, View, Vec<sim_render::Projection>, Assets) {
     let (world, game) = Game::load(std::path::Path::new(LAYERS), None).expect("loads");

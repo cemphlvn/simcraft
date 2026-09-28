@@ -1,0 +1,10 @@
+// The operator switches predation off: nobody is eaten, whatever else happens.
+Scenario(
+    name: "wolf_sheep: predation off means no kills",
+    game: "games/wolf_sheep",
+    switches: { "predation": false },
+    steps: [
+        Step(150),
+        Expect("events.kill == 0"),
+    ],
+)

@@ -19,7 +19,8 @@ o PR henüz hazır değil.
 
 Bir tasarımcının okumak isteyeceği gibi yaz: adlandırılmış parametreler, açık olmayan her kurala bir yorum,
 tasarımcının kelimeleriyle adlandırılmış durumlar. Oyun yüklenmeli
-(`echo '{"cmd":"quit"}' | cargo run -q -p sim-agent -- games/<ad>`) ve `error:` olayı üretmeden çalışmalı. İlginç bir
+(`echo '{"cmd":"quit"}' | cargo run -q -p sim-agent -- games/<ad>`) ve `error:` olayı üretmeden çalışmalı. `test/scenarios/` altına oyunu oynayıp önemli olanı bekleyen bir senaryo ekle
+(`cargo run -p simtest -- test/scenarios/<ad>.ron`; biçim `docs/architecture.md`, "Testing"). İlginç bir
 şey bulduysan (kazanan bir strateji, bir devrilme noktası) sayılarıyla birlikte `docs/emergence.md`'ye ekle.
 
 ## Bir motor değişikliği

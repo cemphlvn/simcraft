@@ -50,6 +50,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 | `sim-ffi` | `cdylib` + `staticlib`, C header; the agent protocol behind `extern "C"` | No |
+| `sim-gpu` | GPU renderer (`wgpu` + `winit`): textured quads, backdrops and atlas uploaded once; `simcraft-play`; web via wasm | No |
 | `sim-render` | Terminal renderer (cell buffer, diff, frame loop), primitives, 3D voxel view, `view.ron`; `simcraft-view` | No |
 
 ## Tick loop
@@ -342,6 +343,83 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 
 NULL-safe, panic-safe, UTF-8, one handle per thread at a time. `[bus]` sinks in `engine.toml` are not attached through the C API; the host drains instead.
 
+## Testing (`test/`, crate `simtest`)
+
+One place for every test, for game developers and engine developers (research: `docs/research/testing.md`).
+Adopted, unopinionated: **insta** (snapshots, `cargo insta review`) and **proptest** (properties with shrinking).
+Ours on top: **scenarios**, the scene-runner idea as data.
+
+```
+test/
+├── scenarios/*.ron     game developers: play a game, expect things (no Rust)
+├── snapshots/          accepted snapshots (insta)
+├── tests/              engine developers: Rust integration tests (engine, render, scenarios, properties)
+└── src/                the library: scenario format, runner, world expressions; `simtest` binary
+```
+
+```ron
+Scenario(
+    name: "a hungry wolf hunts",
+    game: "games/wolf_sheep",            // relative to the repository
+    seed: 7, params: { "wolf_hunt_at": 3 }, switches: { "predation": true },
+    steps: [
+        Step(20),
+        Expect("count.wolf >= 1 && events.kill >= 1"),
+        Until("states.wolf.Hunt > 0", 200),
+        Act((kind: "wolf", do: "move", args: { "dx": 1, "dy": 0 })),
+        Refused((kind: "wolf", do: "fly"), "unknown action"),
+        Hash("ee9a66d10246d6f9"),
+        Snapshot("after the hunt"),
+        SaveLoad(50),
+    ],
+)
+```
+
+| Step | Meaning |
+|---|---|
+| `Step(n)` | Advance `n` ticks (stops at the end) |
+| `Until(expr, max)` | Advance until `expr` holds; fails after `max` ticks |
+| `Expect(expr)` | `expr` must hold now |
+| `Act(act)` / `Refused(act, text)` | A player action on the first entity matching `id` or `kind` (and `as` a seat); `Refused` must fail with `text` in the reason |
+| `Hash(hex)` | The world hash now (a golden run) |
+| `Snapshot(name)` | A readable summary of the world (counts, states, events, singletons' props) as an insta snapshot |
+| `SaveLoad(n)` | Snapshot, run `n` ticks, restore, run `n` again: both futures must be identical |
+| `Probe(expr)` | Print the value (while writing a scenario) |
+
+`expect_error: "text"` instead of steps: the game must fail to load with `text` in an error (validation tests).
+
+**Expressions** are Rhai over the world: `tick`, `p.<param>`, `count.<kind>`, `states.<kind>.<state>` (leaf state
+name, e.g. `states.ant.Carry`), `sum.<kind>.<prop>`, `events.<name>` (since the start), `env.<name>.<prop>`,
+`done`, `result`.
+
+Run: `cargo test -p simtest` (everything), `cargo run -p simtest -- test/scenarios/wolf_sheep.ron` (one file),
+`cargo insta review` (accept snapshot changes).
+
+## Platforms and builds
+
+One game, every platform: the rule file and the core never change; a thin shell per platform does
+(research: `docs/research/distribution.md`).
+
+| Layer | What | Where it runs |
+|---|---|---|
+| Core | `sim-core`, `sim-state`, `sim-rules` (deterministic, integer, no I/O) | native and **wasm32** (feature `parallel` = rule evaluation on every core; off in the browser) |
+| GPU renderer | `sim-gpu`: `wgpu` + `winit`. Everything is a textured quad drawn by one shader (nearest sampling, alpha blending): the sky, **backdrop layers uploaded once** and scrolled by UV offset in the shader (parallax on the GPU), the world cross-section as a small texture re-uploaded only when it changed, **sprites from one atlas** built at load. The CPU uploads what changed and a list of quads | Metal (macOS, iOS, visionOS), Vulkan (Linux, Android), DX12 (Windows), WebGPU / WebGL2 (browser, via wasm) |
+| Terminal renderer | `sim-render` (cells, half-blocks, kitty graphics) | developer and debugging view |
+| Platform shell | `simcraft-build` | one command per target (below) |
+
+`simcraft-build <game> --target <t> [--view <file>]` bundles the game, its views and asset packs (the files are
+embedded, so the build is one self-contained artifact) and produces:
+
+| Target | Output | Needs |
+|---|---|---|
+| `web` | `dist/<game>-web/`: `index.html`, `.wasm`, JS glue (WebGPU, falls back to WebGL2); a static site for itch.io and web portals, the base for WebXR and Ray-Ban web apps | `wasm32-unknown-unknown`, `wasm-bindgen` CLI |
+| `macos` | `dist/<game>-macos/<Game>.app` (the layout a Steam or Epic depot takes; sign and notarize before upload) | Xcode command line tools |
+| `linux` / `windows` | native executable in `dist/<game>-<target>/` (Steam depots, Epic BuildPatchTool) | that target's toolchain |
+| `steam` | the native build plus SteamPipe scripts (`app_build.vdf`, one depot per OS) in `dist/<game>-steam/` | Steamworks app and depot ids (`--app`, `--depot`) |
+| `ios` / `android` | not yet: the same `sim-gpu` code, wrapped by Xcode / Gradle projects (IPA, AAB) | |
+
+`simcraft-build --list` shows every target and whether this machine can build it.
+
 ## Host adapters (`adapters/`)
 
 | Host | Layer that needs the host | Layer that does not (tested without the host) |
@@ -363,6 +441,8 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] State charts: `sim-state` + game 4 (gamedev)
 - [x] Gradients (`Climb`) + game 5 (colony); eval-driven development (`tools/eval.py`, `docs/evals.md`)
 - [x] Environments (`envs/`, `env.<name>`, native implementations with conformance), maths helpers
+- [x] Test suite (`test/`, `simtest`): scenarios, insta snapshots, proptest properties
+- [ ] Platforms: core on wasm32, `sim-gpu` (wgpu), `simcraft-build` (web, macOS, Linux, Windows, Steam; iOS and Android next)
 - [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)
 - [x] 3D worlds (depth, z, 26-neighbourhood) and fields (per-voxel numbers, native diffusion, decay, terrain)
 - [x] `sim-render`: native terminal renderer, components, themes, asset packs, projections, `view.ron`

@@ -1,0 +1,11 @@
+// Two seats: a player may only act for their own village.
+Scenario(
+    name: "market: seats own their villages",
+    game: "games/market",
+    steps: [
+        Refused((kind: "village", as: "bob", do: "build"), "not yours"),
+        Step(150),
+        Expect("done"),
+        Expect("result == \"time\""),
+    ],
+)

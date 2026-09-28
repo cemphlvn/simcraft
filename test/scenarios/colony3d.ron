@@ -1,0 +1,14 @@
+// The physical nest: the soil lags the seasons, and ants go down in winter.
+Scenario(
+    name: "colony3d: winter drives the ants underground",
+    game: "games/colony3d",
+    steps: [
+        Step(60),
+        Expect("events.delivered >= 0 && count.ant > 0"),
+        // Into the first winter.
+        Until("env.seasons.state == \"Winter\"", 500),
+        Step(40),
+        Expect("states.ant.Dormant > 0"),
+        Snapshot("first winter"),
+    ],
+)

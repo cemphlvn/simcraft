@@ -184,6 +184,27 @@ The core is also a C library (`libsimcraft`, header `crates/sim-ffi/include/simc
 
 Hosts display; the core decides. The same `game.ron` runs everywhere.
 
+## Test it
+
+A game is tested by playing it, in a file (`test/scenarios/*.ron`): step, act as a player, expect things about the
+world, snapshot what you saw. No Rust needed; engine developers use the same library (`test/`, crate `simtest`)
+with [insta](https://github.com/mitsuhiko/insta) snapshots and [proptest](https://github.com/proptest-rs/proptest)
+properties.
+
+```ron
+Scenario(
+    name: "wolf_sheep: predation off means no kills",
+    game: "games/wolf_sheep",
+    switches: { "predation": false },
+    steps: [ Step(150), Expect("events.kill == 0") ],
+)
+```
+
+```bash
+cargo run -p simtest          # every scenario, with a report
+cargo test                    # everything, including snapshots and properties
+```
+
 ## Status
 
 simcraft is young. What works today, and what does not yet:

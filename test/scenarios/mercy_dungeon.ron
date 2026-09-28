@@ -1,0 +1,13 @@
+// The hero acts as a player: an action that does not exist is refused, a real one is accepted.
+Scenario(
+    name: "mercy_dungeon: the hero plays",
+    game: "games/mercy_dungeon",
+    steps: [
+        Refused((kind: "hero", do: "fly"), "unknown action"),
+        Act((kind: "hero", do: "move", args: { "dx": 1, "dy": 0 })),
+        Step(1),
+        Expect("count.hero == 1"),
+        Until("count.ghost == 0 || done", 400),
+        Snapshot("the dungeon at the end"),
+    ],
+)

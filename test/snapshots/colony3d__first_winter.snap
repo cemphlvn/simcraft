@@ -1,0 +1,14 @@
+---
+source: test/tests/scenarios.rs
+description: "colony3d: winter drives the ants underground"
+expression: text
+---
+tick 401
+ant: 13 (Dormant 13)
+bush: 7 (Ripe 7)
+entrance: 1
+nest: 1 (Open 1)
+seasons: 1 (Winter 1)
+nest props: born=5 food=2 income=177
+seasons props: ripeness=0 warmth=9
+events: born 5, delivered 23, short 16

@@ -1,0 +1,4 @@
+# The browser build: getrandom (pulled in by Rhai's hashing) uses the browser's crypto.
+# Simulation randomness never comes from here: it is seeded and deterministic (sim-core).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

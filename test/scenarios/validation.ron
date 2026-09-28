@@ -1,0 +1,7 @@
+// A typo in an operator's panel must stop the engine at load time.
+Scenario(
+    name: "validation: an unknown switch is refused",
+    game: "games/wolf_sheep",
+    switches: { "predaton": false },
+    expect_error: "no rule or action named 'predaton'",
+)

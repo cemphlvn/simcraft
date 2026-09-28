@@ -1,0 +1,10 @@
+---
+source: test/tests/scenarios.rs
+description: "mercy_dungeon: the hero plays"
+expression: text
+---
+tick 400
+ghost: 3 (Calm 3)
+hero: 1
+wall: 81
+hero props: hp=10 lv=0

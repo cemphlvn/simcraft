@@ -4,11 +4,11 @@
 //! and dimmer (2.5D depth); the camera follows the selected entity and backdrops scroll slower (parallax).
 
 use serde::Deserialize;
-use sim_core::Entity;
 
-use crate::canvas::{Cell, Rect, Rgb};
+use crate::canvas::{Cell, Rect};
 use crate::component::{Component, Ctx, props};
-use crate::pixel::{Backdrop, Pixmap, Season, mix, noise};
+use crate::display;
+use crate::pixel::Backdrop;
 
 /// A backdrop layer as written in a view: `(kind: "hills", color: (96, 122, 150), height: 30, detail: 2, seed: 11,
 /// speed: 15, haze: 45)`. `detail` is roughness for hills, spacing for trees, clouds per 100 pixels for clouds.
@@ -35,7 +35,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    fn backdrop(&self) -> Result<Option<Backdrop>, String> {
+    pub fn backdrop(&self) -> Result<Option<Backdrop>, String> {
         Ok(Some(match self.kind.as_str() {
             "image" => return Ok(None),
             "hills" => Backdrop::Hills(self.color, self.height, self.detail.max(1), self.seed),
@@ -112,8 +112,23 @@ impl Component for Diorama {
         if !p.soil.is_empty() && !ctx.scene.assets.loaded.contains_key(&p.soil) {
             return Err(format!("soil image '{}' is not in the asset packs' `images`", p.soil));
         }
-        let layers = p.layers.iter().map(|l| l.backdrop().map(|b| (b, l))).collect::<Result<Vec<_>, _>>()?;
-        let art = paint(ctx, &p, &layers, art_w.max(8), art_h);
+        let scene = ctx.scene;
+        let list = display::compose(scene, &p, ctx.ui.frame, ctx.ui.selected, &mut ctx.ui.facing.borrow_mut());
+        // Cooked once per season band / world change, reused every frame.
+        let mut strips = ctx.ui.strips.borrow_mut();
+        if strips.as_ref().is_none_or(|(k, _)| *k != list.strips_key) {
+            *strips = Some((list.strips_key, display::cook_strips(scene, &p, &list)?));
+        }
+        let mut section = ctx.ui.section.borrow_mut();
+        if section.as_ref().is_none_or(|(k, _)| *k != list.section_key) {
+            *section = Some((list.section_key, display::cook_section(scene, &p, &list)));
+        }
+        let target = ctx.ui.selected.and_then(|id| scene.world.get(id)).map_or(list.world_px / 2, |e| e.x * p.tile + p.tile / 2);
+        let w = art_w.max(8) as i64;
+        let cam = display::camera(list.world_px, target, w);
+        let (strips, section) = (&strips.as_ref().expect("cooked").1, &section.as_ref().expect("cooked").1);
+        let art = display::rasterize(scene, &list, strips, section, w as usize, cam, ctx.ui.frame);
+        let _ = art_h;
         if ctx.ui.graphics {
             let bg = ctx.style.color("bg");
             ctx.canvas.fill(inner, Cell { ch: ' ', fg: bg, bg });
@@ -125,173 +140,3 @@ impl Component for Diorama {
     }
 }
 
-fn paint(ctx: &Ctx, p: &DioramaProps, layers: &[(Option<Backdrop>, &Layer)], w: usize, h: usize) -> Pixmap {
-    let scene = ctx.scene;
-    let world = scene.world;
-    let t = p.tile;
-    let ground = p.sky;
-    let env = (!p.season_env.is_empty()).then(|| world.of_kind(&p.season_env).next()).flatten();
-    let season = env.map_or(Season::Summer, |e| Season::from_state(&e.state));
-    let warmth = env.and_then(|e| e.props.get("warmth").copied()).unwrap_or(60);
-    let (sky_top, horizon) = season.sky(warmth);
-
-    // Camera: centre on the selected entity, clamped to the world when it is wider than the view.
-    let world_px = world.width * t;
-    let target = ctx
-        .ui
-        .selected
-        .and_then(|id| world.get(id))
-        .map_or(world_px / 2, |e| e.x * t + t / 2);
-    let cam = if world_px > w as i64 { (target - w as i64 / 2).clamp(0, world_px - w as i64) } else { -((w as i64 - world_px) / 2) };
-
-    let mut pm = Pixmap::new(w, h, sky_top);
-    // Sky gradient.
-    for y in 0..ground.max(1) {
-        let c = mix(sky_top, horizon, (y * 100 / ground.max(1)) as u32);
-        for x in 0..w as i64 {
-            pm.set(x, y, c);
-        }
-    }
-    // Sun or moon-pale disc, drifting slowly with the camera (a very far layer).
-    let sun_x = w as i64 * 3 / 4 - cam / 12;
-    let sun = if season == Season::Winter { Rgb(235, 235, 225) } else { Rgb(255, 236, 170) };
-    for dy in -3i64..=3 {
-        for dx in -3i64..=3 {
-            if dx * dx + dy * dy <= 10 {
-                pm.set(sun_x + dx, 8 + dy, sun);
-            } else if dx * dx + dy * dy <= 14 {
-                pm.blend(sun_x + dx, 8 + dy, sun, 40);
-            }
-        }
-    }
-    // Parallax backdrops, far to near.
-    for (b, l) in layers {
-        let lcam = cam * l.speed / 100;
-        match b {
-            Some(b) => b.draw(&mut pm, lcam, ground, horizon, l.haze, season),
-            None => {
-                // An image layer: tiled across, standing on the ground line, recoloured by the season and hazed.
-                let img = &scene.assets.loaded[&l.image];
-                let top = ground - l.height - img.h as i64;
-                for sx in 0..w as i64 {
-                    let ix = (sx + lcam).rem_euclid(img.w as i64) as usize;
-                    for iy in 0..img.h {
-                        let px = img.get(ix, iy);
-                        if px[3] == 0 {
-                            continue;
-                        }
-                        let c = season.recolor(mix(Rgb(px[0], px[1], px[2]), horizon, l.haze), (ix + iy).is_multiple_of(7));
-                        pm.set(sx, top + iy as i64, c);
-                    }
-                }
-            }
-        }
-    }
-    // Falling snow in winter (from the frame counter: moves while you watch, never touches the simulation).
-    if season == Season::Winter {
-        for i in 0..(w as i64 / 6) {
-            let n = noise(i, 0, 99);
-            let x = ((n % w as u64) as i64 + ctx.ui.frame as i64 / 3 * ((n / 7 % 3) as i64 - 1)).rem_euclid(w as i64);
-            let y = ((n / 11) as i64 + ctx.ui.frame as i64 / 2).rem_euclid(ground.max(1));
-            pm.blend(x, y, Rgb(245, 248, 255), 85);
-        }
-    }
-
-    // Ground and soil, column by column.
-    for sx in 0..w as i64 {
-        let wx = sx + cam;
-        let vx = wx.div_euclid(t);
-        let inside = (0..world.width).contains(&vx);
-        // Grass line with tufts.
-        let tuft = (noise(wx, 1, 5) % 4) as i64;
-        let grass = season.recolor(Rgb(72, 150, 64), noise(wx, 2, 5).is_multiple_of(5));
-        for dy in 0..=tuft.min(2) {
-            pm.set(sx, ground - 1 - dy, grass.shade(if dy == 0 { 90 } else { 110 }));
-        }
-        if season == Season::Winter {
-            pm.set(sx, ground - 1 - tuft.min(2), Rgb(236, 240, 248));
-        }
-        for y in ground..h as i64 {
-            let depth = y - ground;
-            let level = 1 + depth / t;
-            let soil_here = !inside || world.is_terrain(vx, p.plane, level);
-            let base = mix(Rgb(122, 86, 56), Rgb(70, 48, 36), (depth * 100 / (h as i64 - ground).max(1)) as u32);
-            let texture = (!p.soil.is_empty()).then(|| &scene.assets.loaded[&p.soil]);
-            let mut c = if let (true, Some(tex)) = (soil_here, texture) {
-                // Texture from the asset pack, darker with depth.
-                let q = tex.get(wx.rem_euclid(tex.w as i64) as usize, depth.rem_euclid(tex.h as i64) as usize);
-                mix(Rgb(q[0], q[1], q[2]), Rgb(40, 28, 22), (depth * 60 / (h as i64 - ground).max(1)) as u32)
-            } else if soil_here {
-                // Texture: pebbles and grains, from position (stable while scrolling).
-                let n = noise(wx, y, 17);
-                let mut c = base;
-                if n.is_multiple_of(11) {
-                    c = c.shade(125);
-                } else if n.is_multiple_of(7) {
-                    c = c.shade(82);
-                }
-                if n.is_multiple_of(97) {
-                    c = Rgb(150, 145, 135);
-                }
-                c
-            } else {
-                // A hollow: dark air, a lit floor, a shadowed ceiling.
-                let iy = depth.rem_euclid(t);
-                let above_soil = world.is_terrain(vx, p.plane, level - 1) || level == 1;
-                let c = Rgb(34, 24, 22);
-                if iy == t - 1 { Rgb(88, 62, 44) } else if iy == 0 && above_soil { Rgb(20, 14, 12) } else { c }
-            };
-            // Temperature tint: warm soil glows a little red, cold soil turns blue.
-            if !p.tint.is_empty() && inside
-                && let Some(v) = world.field(&p.tint, vx, p.plane, level)
-            {
-                let heat = (v * 100 / p.tint_max.max(1)).clamp(0, 100) as u32;
-                let tint = if heat >= 50 { Rgb(210, 90, 50) } else { Rgb(80, 120, 210) };
-                c = mix(c, tint, (heat as i64 - 50).unsigned_abs() as u32 * 30 / 50);
-            }
-            pm.set(sx, y, c);
-        }
-        // Scent on the surface: faint green specks rising above the trail.
-        if inside && !p.specks.is_empty() {
-            let strongest = (0..world.height).filter_map(|yy| world.field(&p.specks, vx, yy, 0)).max().unwrap_or(0);
-            if strongest > 10 && noise(wx, ctx.ui.frame as i64 / 4, 3).is_multiple_of(5) {
-                let rise = (noise(wx, 0, 4) % 4) as i64;
-                pm.blend(sx, ground - 3 - rise, Rgb(170, 240, 170), (strongest.min(120) as u32) * 60 / 120);
-            }
-        }
-    }
-
-    // Entities, back to front: surface things by their row (behind the plane first), then underground.
-    let mut ents: Vec<&Entity> = world.entities().values().filter(|e| scene.visible(e)).collect();
-    ents.sort_by_key(|e| (e.z > 0, e.y, e.id));
-    let mut facing = ctx.ui.facing.borrow_mut();
-    for e in ents {
-        let look = scene.assets.look(e, scene.game.state_label(e));
-        let Some(sprite) = look.sprite.as_ref().and_then(|s| scene.assets.sprites.get(s)) else { continue };
-        let (sw, _) = sprite.size();
-        let depth_off = if e.z == 0 { (e.y - p.plane) / 2 } else { 0 };
-        if e.z > 0 && (e.y - p.plane).abs() > 3 {
-            continue; // underground and far from the cut: hidden in the soil
-        }
-        let x = e.x * t + (t - sw as i64) / 2 - cam;
-        let floor = if e.z == 0 { ground - 1 + depth_off.min(0) - depth_off.max(0) / 2 } else { ground + e.z * t - 2 };
-        // Face the way the entity last moved.
-        let entry = facing.entry(e.id).or_insert((e.x, false));
-        if e.x != entry.0 {
-            entry.1 = e.x < entry.0;
-            entry.0 = e.x;
-        }
-        let shade = if e.z == 0 { (100 - (p.plane - e.y).max(0) * 4).clamp(60, 100) as u32 } else { 100 };
-        let frame = (ctx.ui.frame * sprite.fps as u64 / 30 + e.id) as usize;
-        sprite.blit(&mut pm, &scene.assets.palette, frame, x, floor, entry.1, shade);
-        if ctx.ui.selected == Some(e.id) {
-            // A small marker above the selected entity.
-            let mx = x + sw as i64 / 2;
-            let my = floor - sprite.size().1 as i64 - 2;
-            pm.set(mx, my, Rgb(255, 255, 255));
-            pm.set(mx - 1, my - 1, Rgb(255, 255, 255));
-            pm.set(mx + 1, my - 1, Rgb(255, 255, 255));
-        }
-    }
-    pm
-}

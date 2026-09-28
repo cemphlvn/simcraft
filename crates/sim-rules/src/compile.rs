@@ -7,7 +7,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+/// Worker threads for rule evaluation (none without the `parallel` feature, e.g. in the browser).
+#[cfg(feature = "parallel")]
+type Pool = rayon::ThreadPool;
+#[cfg(not(feature = "parallel"))]
+type Pool = ();
 use rhai::{AST, Array, Dynamic, Engine as Rhai, Map, Scope};
 use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, PickSpec, Spec, TransitionSpec};
@@ -110,7 +117,7 @@ pub struct Game {
     score: Option<AST>,
     compile_errors: Vec<String>,
     /// None = single core.
-    pool: Option<rayon::ThreadPool>,
+    pool: Option<Pool>,
     /// `p`, built once. Each core copies it into its own scope once (no locks).
     p_map: Map,
     /// Kind → chart (kinds that have a machine).
@@ -482,9 +489,15 @@ impl Game {
     /// `dir/game.ron` + `config` (default `dir/engine.toml`).
     pub fn load(dir: &Path, config: Option<&Path>) -> Result<(World, Game), String> {
         let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
-        let game_src = read(&dir.join("game.ron"))?;
         let cfg_path = config.map(Path::to_path_buf).unwrap_or_else(|| dir.join("engine.toml"));
         let cfg_src = read(&cfg_path)?;
+        Self::load_panel(dir, &cfg_src)
+    }
+
+    /// `dir/game.ron` (with its environments) and a panel given as text (tests override seeds and params).
+    pub fn load_panel(dir: &Path, cfg_src: &str) -> Result<(World, Game), String> {
+        let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
+        let game_src = read(&dir.join("game.ron"))?;
         let def: GameDef = ron::from_str(&game_src).map_err(|e| format!("game.ron: {e}"))?;
         let mut envs = Vec::new();
         for name in &def.environments {
@@ -494,7 +507,7 @@ impl Game {
                 .ok_or_else(|| format!("environment '{name}': no envs/{name}.ron next to or above {}", dir.display()))?;
             envs.push((name.clone(), read(&path)?));
         }
-        Self::from_parts(&game_src, &cfg_src, &envs)
+        Self::from_parts(&game_src, cfg_src, &envs)
     }
 
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<(World, Game), String> {
@@ -556,10 +569,13 @@ impl Game {
         rhai.register_fn("in_state", |m: Map, sel: &str| sim_state::in_label(&map_str(&m, "state"), sel));
         rhai.register_fn("depth_in", |sel: &str| CTX.with(|c| sim_state::depth_in_label(&c.borrow().state, sel)));
         rhai.register_fn("depth_in", |m: Map, sel: &str| sim_state::depth_in_label(&map_str(&m, "state"), sel));
+        #[cfg(feature = "parallel")]
         let pool = match cfg.run.threads {
             1 => None,
             n => rayon::ThreadPoolBuilder::new().num_threads(n).build().ok(),
         };
+        #[cfg(not(feature = "parallel"))]
+        let pool: Option<Pool> = None;
 
         let mut cc = Compiler { rhai: &rhai, errors: Vec::new() };
         let mut mach = Machines::default();
@@ -876,6 +892,20 @@ impl Game {
         self.bind_world(None);
         let mut out: Vec<(String, String)> = map.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         out.extend(errs.into_iter().map(|m| ("error".to_string(), m)));
+        out
+    }
+
+    /// Evaluates a world-level expression (what `end` sees: `tick`, `p`, `count`, `env`), plus `extra` values
+    /// (test runners add `states`, `sum`, `events`...). For tests and tools, not for the tick loop.
+    pub fn eval_world(&self, world: &World, src: &str, extra: Map) -> Result<Dynamic, String> {
+        let ast = self.rhai.compile_expression(src).map_err(|e| format!("`{src}`: {e}"))?;
+        let mut scope = self.world_scope(world);
+        for (k, v) in extra {
+            scope.push_constant(k.to_string(), v);
+        }
+        self.bind_world(Some(world));
+        let out = self.rhai.eval_ast_with_scope::<Dynamic>(&mut scope, &ast).map_err(|e| format!("`{src}`: {e}"));
+        self.bind_world(None);
         out
     }
 
@@ -1875,8 +1905,9 @@ impl Rules for Game {
         // In a small world, distributing work costs more than the work: sequential path.
         let pool = self.pool.as_ref().filter(|_| entities.len() >= 4 * CHUNK);
         let groups: Vec<Vec<Group>> = match pool {
+            #[cfg(feature = "parallel")]
             Some(pool) => pool.install(|| entities.par_iter().with_min_len(CHUNK).map_init(init, per).collect()),
-            None => {
+            _ => {
                 let mut scope = init();
                 entities.iter().map(|e| per(&mut scope, e)).collect()
             }

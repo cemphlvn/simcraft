@@ -18,7 +18,8 @@ but **you** own the design and the review. If you cannot explain a line of your 
 
 Write it the way a designer wants to read it: named params, a comment per non-obvious rule, states named in
 the designer's words. It must load (`echo '{"cmd":"quit"}' | cargo run -q -p sim-agent -- games/<name>`) and run
-without `error:` events. If you found something interesting (a strategy that wins, a tipping point), add it to
+without `error:` events. Add a scenario in `test/scenarios/` that plays it and expects what matters
+(`cargo run -p simtest -- test/scenarios/<name>.ron`; format in `docs/architecture.md`, "Testing"). If you found something interesting (a strategy that wins, a tipping point), add it to
 `docs/emergence.md` with the numbers.
 
 ## An engine change

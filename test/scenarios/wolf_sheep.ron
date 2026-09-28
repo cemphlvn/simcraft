@@ -1,0 +1,13 @@
+// Wolves and sheep: the golden run, hunting, and switches.
+Scenario(
+    name: "wolf_sheep: golden run and hunting",
+    game: "games/wolf_sheep",
+    steps: [
+        Step(100),
+        Expect("count.wolf >= 1 && count.sheep >= 1"),
+        Expect("events.kill > 0"),
+        Step(200),
+        Hash("ee9a66d10246d6f9"),
+        SaveLoad(30),
+    ],
+)
