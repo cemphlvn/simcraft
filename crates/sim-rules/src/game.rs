@@ -90,31 +90,83 @@ pub struct KindDef {
     pub glyphs: BTreeMap<String, char>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Bir makine ya da içindeki bir durum. Düz makine yalnızca `(initial, transitions)`;
+/// geri kalan her şey isteğe bağlı (bkz. architecture.md, State machines).
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FsmDef {
-    pub initial: String,
+pub struct StateDef {
+    #[serde(default)]
+    pub initial: Option<String>,
+    /// İç durumlar (alt makine).
+    #[serde(default)]
+    pub states: BTreeMap<String, StateDef>,
+    /// Yan yana çalışan makineler.
+    #[serde(default)]
+    pub layers: BTreeMap<String, StateDef>,
+    /// Başka bir makineyi buraya tak.
+    #[serde(default, rename = "use")]
+    pub uses: Option<String>,
+    /// Geri gelince kaldığın çocuktan devam et.
+    #[serde(default)]
+    pub remember: bool,
+    #[serde(default)]
+    pub pick: Option<PickDef>,
+    /// `pick` her tick yeniden değerlendirilir.
+    #[serde(default)]
+    pub recheck: bool,
+    #[serde(default)]
+    pub enter: Vec<Do>,
+    #[serde(default)]
+    pub exit: Vec<Do>,
+    #[serde(default)]
     pub transitions: Vec<TransitionDef>,
+    /// Bu durumda yaşayan kurallar (`for` yazılmaz).
+    #[serde(default)]
+    pub rules: Vec<RuleDef>,
+}
+
+pub type FsmDef = StateDef;
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum PickDef {
+    /// (durum, koşul): ilk tutan.
+    First(Vec<(String, String)>),
+    /// (durum, puan): en yüksek.
+    Best(Vec<(String, String)>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransitionDef {
+    /// Çocuk ya da yol (`"Dev.Polish"`), `"*"` = herhangi biri.
     pub from: String,
-    pub to: String,
-    /// Rhai ifadesi → bool. İlk eşleşen geçiş kazanır.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Rhai ifadesi → bool. Aynı seviyede ilk eşleşen geçiş kazanır.
     pub when: String,
+    #[serde(default)]
+    pub then: Vec<Do>,
+    /// Gitmeden önce bu seviyedeki yeri kaydet.
+    #[serde(default)]
+    pub interrupt: bool,
+    /// `to` yerine: kaydedilen yere dön.
+    #[serde(default)]
+    pub back: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleDef {
     pub name: String,
-    /// Hangi kind'a uygulanır; "*" hepsi.
-    #[serde(rename = "for")]
-    pub for_kind: String,
+    /// Hangi kind'a uygulanır; "*" hepsi. Durumun içine yazılan kurallarda yok.
+    #[serde(rename = "for", default)]
+    pub for_kind: Option<String>,
+    /// Durum seçici: `"Work"` Work'ü ve içindekileri kapsar; `"Awake.Work"` bir yol.
     #[serde(default)]
     pub state: Option<String>,
+    /// Etkin durum, bağlandığı durumun en fazla bu kadar altında olabilir.
+    #[serde(default)]
+    pub depth: Option<usize>,
     /// Hedef: `Nearest(kind)`. Yoksa kural ateşlenmez. İfadelerde `it` (`it.dist` dahil).
     #[serde(default)]
     pub target: Option<Target>,
@@ -154,6 +206,10 @@ pub enum Do {
     /// prop >= ifade olmalı. İstek anında ve uygulama anında (canlı durumda) denetlenir;
     /// tutmazsa grubun tamamı düşer (aynı tick'te iki alıcı tek stok).
     Need(String, String),
+    /// Bu seviyedeki yeri kaydedip duruma git; `Back` geri getirir.
+    Interrupt(String),
+    /// En son kaydedilen kesmeye dön.
+    Back,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -163,4 +219,6 @@ pub enum Target {
     /// Kuralın `target`'ı.
     It,
     Nearest(String),
+    /// O durumdaki en yakın kind: `NearestIn("project", "Blocked")`.
+    NearestIn(String, String),
 }

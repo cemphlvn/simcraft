@@ -382,3 +382,102 @@ fn bus_filter_delivers_only_named_messages() {
     assert!(!got.is_empty());
     assert!(got.iter().all(|m| matches!(m, Msg::Event(ev) if ev.name == "kill")));
 }
+
+// --- gamedev (state charts) ---
+
+const DEV: &str = include_str!("../../../games/gamedev/game.ron");
+const DEV_PANEL: &str = include_str!("../../../games/gamedev/engine.toml");
+
+fn dev_run(panel: &str, ticks: u64) -> (Engine<Running, Game>, Vec<String>) {
+    let mut e = boot(DEV, panel).expect("valid");
+    let mut events = Vec::new();
+    for _ in 0..ticks {
+        events.extend(e.tick().events.into_iter().map(|ev| ev.name));
+    }
+    (e, events)
+}
+
+fn states_of(e: &Engine<Running, Game>, kind: &str) -> Vec<String> {
+    e.world().entities().values().filter(|x| x.kind == kind).map(|x| e.rules().state_label(x).to_string()).collect()
+}
+
+#[test]
+fn gamedev_layers_start_side_by_side() {
+    let e = boot(DEV, DEV_PANEL).expect("valid");
+    // Born at tick 0 (midnight) in `initial`: Awake, whose Work picks its first option.
+    assert!(states_of(&e, "dev").iter().all(|s| s == "Life.Awake.Work.Commute|Mood.Motivated"), "{:?}", states_of(&e, "dev"));
+}
+
+#[test]
+fn gamedev_walls_interrupt_and_refactors_resume() {
+    let (e, events) = dev_run(DEV_PANEL, 24 * 20);
+    let has = |n: &str| events.iter().any(|x| x == n);
+    assert!(has("wall") && has("feature") && has("ship"), "every project hits a wall, the engine grows, games ship");
+    assert!(!events.iter().any(|x| x.starts_with("error")), "{events:?}");
+    let engine = e.world().entities().values().find(|x| x.kind == "engine").expect("engine");
+    assert!(engine.props["features"] > 0);
+}
+
+#[test]
+fn gamedev_hacking_culture_breeds_debt() {
+    let (e, events) = dev_run(&DEV_PANEL.replace("care = 6", "care = 0"), 24 * 20);
+    let engine = e.world().entities().values().find(|x| x.kind == "engine").expect("engine");
+    assert!(events.iter().any(|x| x == "hack"));
+    assert_eq!(engine.props["features"], 0, "nobody refactors");
+    assert!(engine.props["debt"] > 0);
+}
+
+#[test]
+fn golden_gamedev_hash() {
+    let (e, _) = dev_run(DEV_PANEL, 24 * 30);
+    // Recorded when game 4 was written. Change only on purpose, together with the game.
+    assert_eq!(format!("{:016x}", e.world().hash()), GAMEDEV_GOLDEN);
+}
+const GAMEDEV_GOLDEN: &str = "aaf82a4a1c4a2ba7";
+
+#[test]
+fn state_rules_bind_by_inheritance() {
+    // `awake_drain` lives in Awake: it runs deep inside Awake, never while Asleep.
+    let (e, _) = dev_run(DEV_PANEL, 3);
+    let asleep = e.world().entities().values().filter(|x| x.kind == "dev").all(|x| x.state.starts_with("Life.Asleep"));
+    assert!(asleep, "midnight: everyone goes to sleep");
+    let before: Vec<i64> = e.world().entities().values().filter(|x| x.kind == "dev").map(|x| x.props["energy"]).collect();
+    let (e2, _) = dev_run(DEV_PANEL, 4);
+    let after: Vec<i64> = e2.world().entities().values().filter(|x| x.kind == "dev").map(|x| x.props["energy"]).collect();
+    assert!(after.iter().zip(&before).all(|(a, b)| a >= b), "no drain while asleep");
+}
+
+#[test]
+fn switching_off_a_machine_rule_turns_it_off_at_every_mount() {
+    let panel = DEV_PANEL.replace("[agent]", "[switches]\nconcentrate = false\n\n[agent]");
+    let (e, _) = dev_run(&panel, 24 * 3);
+    assert!(e.world().entities().values().filter(|x| x.kind == "dev").all(|x| !x.state.contains("Flow")));
+}
+
+#[test]
+fn state_chart_mistakes_are_reported() {
+    let cases = [
+        (DEV.replace(r#"Interrupt("Cleanup")"#, r#"Interrupt("Cleenup")"#), "Interrupt to unknown state 'Cleenup'"),
+        (DEV.replace(r#"(name: "concentrate", then"#, r#"(name: "concentrate", for: "dev", then"#), "drop `for`"),
+        (DEV.replace(r#""Design":   (use: "focus""#, r#""Design":   (use: "fokus""#), "unknown machine 'fokus'"),
+        (DEV.replace(r#"On(NearestIn("project", "Blocked")"#, r#"On(NearestIn("project", "Blokked")"#), "state 'Blokked' does not exist for 'project'"),
+        (DEV.replace(r#"initial: "Warmup","#, r#"initial: "Warm","#), "initial 'Warm' is not one of its states"),
+        (DEV.replace(r#""Vacation": 'v'"#, r#""Vacashun": 'v'"#), "glyph for unknown state 'Vacashun'"),
+        (DEV.replace(r#"(from: "Stuck", back: true,"#, r#"(from: "Stuck", to: "Work", back: true,"#), "exactly one of `to` and `back: true`"),
+    ];
+    for (game, want) in &cases {
+        let errs = boot(game, DEV_PANEL).err().unwrap_or_else(|| panic!("must fail: {want}"));
+        assert!(errs.iter().any(|e| e.contains(want)), "want '{want}' in {errs:?}");
+    }
+}
+
+#[test]
+fn ambiguous_goto_needs_a_path() {
+    // `Flow` is mounted four times (Design, Build, Playtest, Refactor).
+    let game = DEV.replace(r#"Emit("coffee_break") ]"#, r#"Emit("coffee_break"), Goto("Flow") ]"#);
+    let errs = boot(&game, DEV_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("'Flow' is ambiguous")), "{errs:?}");
+    let game = DEV.replace(r#"Emit("coffee_break") ]"#, r#"Emit("coffee_break"), Goto("Build.Flow") ]"#);
+    assert!(boot(&game, DEV_PANEL).is_ok(), "a path is unique");
+}
+

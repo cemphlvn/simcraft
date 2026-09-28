@@ -1,0 +1,293 @@
+#![enable(implicit_some)]
+// Gamedev. Three developers share one studio and one in-house engine. 1 tick = 1 hour.
+//   Each dev has an idea, prototypes it until it is fun, builds content, polishes, ships.
+//   Content brings feature creep: the game starts to need engine features the engine lacks,
+//   and the project hits a wall. The dev is interrupted: refactor the shared engine
+//   (slow now, every later project benefits) or hack around it (fast now, the debt breeds bugs
+//   in everyone's games). Refactoring can itself be interrupted by debt cleanup.
+//   Flow takes hours to build and one interrupt to lose. Crunch starts when shipping is one
+//   step away. Burnout is contagious across the office.
+// Score: fame from shipped games.
+Game(
+    name: "gamedev",
+
+    kinds: {
+        "wall":    (glyph: '#', solid: true),
+        "coffee":  (glyph: 'c', solid: true),
+        // The shared in-house engine.
+        "engine":  (glyph: 'E', solid: true,
+                    props: { "features": 0, "debt": 0, "progress": 0 }),
+        "dev":     (glyph: '@', solid: true, fsm: "dev",
+                    props: { "owner": 0, "hx": 0, "hy": 0, "energy": 100, "stress": 0,
+                             "caffeine": 0, "focus": 0, "speed": 2, "crunch": 0,
+                             "pressure": 0, "shipped": 0, "fame": 0 },
+                    glyphs: { "Asleep": 'z', "Break": 'c', "Stuck": '!', "Flow": '*',
+                              "Vacation": 'v' }),
+        // A game in development. It sits on its developer's desk.
+        "project": (glyph: 'o', fsm: "project",
+                    props: { "fun": 0, "content": 0, "polish": 0, "bugs": 0,
+                             "needs": 0, "hacks": 0, "age": 0, "ambition": -1 },
+                    glyphs: { "Prototype": 'p', "Production": 'P', "Polish": '%',
+                              "Blocked": 'x', "Shipped": 'S', "Cancelled": '_' }),
+    },
+
+    params: {
+        "bedtime": 23, "wake": 7,
+        "break_at": 25, "back_at": 80,
+        "coffee": 12,               // energy per hour at the machine, minus caffeine
+        "sleep_regen": 9,
+        "tired_at": 35, "rested_at": 60,
+        "burnout_at": 60,           // stress
+        "office_r": 6,              // how far a burnt-out colleague is felt
+        "contagion": 3,             // % per hour
+        "flow_after": 3,            // hours of uninterrupted focus
+        "drain": 2,                 // energy per awake hour
+        "design_rate": 1, "build_rate": 2,
+        "fun_needed": 20, "scope": 120, "scope_step": 20, "polish_needed": 24,
+        "content_per_feature": 40,  // feature creep: every 40 content needs one more engine feature
+        "feature_cost": 16,         // refactor progress per feature
+        "debt_limit": 6, "hack_debt": 2,
+        "bug_per_debt": 4,          // % bug chance per build hour, per point of debt
+        "hack_shame": 3,
+        "patience": 1440,           // hours before the publisher cancels (60 days)
+        "care": 6,                  // 0 = always hack, 10 = always refactor
+        "crunch": 1,                // 1 = crunch when shipping is one step away
+        "team_care": 1,             // 1 = colleagues cheer up someone one step from burnout
+        "pep_talk": 15,
+        "days": 365,
+    },
+
+    layout: (
+        legend: { '#': "wall", 'c': "coffee", 'E': "engine",
+                  'A': ("dev", { "owner": 1, "hx": 3,  "hy": 2 }),
+                  'B': ("dev", { "owner": 2, "hx": 9,  "hy": 2 }),
+                  'C': ("dev", { "owner": 3, "hx": 15, "hy": 2 }) },
+        rows: [
+            "####################",
+            "#..................#",
+            "#..A.....B.....C...#",
+            "#..................#",
+            "#..................#",
+            "#........E.......c.#",
+            "####################",
+        ],
+    ),
+
+    fsms: {
+        // Flow: reusable. Every kind of deep work uses it.
+        "focus": (
+            initial: "Warmup",
+            enter: [ Set("focus", "0") ],
+            states: { "Warmup": (), "Flow": () },
+            transitions: [
+                (from: "Warmup", to: "Flow",   when: "me.focus >= p.flow_after"),
+                (from: "Flow",   to: "Warmup", when: "me.focus < p.flow_after"),
+            ],
+            rules: [ (name: "concentrate", then: [ Add("focus", "1") ]) ],
+        ),
+
+        "dev": (
+            layers: {
+                "Life": (
+                    initial: "Awake",
+                    states: {
+                        "Awake": (
+                            initial: "Work",
+                            rules: [
+                                (name: "awake_drain", then: [ Add("energy", "-p.drain") ]),
+                                (name: "night_stress", when: "tick % 24 >= p.bedtime || tick % 24 < p.wake",
+                                 then: [ Add("stress", "2") ]),
+                            ],
+                            states: {
+                                "Work": (
+                                    remember: true,
+                                    recheck: true,
+                                    pick: First([
+                                        ("Commute",  "me.x != me.hx || me.y != me.hy"),
+                                        ("Ideate",   r#"near_in("project", "Dev") > 0"#),
+                                        ("Design",   r#"near_in("project", "Prototype") == 0"#),
+                                        ("Build",    r#"near_in("project", "Production") == 0"#),
+                                        ("Playtest", r#"near_in("project", "Polish") == 0"#),
+                                    ]),
+                                    rules: [
+                                        (name: "deadline", target: NearestIn("project", "Dev"), when: "it.dist == 0",
+                                         then: [ Set("pressure", "it.age * 100 / p.patience") ]),
+                                        // Distance in the transition graph: shipping is one step away.
+                                        (name: "crunch_mode", target: NearestIn("project", "Dev"), when: "it.dist == 0",
+                                         then: [ Set("crunch", r#"if p.crunch == 1 && steps_to(it, "Shipped") <= 1 { 1 } else { 0 }"#) ]),
+                                        // Distance in the transition graph, on someone else.
+                                        (name: "pep_talk", target: Nearest("dev"),
+                                         when: r#"p.team_care == 1 && it.dist <= p.office_r && steps_to(it, "Burnout") == 1 && me.energy > 50"#,
+                                         then: [ On(It, [ Set("stress", "max(0, it.stress - p.pep_talk)") ]), Add("energy", "-5"), Emit("pep_talk") ]),
+                                    ],
+                                    states: {
+                                        "Commute":  (rules: [ (name: "commute", then: [ Move("me.hx - me.x", "me.hy - me.y") ]) ]),
+                                        // Not `enter`: Work remembers its child, so a coffee break would resume
+                                        // into Ideate away from the desk and spawn the project there.
+                                        "Ideate":   (rules: [
+                                            (name: "new_idea", when: r#"me.x == me.hx && me.y == me.hy && near_in("project", "Dev") > 0"#,
+                                             then: [ Spawn("project"), Emit("idea") ]),
+                                        ]),
+                                        "Design":   (use: "focus", rules: [
+                                            (name: "design", target: NearestIn("project", "Prototype"), when: "it.dist == 0",
+                                             then: [ On(It, [ Add("fun", "p.design_rate * me.speed / 2") ]) ]),
+                                        ]),
+                                        "Build":    (use: "focus", rules: [
+                                            (name: "build", target: NearestIn("project", "Production"), when: "it.dist == 0",
+                                             then: [ On(It, [ Add("content", "p.build_rate * me.speed / 2") ]) ]),
+                                        ]),
+                                        "Playtest": (use: "focus", rules: [
+                                            (name: "playtest", target: NearestIn("project", "Polish"), when: "it.dist == 0",
+                                             then: [ On(It, [ Add("polish", "me.speed / 2"),
+                                                              Add("bugs", "if it.bugs > 0 { -1 } else { 0 }") ]) ]),
+                                        ]),
+                                    },
+                                ),
+                                "Break": (
+                                    enter: [ Emit("coffee_break") ],
+                                    rules: [
+                                        (name: "walk_to_coffee", then: [ MoveToward("coffee") ]),
+                                        (name: "drink", when: r#"around("coffee", 1) > 0"#,
+                                         then: [ Set("energy", "min(100, me.energy + max(0, p.coffee - me.caffeine))"),
+                                                 Add("caffeine", "1") ]),
+                                    ],
+                                ),
+                                // The project hit a wall. Refactor the engine or hack around it.
+                                "Stuck": (
+                                    pick: Best([
+                                        ("Refactor", "p.care * 10"),
+                                        ("Hack",     "(10 - p.care) * 10 + me.pressure"),
+                                    ]),
+                                    states: {
+                                        "Refactor": (use: "focus", rules: [
+                                            (name: "refactor", target: Nearest("engine"),
+                                             then: [ On(It, [ Add("progress", "me.speed / 2") ]) ]),
+                                            // Recursion: the refactor hits its own wall.
+                                            (name: "too_much_debt", target: Nearest("engine"), when: "it.debt >= p.debt_limit",
+                                             then: [ Interrupt("Cleanup"), Emit("cleanup") ]),
+                                        ]),
+                                        "Cleanup": (rules: [
+                                            (name: "clean", target: Nearest("engine"), when: "it.debt > 0 && tick % 2 == 0",
+                                             then: [ On(It, [ Add("debt", "-1") ]) ]),
+                                            (name: "clean_done", target: Nearest("engine"), when: "it.debt == 0",
+                                             then: [ Back ]),
+                                        ]),
+                                        "Hack": (enter: [
+                                            On(NearestIn("project", "Blocked"), [ Add("hacks", "1") ]),
+                                            On(Nearest("engine"), [ Add("debt", "p.hack_debt") ]),
+                                            Emit("hack"),
+                                        ]),
+                                    },
+                                ),
+                            },
+                            transitions: [
+                                (from: "Work",  to: "Break", when: "me.energy < p.break_at"),
+                                (from: "Break", to: "Work",  when: "me.energy >= p.back_at || me.caffeine >= p.coffee"),
+                                (from: "Work",  to: "Stuck", interrupt: true,
+                                 when: r#"near_in("project", "Blocked") == 0"#),
+                                (from: "Stuck", back: true,
+                                 when: r#"near_in("project", "Blocked") > 0"#),
+                            ],
+                        ),
+                        "Asleep": (
+                            enter: [ Set("caffeine", "0") ],
+                            rules: [ (name: "sleep", then: [ Set("energy", "min(100, me.energy + p.sleep_regen)"),
+                                                             Set("stress", "max(0, me.stress - 1)") ]) ],
+                        ),
+                        "Vacation": (
+                            enter: [ Emit("vacation") ],
+                            rules: [ (name: "recover", then: [ Set("energy", "min(100, me.energy + 2)"),
+                                                               Set("stress", "max(0, me.stress - 2)") ]) ],
+                        ),
+                    },
+                    transitions: [
+                        (from: "Awake",    to: "Vacation", when: r#"in_state("Burnout")"#),
+                        (from: "Asleep",   to: "Vacation", when: r#"in_state("Burnout")"#),
+                        (from: "Vacation", to: "Awake",    when: r#"!in_state("Burnout")"#),
+                        (from: "Awake",    to: "Asleep",
+                         when: "(tick % 24 >= p.bedtime || tick % 24 < p.wake) && (me.crunch == 0 || me.energy < 5)"),
+                        (from: "Asleep",   to: "Awake",
+                         when: "tick % 24 >= p.wake && tick % 24 < p.bedtime"),
+                    ],
+                ),
+                "Mood": (
+                    initial: "Motivated",
+                    states: { "Motivated": (), "Tired": (), "Burnout": (enter: [ Emit("burnout") ]) },
+                    transitions: [
+                        (from: "Motivated", to: "Tired",     when: "me.energy < p.tired_at || me.stress >= p.burnout_at / 2"),
+                        (from: "Tired",     to: "Motivated", when: "me.energy >= p.rested_at && me.stress < p.burnout_at / 2"),
+                        // Distance in space, to others' states.
+                        (from: "Tired",     to: "Burnout",
+                         when: r#"me.stress >= p.burnout_at || (around("dev", "Burnout", p.office_r) > 0 && rand(100) < p.contagion)"#),
+                        (from: "Burnout",   to: "Motivated", when: "me.stress == 0 && me.energy >= 100"),
+                    ],
+                ),
+            },
+            rules: [
+                (name: "speed", then: [ Set("speed", r#"(if in_state("Flow") { 2 } else { 1 }) * (if in_state("Tired") { 1 } else { 2 })"#) ]),
+            ],
+        ),
+
+        "project": (
+            initial: "Dev",
+            states: {
+                "Dev": (
+                    remember: true,
+                    initial: "Prototype",
+                    states: {
+                        // Every game builds on the last one: more content, more engine.
+                        "Prototype":  (rules: [
+                            (name: "ambition", target: Nearest("dev"), when: "me.ambition < 0",
+                             then: [ Set("ambition", "it.shipped") ]),
+                        ]),
+                        "Production": (enter: [ Emit("greenlit") ], rules: [
+                            (name: "feature_creep", then: [ Set("needs", "me.ambition + me.content / p.content_per_feature") ]),
+                            // Debt breeds bugs while someone is building right here.
+                            (name: "bugs_from_debt", target: Nearest("engine"),
+                             when: r#"around("dev", "Build", 0) > 0 && rand(100) < it.debt * p.bug_per_debt"#,
+                             then: [ Add("bugs", "1") ]),
+                        ]),
+                        "Polish":     (),
+                    },
+                    transitions: [
+                        (from: "Prototype",  to: "Production", when: "me.fun >= p.fun_needed"),
+                        (from: "Production", to: "Polish",     when: "me.content >= p.scope + me.ambition * p.scope_step"),
+                    ],
+                    rules: [
+                        (name: "hit_wall", target: Nearest("engine"), when: "it.features + me.hacks < me.needs",
+                         then: [ Interrupt("Blocked"), Emit("wall") ]),
+                    ],
+                ),
+                "Blocked": (rules: [
+                    (name: "unblocked", target: Nearest("engine"), when: "it.features + me.hacks >= me.needs",
+                     then: [ Back ]),
+                ]),
+                "Shipped": (enter: [
+                    Emit("ship"),
+                    On(Nearest("dev"), [ Add("shipped", "1"),
+                                         Add("fame", "me.fun + me.content / 10 - me.hacks * p.hack_shame") ]),
+                ]),
+                "Cancelled": (enter: [ Emit("cancel") ]),
+            },
+            transitions: [
+                (from: "Dev.Polish", to: "Shipped",   when: "me.bugs == 0 && me.polish >= p.polish_needed"),
+                (from: "Dev",        to: "Cancelled", when: "me.age >= p.patience"),
+                (from: "Blocked",    to: "Cancelled", when: "me.age >= p.patience"),
+            ],
+            rules: [
+                (name: "aging", when: r#"!in_state("Shipped") && !in_state("Cancelled")"#, then: [ Add("age", "1") ]),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "new_feature", for: "engine", when: "me.progress >= p.feature_cost",
+         then: [ Add("features", "1"), Add("progress", "-p.feature_cost"), Emit("feature") ]),
+    ],
+
+    actions: [],
+
+    score: "me.fame",
+
+    end: [ (when: "tick >= p.days * 24", result: "year_over") ],
+)

@@ -128,7 +128,7 @@ impl Session {
     fn states(&self) -> BTreeMap<&str, BTreeMap<&str, usize>> {
         let mut out: BTreeMap<&str, BTreeMap<&str, usize>> = BTreeMap::new();
         for e in self.engine.world().entities().values() {
-            *out.entry(e.kind.as_str()).or_default().entry(e.state.as_str()).or_default() += 1;
+            *out.entry(e.kind.as_str()).or_default().entry(self.game().state_label(e)).or_default() += 1;
         }
         out
     }

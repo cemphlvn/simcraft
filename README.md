@@ -10,7 +10,7 @@ games/wolf_sheep/
 └── engine.toml   # the switches: seed, population, which rules are on, parameters
 ```
 
-Four games so far, each in its own folder under `games/`: `wolf_sheep`, `forest_fire`, `mercy_dungeon`, `market` (two players).
+Five games so far, each in its own folder under `games/`: `wolf_sheep`, `forest_fire`, `mercy_dungeon`, `market` (two players), `gamedev` (a studio building games on its own engine).
 How the engine grew out of them: [`docs/emergence.md`](docs/emergence.md).
 
 ## Run
@@ -30,6 +30,7 @@ Talk to it over stdin, one JSON line at a time:
 
 It answers one JSON line at a time. Humans, scripts and AI agents all play it the same way.
 Scripted players live in `agents/` (e.g. `python3 agents/market.py speculator builder`).
+Play the market yourself against a bot: `python3 agents/play_market.py`.
 
 ## A rule
 
@@ -39,6 +40,21 @@ Scripted players live in `agents/` (e.g. `python3 agents/market.py speculator bu
 ```
 
 When a rule doesn't fit the built-in actions, write it in [Rhai](https://rhai.rs) instead.
+
+## A state machine
+
+States inside states, layers side by side, reusable machines, remember, interrupt and back, pick:
+
+```ron
+"Work": (
+    remember: true, recheck: true,
+    pick: First([ ("Commute", "me.x != me.hx"), ("Build", r#"near_in("project", "Production") == 0"#) ]),
+    states: { "Commute": (...), "Build": (use: "focus", rules: [ ... ]) },
+),
+```
+
+Rules bind to states by inheritance (`state: "Work"`), composition (rules written inside a state)
+and distance (`depth`, `steps_to("Shipped")`, `around("dev", "Burnout", 6)`).
 
 ## A switch
 

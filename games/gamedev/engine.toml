@@ -1,0 +1,19 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (gamedev)
+#  The studio's culture lives in [params]: care (refactor vs hack), crunch, team_care.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 8760
+
+[params]
+care = 6
+crunch = 1
+team_care = 1
+
+[agent]
+controllable = ["dev"]
+
+[bus]
+# log = "runs/gamedev.jsonl"

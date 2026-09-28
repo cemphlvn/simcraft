@@ -118,14 +118,48 @@ A log is small because determinism does the rest: 437 lines for 150 days of two 
 
 ---
 
+## Game 4: gamedev (`games/gamedev`)
+
+Three developers share a studio and one in-house engine; 1 tick = 1 hour. Each dev ideates, prototypes until fun, builds content, polishes, ships. Content brings feature creep: the game needs engine features the engine lacks and **hits a wall**. The dev is interrupted: refactor the shared engine (slow now, every later project benefits) or hack around it (fast now, the debt breeds bugs in everyone's games). The game is our own workflow, simulated.
+
+Unlike games 1–3 this change was **requested** (a state engine with composable primitives), not discovered. The game was still written first, the way a designer wants it, and loaded against the old engine to find the walls.
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| 4.1 | `Unexpected field named enter in FsmDef` (first load) | A dev's life is not flat: `Awake` holds `Work` holds `Build`; `Mood` runs beside `Life`; entering a state does something | New crate `sim-state` (game- and Rhai-agnostic; guards/actions are handles): nested `states`, `layers`, `enter`/`exit`/`then`, outer-first transitions (a parent can always interrupt), one group per entity per tick | 16 unit tests; tick-300 hashes of **all four** earlier games unchanged (flat machines keep plain state names). Cost: 1000 ticks of forest fire 0.77 → 0.81 s, wolf/sheep 0.104 → 0.112 s (+6–8 %: memory decoded per entity per tick, `roll` in transition guards) |
+| 4.2 | Flow is needed in Design, Build, Playtest and Refactor | Write a behaviour once, use it everywhere | `use: "focus"` mounts a machine; rules written inside a state travel with it (composition). One rule, many mounts, one switch | `switching_off_a_machine_rule_turns_it_off_at_every_mount` |
+| 4.3 | After coffee, back to the task; after a wall, back to *exactly* where you were, even from inside a refactor that hit its own wall (debt cleanup) | Memory of where you were | `remember` (history); `interrupt`/`back` on transitions, `Interrupt`/`Back` actions; nested interrupts stack (recursion, max 16). Leaving a level drops what was saved inside it | ~12 cleanups nested inside refactors per year; memory string `…#Life.Awake.Work=Build^Life.Awake=Work.Build.Flow` |
+| 4.4 | "What to work on" follows the project's phase; "refactor or hack" is a trade-off | Decisions, not just transitions | `pick: First` (selector) and `pick: Best` (utility; a tie keeps the current), `recheck` every tick | tipping point below |
+| 4.5 | Rules need the state machine at three kinds of distance | Distance as a first-class binding | Hierarchy: `state:` matches a state and everything inside it, `depth: N`, `depth_in`. Transition graph: `steps_to` (precomputed table). Space: `around(kind, state, r)` with paths, `near_in`, target `NearestIn(kind, state)` | crunch starts one step from `Shipped`; pep talks go to a colleague one step from `Burnout`; burnout spreads within `office_r` |
+| 4.6 | Projects spawned beside the desk, never worked on | **Not an engine change.** `Work` remembers `Ideate`; a coffee break resumed into it and `enter: [Spawn]` fired away from the desk. `enter` runs on every entry, including a resume | Game fix: spawn in a guarded rule. Logged as a pitfall of `remember` + side-effecting `enter` | every project sits on its dev's desk |
+| 4.7 | *(expected, did not happen)* Transitions that read another entity (`it`) | — | **Not added.** Rules with a `target` call `Interrupt`/`Back` (`hit_wall`, `unblocked`) | the project machine |
+
+**Emergent result:** total fame of the studio, one year, 3 seeds each (`care`: 0 = always hack, 10 = always refactor):
+
+| care | crunch | fame | shipped | hacks | engine features | engine debt | burnouts |
+|---|---|---|---|---|---|---|---|
+| 0–5 | off | 288 | 51 | 792 | 0 | 1584 | 0 |
+| 0–5 | on | 392 | 42 | 585 | 0 | 1170 | 11.0 |
+| 6 | off | 5875 | 93 | 26 | 45 | 22 | 0 |
+| 6 | on | 5459 | 89 | 34 | 43 | 24 | 2.7 |
+| 10 | off | 6228 | 96 | 0 | 49 | 0 | 0 |
+| 10 | on | 6491 | 99 | 0 | 52 | 0 | 0 |
+
+- **A tipping point, not a slope.** Care 0 to 5 give *identical* studios: once hacking wins the utility pick, nobody ever refactors, the engine never gains a feature, every later game needs more hacks. Between 5 and 6 fame jumps 15×. No rule says "debt compounds".
+- Crunch helps only a healthy studio (+4 % at care 10) and hurts a borderline one (−7 % at care 6); in a hacking studio it buys a little fame with 11 burnouts.
+- Pep talks at care 6 with crunch: without them 6.3 burnouts instead of 2.7, but fame is 7 % *higher* (5831): helping costs the helper energy.
+
+---
+
 ## What the engine became
 
-| | Before the games | After three games |
+| | Before the games | After four games |
 |---|---|---|
 | World | entity map, O(n²) `near` | grid + per-kind index, solid occupancy |
 | Rule language | `when`/`then`, 8 actions, `near`/`count`/`roll` | + `around`, `rand`, `Goto`, `Move`, `On`, `Need`, `target`/`it` |
 | Agents | built-in `move` | declared actions with args, act-time feedback, seats, scores |
 | Game file | kinds, fsms, rules, params (unknown fields ignored) | + layout (with props), actions, end, score; strict |
+| State machines (game 4) | flat FSM, first matching transition | state charts: nesting, layers, `use`, `remember`, interrupt/back, `pick`, rules bound by inheritance, composition and distance |
 | Speed (wolf/sheep, ~2000 entities × 100 ticks) | 3.34 s | 0.53 s |
 
 Deliberately not changed: the one-tick death lag (2.7) and globals (3.5).

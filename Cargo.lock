@@ -408,8 +408,13 @@ dependencies = [
  "ron",
  "serde",
  "sim-core",
+ "sim-state",
  "toml",
 ]
+
+[[package]]
+name = "sim-state"
+version = "0.1.0"
 
 [[package]]
 name = "slab"

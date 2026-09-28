@@ -10,9 +10,13 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use rhai::{AST, Array, Dynamic, Engine as Rhai, Map, Scope};
 use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
+use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, PickSpec, Spec, TransitionSpec};
 
 use crate::config::EngineConfig;
-use crate::game::{Do, GameDef, RuleDef, Target};
+use crate::game::{Do, GameDef, PickDef, RuleDef, StateDef, Target};
+
+/// Derlenmiş durum şeması: koşullar `exprs`'e, eylem blokları `blocks`'a indekstir.
+type StateChart = Chart<usize, usize>;
 
 /// Hiç yoksa `near.<kind>` bu değeri alır.
 pub const FAR: i64 = 9_999;
@@ -32,11 +36,25 @@ struct QueryCtx {
     pos: (i64, i64),
     salt: u64,
     calls: u64,
+    /// `me`'nin kind'ı ve durum metni (`in_state`, `steps_to` için).
+    kind: String,
+    state: String,
 }
 
 impl QueryCtx {
     fn around(&self, kind: &str, state: Option<&str>, r: i64) -> i64 {
-        self.world.as_ref().map_or(0, |w| w.around(self.pos, self.me, kind, state, r))
+        let Some(w) = &self.world else { return 0 };
+        match state {
+            None => w.around(self.pos, self.me, kind, None, r),
+            Some(sel) => w.around_where(self.pos, self.me, kind, r, |e| sim_state::in_label(&e.state, sel)),
+        }
+    }
+
+    /// O durumdaki en yakın `kind`'a uzaklık; yoksa FAR.
+    fn near_in(&self, kind: &str, sel: &str) -> i64 {
+        let Some(w) = &self.world else { return FAR };
+        let Some(me) = w.get(self.me) else { return FAR };
+        w.nearest_where(me, kind, |e| sim_state::in_label(&e.state, sel)).map_or(FAR, |(_, d)| d)
     }
 
     /// 0..n. Aynı ifadede birden çok çağrı farklı sayı verir; yine de tamamen deterministik.
@@ -64,7 +82,6 @@ pub struct Game {
     rhai: Rhai,
     /// Önce kurallar, sonra eylemler (`is_action`). Tuzlar bu sırayla verilir.
     rules: Vec<CompiledRule>,
-    fsms: BTreeMap<String, Vec<CompiledTransition>>,
     ends: Vec<CompiledEnd>,
     score: Option<AST>,
     compile_errors: Vec<String>,
@@ -72,6 +89,15 @@ pub struct Game {
     pool: Option<rayon::ThreadPool>,
     /// `p`, bir kez kurulur. Her çekirdek kendi scope'una bir kez kopyalar (kilit yok).
     p_map: Map,
+    /// Kind → şema (makinesi olan kind'lar).
+    kind_charts: Arc<BTreeMap<String, Arc<StateChart>>>,
+    /// Şemaların koşul/puan ifadeleri ve eylem blokları.
+    exprs: Vec<AST>,
+    blocks: Vec<Vec<CDo>>,
+    /// Kind → doğumdaki durum metni.
+    initial_states: BTreeMap<String, String>,
+    /// Durumların içine yazılmış kuralların tanımları (`rules`'taki sırayla, doğrulama için).
+    machine_rules: Vec<RuleDef>,
     /// İfadelerin gerçekten okuduğu `near.<kind>`'lar. None = hepsi (belirlenemedi).
     near_kinds: Option<BTreeSet<String>>,
 }
@@ -82,7 +108,14 @@ struct CompiledRule {
     is_action: bool,
     enabled: bool,
     for_kind: String,
+    /// Makineye yazılmış kural: hangi kind'lar (makineyi kullananlar).
+    kinds: Option<BTreeSet<String>>,
+    /// (makine, makine içi yol): kuralın yaşadığı durum.
+    home: Option<(String, String)>,
     state: Option<String>,
+    depth: Option<usize>,
+    /// Kind → bağlı olduğu durum düğümleri (`state` ya da `home`).
+    bind: BTreeMap<String, Vec<NodeId>>,
     target: Option<Target>,
     args: Vec<String>,
     when: Option<AST>,
@@ -103,6 +136,8 @@ enum CDo {
     Move(AST, AST),
     On(Target, Vec<CDo>),
     Need(String, AST),
+    Interrupt(String),
+    Back,
 }
 
 impl CDo {
@@ -115,12 +150,6 @@ impl CDo {
             _ => {}
         }
     }
-}
-
-struct CompiledTransition {
-    from: String,
-    to: String,
-    when: AST,
 }
 
 struct CompiledEnd {
@@ -162,6 +191,8 @@ impl Compiler<'_> {
             Do::Move(dx, dy) => CDo::Move(self.expr(dx, ctx), self.expr(dy, ctx)),
             Do::On(t, ds) => CDo::On(t.clone(), ds.iter().map(|d| self.doo(d, ctx)).collect()),
             Do::Need(p, e) => CDo::Need(p.clone(), self.expr(e, ctx)),
+            Do::Interrupt(s) => CDo::Interrupt(s.clone()),
+            Do::Back => CDo::Back,
         }
     }
 
@@ -178,8 +209,12 @@ impl Compiler<'_> {
             name: r.name.clone(),
             is_action,
             enabled: cfg.switches.get(&r.name).copied().unwrap_or(true),
-            for_kind: r.for_kind.clone(),
+            for_kind: r.for_kind.clone().unwrap_or_default(),
+            kinds: None,
+            home: None,
             state: r.state.clone(),
+            depth: r.depth,
+            bind: BTreeMap::new(),
             target: r.target.clone(),
             args: r.args.clone(),
             when: r.when.as_deref().map(|w| self.expr(w, &ctx)),
@@ -187,6 +222,122 @@ impl Compiler<'_> {
             script,
         }
     }
+}
+
+/// Makinelerden toplananlar: ifadeler, eylem blokları, durumlara yazılmış kurallar.
+#[derive(Default)]
+struct Machines {
+    exprs: Vec<AST>,
+    blocks: Vec<Vec<CDo>>,
+    /// (makine, makine içi yol, kural)
+    rules: Vec<(String, String, RuleDef)>,
+}
+
+impl Compiler<'_> {
+    /// `game.ron`'daki bir durum → sim-state tanımı. Düz (eski) makinede durumlar
+    /// geçişlerden çıkarılır: `(initial, transitions)` yeterlidir.
+    fn spec(&mut self, m: &mut Machines, machine: &str, path: &str, d: &StateDef, root: bool) -> Spec<usize, usize> {
+        let ctx = |what: String| match path {
+            "" => format!("fsm '{machine}' {what}"),
+            p => format!("fsm '{machine}' state '{p}' {what}"),
+        };
+        let join = |c: &str| if path.is_empty() { c.to_string() } else { format!("{path}.{c}") };
+        let mut states: Vec<(String, Spec<usize, usize>)> =
+            d.states.iter().map(|(n, sd)| (n.clone(), self.spec(m, machine, &join(n), sd, false))).collect();
+        if root && d.states.is_empty() && d.layers.is_empty() && d.uses.is_none() && !d.transitions.is_empty() {
+            let mut names: BTreeSet<String> = d.initial.iter().cloned().collect();
+            for t in &d.transitions {
+                names.extend((t.from != "*").then(|| t.from.clone()));
+                names.extend(t.to.clone());
+            }
+            states = names.into_iter().map(|n| (n, Spec::default())).collect();
+        }
+        let layers = d.layers.iter().map(|(n, sd)| (n.clone(), self.spec(m, machine, &join(n), sd, false))).collect();
+        let enter = self.block(m, &d.enter, &ctx("enter".into()));
+        let exit = self.block(m, &d.exit, &ctx("exit".into()));
+        let mut transitions = Vec::new();
+        for t in &d.transitions {
+            let what = format!("transition {} -> {}", t.from, t.to.as_deref().unwrap_or("back"));
+            let then = self.block(m, &t.then, &ctx(what.clone()));
+            m.exprs.push(self.expr(&t.when, &ctx(what)));
+            transitions.push(TransitionSpec {
+                from: t.from.clone(),
+                to: t.to.clone(),
+                back: t.back,
+                interrupt: t.interrupt,
+                when: m.exprs.len() - 1,
+                then,
+            });
+        }
+        let pick = d.pick.as_ref().map(|p| {
+            let (kind, opts) = match p {
+                PickDef::First(o) => (PickKind::First, o),
+                PickDef::Best(o) => (PickKind::Best, o),
+            };
+            let options = opts
+                .iter()
+                .map(|(st, e)| {
+                    m.exprs.push(self.expr(e, &ctx(format!("pick '{st}'"))));
+                    (st.clone(), m.exprs.len() - 1)
+                })
+                .collect();
+            PickSpec { kind, options }
+        });
+        m.rules.extend(d.rules.iter().map(|r| (machine.to_string(), path.to_string(), r.clone())));
+        Spec {
+            initial: d.initial.clone(),
+            states,
+            layers,
+            uses: d.uses.clone(),
+            remember: d.remember,
+            pick,
+            recheck: d.recheck,
+            enter,
+            exit,
+            transitions,
+        }
+    }
+}
+
+impl Compiler<'_> {
+    /// Boş değilse bir eylem bloğu ekler; `Spec` bloğun indeksini taşır.
+    fn block(&mut self, m: &mut Machines, ds: &[Do], ctx: &str) -> Vec<usize> {
+        if ds.is_empty() {
+            return Vec::new();
+        }
+        let b = ds.iter().map(|x| self.doo(x, ctx)).collect();
+        m.blocks.push(b);
+        vec![m.blocks.len() - 1]
+    }
+}
+
+/// Bir durum ağacındaki tüm ifade kaynakları.
+fn state_sources<'a>(d: &'a StateDef, out: &mut Vec<&'a str>) {
+    for t in &d.transitions {
+        out.push(&t.when);
+        t.then.iter().for_each(|x| do_sources(x, out));
+    }
+    if let Some(PickDef::First(o) | PickDef::Best(o)) = &d.pick {
+        out.extend(o.iter().map(|(_, e)| e.as_str()));
+    }
+    d.enter.iter().chain(&d.exit).for_each(|x| do_sources(x, out));
+    for r in &d.rules {
+        out.extend(r.when.as_deref());
+        out.extend(r.script.as_deref());
+        r.then.iter().for_each(|x| do_sources(x, out));
+    }
+    d.states.values().chain(d.layers.values()).for_each(|c| state_sources(c, out));
+}
+
+/// Bir kind'ın durum metninden `sel`'e en az geçiş (ulaşılamazsa FAR).
+fn steps(charts: &BTreeMap<String, Arc<StateChart>>, kind: &str, state: &str, sel: &str) -> i64 {
+    let Some(c) = charts.get(kind) else { return FAR };
+    let Ok(m) = c.decode(sim_state::active_part(state)) else { return FAR };
+    c.steps_to(&m, &c.resolve(sel))
+}
+
+fn map_str(m: &Map, key: &str) -> String {
+    m.get(key).and_then(|d| d.clone().into_string().ok()).unwrap_or_default()
 }
 
 /// Bir `Do` ağacındaki tüm ifade kaynakları (near analizi için).
@@ -229,7 +380,7 @@ fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
     let mut m = Map::new();
     m.insert("id".into(), Dynamic::from(e.id as i64));
     m.insert("kind".into(), Dynamic::from(e.kind.clone()));
-    m.insert("state".into(), Dynamic::from(e.state.clone()));
+    m.insert("state".into(), Dynamic::from(sim_state::active_part(&e.state).to_string()));
     m.insert("x".into(), Dynamic::from(e.x));
     m.insert("y".into(), Dynamic::from(e.y));
     for (k, v) in &e.props {
@@ -278,40 +429,88 @@ impl Game {
             CTX.with(|c| c.borrow().around(kind, Some(state), r))
         });
         rhai.register_fn("rand", |n: i64| CTX.with(|c| c.borrow_mut().rand(n)));
+        rhai.register_fn("near_in", |kind: &str, sel: &str| CTX.with(|c| c.borrow().near_in(kind, sel)));
+        rhai.register_fn("in_state", |sel: &str| CTX.with(|c| sim_state::in_label(&c.borrow().state, sel)));
+        rhai.register_fn("in_state", |m: Map, sel: &str| sim_state::in_label(&map_str(&m, "state"), sel));
+        rhai.register_fn("depth_in", |sel: &str| CTX.with(|c| sim_state::depth_in_label(&c.borrow().state, sel)));
+        rhai.register_fn("depth_in", |m: Map, sel: &str| sim_state::depth_in_label(&map_str(&m, "state"), sel));
         let pool = match cfg.run.threads {
             1 => None,
             n => rayon::ThreadPoolBuilder::new().num_threads(n).build().ok(),
         };
 
         let mut cc = Compiler { rhai: &rhai, errors: Vec::new() };
-        let fsms = def
-            .fsms
-            .iter()
-            .map(|(name, f)| {
-                let ts = f
-                    .transitions
-                    .iter()
-                    .map(|t| CompiledTransition {
-                        from: t.from.clone(),
-                        to: t.to.clone(),
-                        when: cc.expr(&t.when, &format!("fsm '{name}' {}->{}", t.from, t.to)),
-                    })
-                    .collect();
-                (name.clone(), ts)
-            })
-            .collect();
+        let mut mach = Machines::default();
+        let specs: BTreeMap<String, Spec<usize, usize>> =
+            def.fsms.iter().map(|(name, f)| (name.clone(), cc.spec(&mut mach, name, "", f, true))).collect();
         // Tuzlar: kural i → i+1 (eski oyunların gidişatı değişmesin), eylemler sonra.
         let n = def.rules.len() as u64;
         let mut rules: Vec<CompiledRule> =
             def.rules.iter().enumerate().map(|(i, r)| cc.rule(r, i as u64 + 1, false, &cfg)).collect();
         rules.extend(def.actions.iter().enumerate().map(|(i, r)| cc.rule(r, n + i as u64 + 1, true, &cfg)));
+        // Durumlara yazılmış kurallar en sonda: eski oyunların tuzları kaymaz.
+        let base = rules.len() as u64;
+        for (i, (m, p, r)) in mach.rules.iter().enumerate() {
+            let mut c = cc.rule(r, base + i as u64 + 1, false, &cfg);
+            c.home = Some((m.clone(), p.clone()));
+            rules.push(c);
+        }
         let ends = def
             .end
             .iter()
             .map(|e| CompiledEnd { when: cc.expr(&e.when, &format!("end '{}'", e.result)), result: e.result.clone() })
             .collect();
         let score = def.score.as_deref().map(|s| cc.expr(s, "score"));
-        let errors = cc.errors;
+        let mut errors = cc.errors;
+
+        let mut charts = BTreeMap::new();
+        for name in def.fsms.keys() {
+            match Chart::build(name, &specs) {
+                Ok(c) => {
+                    charts.insert(name.clone(), Arc::new(c));
+                }
+                Err(es) => errors.extend(es.into_iter().map(|e| format!("fsm '{name}': {e}"))),
+            }
+        }
+        let kind_charts: BTreeMap<String, Arc<StateChart>> = def
+            .kinds
+            .iter()
+            .filter_map(|(k, kd)| Some((k.clone(), charts.get(kd.fsm.as_ref()?)?.clone())))
+            .collect();
+        for r in &mut rules {
+            match &r.home {
+                Some((m, p)) => {
+                    for (k, c) in &kind_charts {
+                        let ids = c.with_origin(m, p);
+                        if !ids.is_empty() {
+                            r.bind.insert(k.clone(), ids);
+                        }
+                    }
+                    r.kinds = Some(r.bind.keys().cloned().collect());
+                }
+                None => {
+                    if let Some(sel) = &r.state {
+                        for (k, c) in kind_charts.iter().filter(|(k, _)| r.for_kind == "*" || **k == r.for_kind) {
+                            let ids = c.resolve(sel);
+                            if !ids.is_empty() {
+                                r.bind.insert(k.clone(), ids);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let initial_states = kind_charts.iter().map(|(k, c)| (k.clone(), c.encode(&c.initial()))).collect();
+        let kind_charts = Arc::new(kind_charts);
+        let kc = kind_charts.clone();
+        rhai.register_fn("steps_to", move |sel: &str| {
+            CTX.with(|c| {
+                let c = c.borrow();
+                steps(&kc, &c.kind, &c.state, sel)
+            })
+        });
+        let kc = kind_charts.clone();
+        rhai.register_fn("steps_to", move |m: Map, sel: &str| steps(&kc, &map_str(&m, "kind"), &map_str(&m, "state"), sel));
 
         let mut params = def.params.clone();
         params.extend(cfg.params.iter().map(|(k, v)| (k.clone(), *v)));
@@ -320,7 +519,7 @@ impl Game {
 
         let mut sources: Vec<&str> = Vec::new();
         for f in def.fsms.values() {
-            sources.extend(f.transitions.iter().map(|t| t.when.as_str()));
+            state_sources(f, &mut sources);
         }
         for r in def.rules.iter().chain(&def.actions) {
             sources.extend(r.when.as_deref());
@@ -331,7 +530,25 @@ impl Game {
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
-        Game { def, cfg, params, source_hash: 0, rhai, rules, fsms, ends, score, compile_errors: errors, pool, p_map, near_kinds }
+        Game {
+            def,
+            cfg,
+            params,
+            source_hash: 0,
+            rhai,
+            rules,
+            ends,
+            score,
+            compile_errors: errors,
+            pool,
+            p_map,
+            near_kinds,
+            kind_charts,
+            machine_rules: mach.rules.into_iter().map(|(_, _, r)| r).collect(),
+            exprs: mach.exprs,
+            blocks: mach.blocks,
+            initial_states,
+        }
     }
 
     /// Dünya boyutu `layout`'tan ya da panelin `[world]`'ünden. Önce layout yerleşir,
@@ -428,11 +645,7 @@ impl Game {
     /// Yeni doğan bir kind'ın başlangıç durumu ve prop'ları.
     pub fn template(&self, kind: &str) -> (String, BTreeMap<String, i64>) {
         let Some(k) = self.def.kinds.get(kind) else { return ("-".into(), BTreeMap::new()) };
-        let state = k
-            .fsm
-            .as_ref()
-            .and_then(|f| self.def.fsms.get(f))
-            .map_or_else(|| "-".into(), |f| f.initial.clone());
+        let state = self.initial_states.get(kind).cloned().unwrap_or_else(|| "-".into());
         (state, k.props.clone())
     }
 
@@ -441,26 +654,35 @@ impl Game {
     }
 
     /// Duruma özel glyph varsa o, yoksa kind'ın glyph'i.
+    /// En derin eşleşen durumun glyph'i (`Flow`, `Work`'ten önce gelir).
     pub fn glyph_of(&self, e: &Entity) -> char {
-        self.def.kinds.get(&e.kind).map_or('?', |k| k.glyphs.get(&e.state).copied().unwrap_or(k.glyph))
-    }
-
-    pub fn states_of(&self, kind: &str) -> BTreeSet<String> {
-        let mut s = BTreeSet::new();
-        let fsm = self.def.kinds.get(kind).and_then(|k| k.fsm.as_ref()).and_then(|f| self.def.fsms.get(f));
-        match fsm {
-            Some(f) => {
-                s.insert(f.initial.clone());
-                for t in &f.transitions {
-                    s.insert(t.from.clone());
-                    s.insert(t.to.clone());
-                }
-            }
-            None => {
-                s.insert("-".into());
+        let Some(k) = self.def.kinds.get(&e.kind) else { return '?' };
+        let (Some(c), false) = (self.kind_charts.get(&e.kind), k.glyphs.is_empty()) else {
+            return k.glyphs.get(&e.state).copied().unwrap_or(k.glyph);
+        };
+        let Ok(m) = c.decode(&e.state) else { return k.glyph };
+        let mut best: Option<(usize, char)> = None;
+        for (sel, g) in &k.glyphs {
+            if let Some(d) = c.deepest(&m, &c.resolve(sel))
+                && best.is_none_or(|(b, _)| d > b)
+            {
+                best = Some((d, *g));
             }
         }
-        s
+        best.map_or(k.glyph, |(_, g)| g)
+    }
+
+    /// Kind'ın tüm durumları (yollarıyla); makinesi yoksa `-`.
+    pub fn states_of(&self, kind: &str) -> BTreeSet<String> {
+        match self.kind_charts.get(kind) {
+            Some(c) => c.paths().map(str::to_string).collect(),
+            None => ["-".to_string()].into(),
+        }
+    }
+
+    /// Gözlemcilerin gördüğü durum: yalnızca etkin olanlar.
+    pub fn state_label<'e>(&self, e: &'e Entity) -> &'e str {
+        sim_state::active_part(&e.state)
     }
 
     /// Etkin şalter durumu (kural ya da eylem adı → açık mı).
@@ -496,7 +718,7 @@ impl Game {
         if !Self::applies(rule, &e.kind) {
             return Err(format!("action '{name}' is for '{}', entity {id} is a '{}'", rule.for_kind, e.kind));
         }
-        if rule.state.as_ref().is_some_and(|s| *s != e.state) {
+        if !self.bound(rule, e, self.memory(e).ok().flatten().as_ref()) {
             return Err(format!("action '{name}' needs state '{}'", rule.state.as_deref().unwrap_or_default()));
         }
         if args.keys().collect::<BTreeSet<_>>() != rule.args.iter().collect::<BTreeSet<_>>() {
@@ -600,6 +822,12 @@ impl Game {
         CTX.with(|c| {
             let mut c = c.borrow_mut();
             (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y), salt, 0);
+            if c.state != e.state {
+                c.state.clone_from(&e.state);
+            }
+            if c.kind != e.kind {
+                c.kind.clone_from(&e.kind);
+            }
         });
     }
 
@@ -634,30 +862,28 @@ impl Game {
             effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
         };
 
-        // FSM: ilk eşleşen geçiş; kurallar bu tick eski durumu görür.
-        let transitions = self.fsm_of(&e.kind).into_iter().flatten().enumerate();
-        for (i, t) in transitions.filter(|(_, t)| t.from == e.state) {
-            self.bind(e, FSM_SALT + i as u64);
-            match self.eval_bool(base, &t.when) {
-                Ok(true) => {
-                    out.push(Group {
-                        source: "fsm".into(),
-                        actor: Some(e.id),
-                        effects: vec![Effect::SetState { e: e.id, state: t.to.clone() }],
-                    });
-                    break;
-                }
-                Ok(false) => {}
-                Err(m) => {
-                    out.push(error("fsm", m));
-                    break;
-                }
+        // Durum şeması: tek grup (geçişler, seçimler, enter/exit). Kurallar bu tick eski durumu görür.
+        let chart = self.kind_charts.get(&e.kind);
+        let mem = match self.memory(e) {
+            Ok(m) => m,
+            Err(m) => {
+                out.push(error("fsm", m));
+                None
+            }
+        };
+        if let (Some(c), Some(m)) = (chart, &mem) {
+            let stepped = c.step(m, &mut RhaiOracle { game: self, world, e, scope: base });
+            match stepped.and_then(|o| self.state_group(world, e, c, o, base)) {
+                Ok(Some(g)) => out.push(g),
+                Ok(None) => {}
+                Err(m) => out.push(error("fsm", m)),
             }
         }
 
-        let active = self.rules.iter().filter(|r| {
-            !r.is_action && r.enabled && Self::applies(r, &e.kind) && r.state.as_ref().is_none_or(|s| *s == e.state)
-        });
+        let active = self
+            .rules
+            .iter()
+            .filter(|r| !r.is_action && r.enabled && Self::applies(r, &e.kind) && self.bound(r, e, mem.as_ref()));
         for rule in active {
             match self.eval_rule(world, e, rule, base) {
                 Ok(Some(g)) => out.push(g),
@@ -666,6 +892,109 @@ impl Game {
             }
         }
         out
+    }
+
+    /// Makinesi olan entity'nin belleği (makinesi yoksa None).
+    fn memory(&self, e: &Entity) -> Result<Option<Memory>, String> {
+        self.kind_charts.get(&e.kind).map(|c| c.decode(&e.state)).transpose()
+    }
+
+    /// Kural bu entity'nin şu anki durumuna bağlı mı (`state:` ya da durumun içine yazılmış)?
+    fn bound(&self, r: &CompiledRule, e: &Entity, mem: Option<&Memory>) -> bool {
+        if r.state.is_none() && r.home.is_none() {
+            return true;
+        }
+        let (Some(c), Some(m)) = (self.kind_charts.get(&e.kind), mem) else { return false };
+        r.bind.get(&e.kind).is_some_and(|ids| c.in_any(m, ids, r.depth))
+    }
+
+    /// Şema değişikliği → grup: önce yeni durum, sonra exit / then / enter eylemleri.
+    fn state_group(
+        &self,
+        world: &World,
+        e: &Entity,
+        c: &StateChart,
+        o: Outcome<usize>,
+        scope: &mut Scope<'static>,
+    ) -> Result<Option<Group>, String> {
+        if !o.changed {
+            return Ok(None);
+        }
+        let mut effects = vec![Effect::SetState { e: e.id, state: c.encode(&o.mem) }];
+        let who = Who { me: e, it: None };
+        self.run_blocks(world, &who, e, &o.actions, FSM_SALT + o.salt.unwrap_or(0), scope, &mut effects)?;
+        Ok(Some(Group { source: "fsm".into(), actor: Some(e.id), effects }))
+    }
+
+    /// Şema eylem blokları. Hedefi bulunamayan eylem atlanır (geçiş değil).
+    #[allow(clippy::too_many_arguments)]
+    fn run_blocks<'a>(
+        &self,
+        world: &'a World,
+        who: &Who<'a>,
+        subj: &'a Entity,
+        blocks: &[usize],
+        salt: u64,
+        scope: &mut Scope<'static>,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), String> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let len = scope.len();
+        scope.push_constant("roll", world.roll(who.me.id, salt));
+        self.bind(who.me, salt);
+        let mut res = Ok(());
+        'blocks: for &b in blocks {
+            for d in &self.blocks[b] {
+                if let Err(m) = self.eval_do(world, who, subj, d, salt, scope, out) {
+                    res = Err(m);
+                    break 'blocks;
+                }
+            }
+        }
+        scope.rewind(len);
+        res
+    }
+
+    /// `Goto`, `Interrupt`, `Back`: öznenin şemasında değişiklik + onun eylemleri.
+    #[allow(clippy::too_many_arguments)]
+    fn change_state<'a>(
+        &self,
+        world: &'a World,
+        who: &Who<'a>,
+        subj: &'a Entity,
+        d: &CDo,
+        salt: u64,
+        scope: &mut Scope<'static>,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), String> {
+        let c = self.kind_charts.get(&subj.kind).ok_or_else(|| format!("kind '{}' has no fsm", subj.kind))?;
+        let m = c.decode(&subj.state)?;
+        let target = match d {
+            CDo::Goto(sel) | CDo::Interrupt(sel) => Some(unique(c, sel)?),
+            _ => None,
+        };
+        fn change(c: &StateChart, m: &Memory, d: &CDo, t: Option<NodeId>, o: &mut impl Oracle<usize>) -> Result<Outcome<usize>, String> {
+            match (d, t) {
+                (CDo::Goto(_), Some(t)) => c.goto(m, t, o),
+                (CDo::Interrupt(_), Some(t)) => c.interrupt(m, t, o),
+                _ => c.back(m, o),
+            }
+        }
+        // Başkasının seçimleri burada değerlendirilemez (ifadeler `me`'yi görür): yedeğe düşer.
+        let o = if subj.id == who.me.id {
+            change(c, &m, d, target, &mut RhaiOracle { game: self, world, e: subj, scope })?
+        } else {
+            change(c, &m, d, target, &mut NoOracle)?
+        };
+        out.push(Effect::SetState { e: subj.id, state: c.encode(&o.mem) });
+        for &b in &o.actions {
+            for x in &self.blocks[b] {
+                self.eval_do(world, who, subj, x, salt, scope, out)?;
+            }
+        }
+        Ok(())
     }
 
     fn eval_bool(&self, scope: &mut Scope, ast: &AST) -> Result<bool, String> {
@@ -702,14 +1031,14 @@ impl Game {
 
         let it = match &rule.target {
             None => None,
-            Some(Target::Nearest(k)) => match world.nearest(e, k) {
+            Some(t @ (Target::Nearest(_) | Target::NearestIn(..))) => match nearest(world, e, t) {
                 Some((t, d)) => {
                     scope.push_constant("it", entity_map(t, Some(d)));
                     Some(t)
                 }
                 None => return Ok(None),
             },
-            Some(t) => return Err(format!("target must be Nearest(kind), got {t:?}")),
+            Some(t) => return Err(format!("target must be Nearest(kind) or NearestIn(kind, state), got {t:?}")),
         };
 
         if let Some(w) = &rule.when
@@ -740,7 +1069,7 @@ impl Game {
         match t {
             Target::Me => Some(who.me),
             Target::It => who.it,
-            Target::Nearest(k) => world.nearest(who.me, k).map(|(t, _)| t),
+            Target::Nearest(_) | Target::NearestIn(..) => nearest(world, who.me, t).map(|(t, _)| t),
         }
     }
 
@@ -780,7 +1109,7 @@ impl Game {
                 None => {}
             },
             CDo::Wander => out.push(wander(world, subj, salt)),
-            CDo::Goto(st) => out.push(Effect::SetState { e: subj.id, state: st.clone() }),
+            CDo::Goto(_) | CDo::Interrupt(_) | CDo::Back => self.change_state(world, who, subj, d, salt, scope, out)?,
             CDo::Move(dx, dy) => {
                 let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
                 out.push(Effect::Move { e: subj.id, dx, dy });
@@ -805,52 +1134,99 @@ impl Game {
     }
 
     fn applies(rule: &CompiledRule, kind: &str) -> bool {
-        rule.for_kind == "*" || rule.for_kind == kind
+        match &rule.kinds {
+            Some(ks) => ks.contains(kind),
+            None => rule.for_kind == "*" || rule.for_kind == kind,
+        }
     }
 
-    fn fsm_of(&self, kind: &str) -> Option<&Vec<CompiledTransition>> {
-        self.def.kinds.get(kind)?.fsm.as_ref().and_then(|f| self.fsms.get(f))
-    }
-
-    /// Bir hedefin olası kind'ları (doğrulama için).
-    fn target_kinds(&self, r: &RuleDef, t: &Target, errs: &mut Vec<String>) -> Vec<String> {
+    /// Bir hedefin olası kind'ları (doğrulama için). `me`: kuralın sahibi olabilecek kind'lar.
+    fn target_kinds(&self, name: &str, target: Option<&Target>, me: &[String], t: &Target, errs: &mut Vec<String>) -> Vec<String> {
         match t {
-            Target::Me => self.def.kinds.keys().filter(|k| r.for_kind == "*" || **k == r.for_kind).cloned().collect(),
-            Target::It => match &r.target {
-                Some(Target::Nearest(k)) => vec![k.clone()],
+            Target::Me => me.to_vec(),
+            Target::It => match target {
+                Some(Target::Nearest(k) | Target::NearestIn(k, _)) => vec![k.clone()],
                 _ => {
-                    errs.push(format!("'{}': uses It but has no target", r.name));
+                    errs.push(format!("'{name}': uses It but has no target"));
                     vec![]
                 }
             },
-            Target::Nearest(k) => {
+            Target::Nearest(k) | Target::NearestIn(k, _) => {
                 if !self.def.kinds.contains_key(k) {
-                    errs.push(format!("'{}': unknown kind '{k}'", r.name));
+                    errs.push(format!("'{name}': unknown kind '{k}'"));
+                } else if let Target::NearestIn(_, sel) = t {
+                    self.check_selector(&format!("'{name}'"), std::slice::from_ref(k), sel, errs);
                 }
                 vec![k.clone()]
             }
         }
     }
 
-    /// `subjects`: eylemin uygulandığı entity'nin olası kind'ları.
-    fn check_do(&self, r: &RuleDef, d: &Do, subjects: &[String], errs: &mut Vec<String>) {
+    /// Seçici, kind'lardan en az birinin bir durumuna çıkmalı.
+    fn check_selector(&self, what: &str, kinds: &[String], sel: &str, errs: &mut Vec<String>) {
+        let found = kinds.iter().any(|k| self.kind_charts.get(k).is_some_and(|c| !c.resolve(sel).is_empty()));
+        if !found {
+            errs.push(format!("{what}: state '{sel}' does not exist for '{}'", kinds.join("', '")));
+        }
+    }
+
+    /// `subjects`: eylemin uygulandığı entity'nin olası kind'ları; `me`: kuralın sahibininkiler.
+    #[allow(clippy::too_many_arguments)]
+    fn check_do(
+        &self,
+        name: &str,
+        target: Option<&Target>,
+        me: &[String],
+        d: &Do,
+        subjects: &[String],
+        errs: &mut Vec<String>,
+    ) {
         match d {
             Do::Despawn(t) => {
-                self.target_kinds(r, t, errs);
+                self.target_kinds(name, target, me, t, errs);
             }
             Do::Spawn(k) | Do::MoveToward(k) | Do::MoveAway(k) if !self.def.kinds.contains_key(k) => {
-                errs.push(format!("'{}': unknown kind '{k}'", r.name));
+                errs.push(format!("'{name}': unknown kind '{k}'"));
             }
-            Do::Goto(st) if !subjects.iter().any(|k| self.states_of(k).contains(st)) => {
-                errs.push(format!("'{}': Goto to unknown state '{st}'", r.name));
+            Do::Goto(st) | Do::Interrupt(st) => {
+                let verb = if matches!(d, Do::Goto(_)) { "Goto" } else { "Interrupt" };
+                let charts: Vec<&Arc<StateChart>> = subjects.iter().filter_map(|k| self.kind_charts.get(k)).collect();
+                if !charts.iter().any(|c| !c.resolve(st).is_empty()) {
+                    errs.push(format!("'{name}': {verb} to unknown state '{st}'"));
+                }
+                for c in &charts {
+                    match c.resolve(st)[..] {
+                        [one] if verb == "Interrupt" && !c.interruptible(one) => {
+                            errs.push(format!("'{name}': cannot Interrupt into '{st}': it is a layer, not a state"));
+                        }
+                        [_, _, ..] => errs.push(format!("'{name}': {verb} '{st}' is ambiguous; use a path like 'Parent.{st}'")),
+                        _ => {}
+                    }
+                }
+            }
+            Do::Back if !subjects.iter().any(|k| self.kind_charts.contains_key(k)) => {
+                errs.push(format!("'{name}': Back on a kind without fsm"));
             }
             Do::On(t, ds) => {
-                let subs = self.target_kinds(r, t, errs);
+                let subs = self.target_kinds(name, target, me, t, errs);
                 for d in ds {
-                    self.check_do(r, d, &subs, errs);
+                    self.check_do(name, target, me, d, &subs, errs);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Makinenin enter/exit/then eylemleri: özne o makineyi kullanan kind'lar.
+    fn check_machine(&self, machine: &str, path: &str, d: &StateDef, kinds: &[String], errs: &mut Vec<String>) {
+        let name = if path.is_empty() { format!("fsm {machine}") } else { format!("fsm {machine} state {path}") };
+        let all = d.enter.iter().chain(&d.exit).chain(d.transitions.iter().flat_map(|t| &t.then));
+        for x in all {
+            self.check_do(&name, None, kinds, x, kinds, errs);
+        }
+        for (c, cd) in d.states.iter().chain(&d.layers) {
+            let p = if path.is_empty() { c.clone() } else { format!("{path}.{c}") };
+            self.check_machine(machine, &p, cd, kinds, errs);
         }
     }
 
@@ -874,10 +1250,27 @@ impl Game {
             {
                 errs.push(format!("kind '{name}': unknown fsm '{f}'"));
             }
-            let states = self.states_of(name);
-            for st in k.glyphs.keys().filter(|st| !states.contains(*st)) {
-                errs.push(format!("kind '{name}': glyph for unknown state '{st}'"));
+            match self.kind_charts.get(name) {
+                Some(c) => {
+                    for st in k.glyphs.keys().filter(|st| c.resolve(st).is_empty()) {
+                        errs.push(format!("kind '{name}': glyph for unknown state '{st}'"));
+                    }
+                }
+                None => {
+                    for st in k.glyphs.keys().filter(|st| *st != "-") {
+                        errs.push(format!("kind '{name}': glyph for unknown state '{st}'"));
+                    }
+                }
             }
+        }
+        for (m, d) in &self.def.fsms {
+            let kinds: Vec<String> = self
+                .kind_charts
+                .iter()
+                .filter(|(_, c)| !c.with_origin(m, "").is_empty())
+                .map(|(k, _)| k.clone())
+                .collect();
+            self.check_machine(m, "", d, &kinds, errs);
         }
         if let Some(l) = &self.def.layout {
             for (ch, entry) in &l.legend {
@@ -899,32 +1292,57 @@ impl Game {
         }
 
         let mut seen = BTreeSet::new();
-        let defs = self.def.rules.iter().chain(&self.def.actions);
+        let defs = self.def.rules.iter().chain(&self.def.actions).chain(&self.machine_rules);
         for (r, def) in self.rules.iter().zip(defs) {
             let what = if r.is_action { "action" } else { "rule" };
             if !seen.insert(&r.name) {
                 errs.push(format!("{what} '{}': duplicate name (switches need unique names)", r.name));
             }
-            if r.for_kind != "*" && !known(&r.for_kind) {
-                errs.push(format!("{what} '{}': unknown kind '{}'", r.name, r.for_kind));
-            }
             let subjects: Vec<String> = self.def.kinds.keys().filter(|k| Self::applies(r, k)).cloned().collect();
-            if let Some(s) = &r.state
-                && !subjects.iter().any(|k| self.states_of(k).contains(s))
-            {
-                errs.push(format!("{what} '{}': state '{s}' does not exist for '{}'", r.name, r.for_kind));
+            match &r.home {
+                Some((m, p)) => {
+                    let place = if p.is_empty() { format!("fsm '{m}'") } else { format!("state '{p}' of fsm '{m}'") };
+                    if def.for_kind.is_some() {
+                        errs.push(format!("{what} '{}' is written inside {place}: drop `for`", r.name));
+                    }
+                    if def.state.is_some() {
+                        errs.push(format!("{what} '{}' is written inside {place}: drop `state`", r.name));
+                    }
+                }
+                None => {
+                    match &def.for_kind {
+                        None => errs.push(format!("{what} '{}': needs `for` (or write it inside a state)", r.name)),
+                        Some(k) if k != "*" && !known(k) => errs.push(format!("{what} '{}': unknown kind '{k}'", r.name)),
+                        _ => {}
+                    }
+                    if let Some(s) = &r.state
+                        && r.bind.is_empty()
+                    {
+                        errs.push(format!("{what} '{}': state '{s}' does not exist for '{}'", r.name, r.for_kind));
+                    }
+                    if r.depth.is_some() && r.state.is_none() {
+                        errs.push(format!("{what} '{}': `depth` needs `state`", r.name));
+                    }
+                }
             }
             match &r.target {
                 None => {}
                 Some(Target::Nearest(k)) if known(k) => {}
-                Some(Target::Nearest(k)) => errs.push(format!("{what} '{}': unknown target kind '{k}'", r.name)),
-                Some(t) => errs.push(format!("{what} '{}': target must be Nearest(kind), got {t:?}", r.name)),
+                Some(Target::NearestIn(k, sel)) if known(k) => {
+                    self.check_selector(&format!("{what} '{}' target", r.name), std::slice::from_ref(k), sel, errs);
+                }
+                Some(Target::Nearest(k) | Target::NearestIn(k, _)) => {
+                    errs.push(format!("{what} '{}': unknown target kind '{k}'", r.name))
+                }
+                Some(t) => {
+                    errs.push(format!("{what} '{}': target must be Nearest(kind) or NearestIn(kind, state), got {t:?}", r.name))
+                }
             }
             if !r.is_action && !r.args.is_empty() {
                 errs.push(format!("rule '{}': only actions take args", r.name));
             }
             for d in &def.then {
-                self.check_do(def, d, &subjects, errs);
+                self.check_do(&r.name, def.target.as_ref(), &subjects, d, &subjects, errs);
             }
         }
     }
@@ -940,18 +1358,47 @@ impl Game {
         };
         for kind in self.def.kinds.keys() {
             let e = synthetic(kind);
-            let mut base = self.base_scope(world, &e, &counts);
+            let base = self.base_scope(world, &e, &counts);
             self.bind(&e, 0);
 
-            for t in self.fsm_of(kind).into_iter().flatten() {
-                if let Err(m) = self.eval_bool(&mut base, &t.when) {
-                    errs.push(format!("fsm transition {}->{} on '{kind}': {m}", t.from, t.to));
+            if let Some(c) = self.kind_charts.get(kind) {
+                let mut scope = base.clone();
+                scope.push_constant("roll", 0_i64);
+                for n in &c.nodes {
+                    let at = if n.path.is_empty() { "root".to_string() } else { format!("'{}'", n.path) };
+                    let mut fail = |m: String| errs.push(format!("fsm state {at} on '{kind}': {m}"));
+                    for t in &n.transitions {
+                        if let Err(m) = self.eval_bool(&mut scope, &self.exprs[t.when]) {
+                            fail(m);
+                        }
+                    }
+                    if let sim_state::Shape::Or { pick: Some(p), .. } = &n.shape {
+                        for (_, g, _) in &p.options {
+                            let r = match p.kind {
+                                PickKind::First => self.eval_bool(&mut scope, &self.exprs[*g]).map(|_| ()),
+                                PickKind::Best => self.eval_int(&mut scope, &self.exprs[*g]).map(|_| ()),
+                            };
+                            if let Err(m) = r {
+                                fail(m);
+                            }
+                        }
+                    }
+                    let blocks = n.enter.iter().chain(&n.exit).chain(n.transitions.iter().flat_map(|t| &t.then));
+                    for &b in blocks {
+                        let mut exprs = Vec::new();
+                        self.blocks[b].iter().for_each(|d| d.int_exprs(&mut exprs));
+                        for ast in exprs {
+                            if let Err(m) = self.eval_int(&mut scope, ast) {
+                                fail(m);
+                            }
+                        }
+                    }
                 }
             }
             for r in self.rules.iter().filter(|r| Self::applies(r, kind)) {
                 let mut scope = base.clone();
                 scope.push_constant("roll", 0_i64);
-                if let Some(Target::Nearest(k)) = &r.target {
+                if let Some(Target::Nearest(k) | Target::NearestIn(k, _)) = &r.target {
                     scope.push_constant("it", entity_map(&synthetic(k), Some(0)));
                 }
                 if r.is_action {
@@ -1051,6 +1498,51 @@ impl Rules for Game {
             }
         }
         None
+    }
+}
+
+/// Şema koşullarını Rhai'de değerlendirir; `me` o entity'dir.
+struct RhaiOracle<'g, 'a, 's> {
+    game: &'g Game,
+    world: &'a World,
+    e: &'a Entity,
+    scope: &'s mut Scope<'static>,
+}
+
+impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
+    fn test(&mut self, g: &usize, salt: u64) -> Result<bool, String> {
+        let len = self.scope.len();
+        self.scope.push_constant("roll", self.world.roll(self.e.id, FSM_SALT + salt));
+        self.game.bind(self.e, FSM_SALT + salt);
+        let r = self.game.eval_bool(self.scope, &self.game.exprs[*g]);
+        self.scope.rewind(len);
+        r
+    }
+    fn score(&mut self, g: &usize, salt: u64) -> Result<i64, String> {
+        let len = self.scope.len();
+        self.scope.push_constant("roll", self.world.roll(self.e.id, FSM_SALT + salt));
+        self.game.bind(self.e, FSM_SALT + salt);
+        let r = self.game.eval_int(self.scope, &self.game.exprs[*g]);
+        self.scope.rewind(len);
+        r
+    }
+}
+
+/// `Nearest(kind)` ya da `NearestIn(kind, state)`.
+fn nearest<'w>(world: &'w World, from: &Entity, t: &Target) -> Option<(&'w Entity, i64)> {
+    match t {
+        Target::Nearest(k) => world.nearest(from, k),
+        Target::NearestIn(k, sel) => world.nearest_where(from, k, |e| sim_state::in_label(&e.state, sel)),
+        _ => None,
+    }
+}
+
+/// Seçici tek bir duruma çıkmalı (`Goto`, `Interrupt`).
+fn unique(c: &StateChart, sel: &str) -> Result<NodeId, String> {
+    match c.resolve(sel)[..] {
+        [one] => Ok(one),
+        [] => Err(format!("unknown state '{sel}'")),
+        _ => Err(format!("state '{sel}' is ambiguous; use a path like 'Parent.{sel}'")),
     }
 }
 

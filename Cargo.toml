@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-rules", "crates/sim-agent"]
+members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
 sim-rules = { path = "crates/sim-rules" }
+sim-state = { path = "crates/sim-state" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ron = "0.12"

@@ -165,18 +165,21 @@ impl World {
     }
 
     /// En yakın `kind` (Chebyshev mesafesi). Eşitlikte küçük id kazanır.
-    /// Seyrek kind → üyeleri tek tek tara; yoğun kind → halka halka dışarı ara.
-    /// İki yol da aynı sonucu verir (en küçük mesafe, sonra en küçük id).
     pub fn nearest(&self, from: &Entity, kind: &str) -> Option<(&Entity, i64)> {
+        self.nearest_where(from, kind, |_| true)
+    }
+
+    /// `keep`'i geçen en yakın `kind`. Seyrek kind → üyeleri tek tek tara; yoğun kind →
+    /// halka halka dışarı ara. İki yol da aynı sonucu verir (en küçük mesafe, sonra en küçük id).
+    pub fn nearest_where(&self, from: &Entity, kind: &str, keep: impl Fn(&Entity) -> bool) -> Option<(&Entity, i64)> {
         let members = self.by_kind.get(kind)?;
         if members.len() <= SPARSE {
             return members
                 .iter()
                 .filter(|&&id| id != from.id)
-                .map(|id| {
-                    let e = &self.entities[id];
-                    (e, (e.x - from.x).abs().max((e.y - from.y).abs()))
-                })
+                .map(|id| &self.entities[id])
+                .filter(|e| keep(e))
+                .map(|e| (e, (e.x - from.x).abs().max((e.y - from.y).abs())))
                 .min_by_key(|(e, d)| (*d, e.id));
         }
         let max_d = self.width.max(self.height);
@@ -184,7 +187,7 @@ impl World {
             let best = self
                 .ring(from.x, from.y, d)
                 .flat_map(|(x, y)| self.at(x, y))
-                .filter(|&&id| id != from.id && self.entities[&id].kind == kind)
+                .filter(|&&id| id != from.id && self.entities[&id].kind == kind && keep(&self.entities[&id]))
                 .min();
             if let Some(id) = best {
                 return Some((&self.entities[id], d));
@@ -194,13 +197,25 @@ impl World {
     }
 
     /// `r` yarıçapında (Chebyshev), kendisi hariç, `kind` (ve istenirse `state`) sayısı.
-    pub fn around(&self, (cx, cy): (i64, i64), exclude: EntityId, kind: &str, state: Option<&str>, r: i64) -> i64 {
+    pub fn around(&self, pos: (i64, i64), exclude: EntityId, kind: &str, state: Option<&str>, r: i64) -> i64 {
+        self.around_where(pos, exclude, kind, r, |e| state.is_none_or(|s| e.state == s))
+    }
+
+    /// `r` yarıçapında, kendisi hariç, `keep`'i geçen `kind` sayısı.
+    pub fn around_where(
+        &self,
+        (cx, cy): (i64, i64),
+        exclude: EntityId,
+        kind: &str,
+        r: i64,
+        keep: impl Fn(&Entity) -> bool,
+    ) -> i64 {
         let mut n = 0;
         for y in cy - r..=cy + r {
             for x in cx - r..=cx + r {
                 for id in self.at(x, y) {
                     let e = &self.entities[id];
-                    if e.id != exclude && e.kind == kind && state.is_none_or(|s| e.state == s) {
+                    if e.id != exclude && e.kind == kind && keep(e) {
                         n += 1;
                     }
                 }
