@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use serde::Serialize;
 
+use crate::bus::{Bus, Msg};
 use crate::effect::{Event, Group, apply};
 use crate::world::World;
 
@@ -28,6 +29,7 @@ pub struct Engine<S, R: Rules> {
     rules: R,
     pending: Vec<Group>,
     outcome: Option<String>,
+    bus: Bus,
     _state: PhantomData<S>,
 }
 
@@ -47,13 +49,20 @@ impl<S, R: Rules> Engine<S, R> {
         &self.rules
     }
     fn into_state<T>(self) -> Engine<T, R> {
-        Engine { world: self.world, rules: self.rules, pending: self.pending, outcome: self.outcome, _state: PhantomData }
+        Engine {
+            world: self.world,
+            rules: self.rules,
+            pending: self.pending,
+            outcome: self.outcome,
+            bus: self.bus,
+            _state: PhantomData,
+        }
     }
 }
 
 impl<R: Rules> Engine<Loaded, R> {
     pub fn new(world: World, rules: R) -> Self {
-        Engine { world, rules, pending: Vec::new(), outcome: None, _state: PhantomData }
+        Engine { world, rules, pending: Vec::new(), outcome: None, bus: Bus::default(), _state: PhantomData }
     }
 
     pub fn validate(self) -> Result<Engine<Validated, R>, Vec<String>> {
@@ -80,6 +89,12 @@ impl<R: Rules> Engine<Running, R> {
         self.outcome.as_deref()
     }
 
+    /// Aboneler burada. Motor her tick'in olaylarını, hash'ini ve sonunu yayınlar;
+    /// host (agent katmanı) başlangıcı ve agent eylemlerini.
+    pub fn bus(&mut self) -> &mut Bus {
+        &mut self.bus
+    }
+
     pub fn tick(&mut self) -> TickReport {
         if self.outcome.is_some() {
             let w = &self.world;
@@ -90,6 +105,16 @@ impl<R: Rules> Engine<Running, R> {
         let events = apply(&mut self.world, groups); // 2) yaz
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
-        TickReport { tick: self.world.tick, hash: self.world.hash(), events, outcome: self.outcome.clone() }
+        let (tick, hash) = (self.world.tick, self.world.hash());
+        if !self.bus.is_empty() {
+            for ev in &events {
+                self.bus.publish(Msg::Event(ev.clone()));
+            }
+            self.bus.publish(Msg::Tick { tick, hash });
+            if let Some(result) = &self.outcome {
+                self.bus.publish(Msg::End { tick, result: result.clone() });
+            }
+        }
+        TickReport { tick, hash, events, outcome: self.outcome.clone() }
     }
 }

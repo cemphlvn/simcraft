@@ -312,3 +312,73 @@ fn thread_count_does_not_change_the_world() {
     assert_eq!(one, run_with(4));
     assert_eq!(one, run_with(0));
 }
+
+// --- event bus ---
+
+use std::sync::{Arc, Mutex};
+
+use sim_core::{Filter, Msg};
+
+/// Plays a short market match while recording the bus, like the host does.
+fn record_market(ticks: u64) -> Vec<Msg> {
+    let rec: Arc<Mutex<Vec<Msg>>> = Arc::default();
+    let mut e = boot(MARKET, MARKET_PANEL).expect("valid");
+    e.bus().subscribe(Filter::All, Box::new(rec.clone()));
+    let (a, b) = (village(&e, 1).id, village(&e, 2).id);
+    for t in 0..ticks {
+        let plan = [(Some("alice"), a, "sell_wood"), (Some("bob"), b, "buy_wood")];
+        for (seat, id, action) in plan.into_iter().filter(|_| t % 5 == 4) {
+            let tick = e.world().tick;
+            let out = e.rules().act(e.world(), seat, id, action, &n(1));
+            e.bus().publish(Msg::Act {
+                tick,
+                seat: seat.map(String::from),
+                entity: id,
+                action: action.into(),
+                args: n(1),
+                ok: out.is_ok(),
+                error: out.as_ref().err().cloned(),
+            });
+            if let Ok(g) = out {
+                e.queue(g);
+            }
+        }
+        e.tick();
+    }
+    rec.lock().unwrap().clone()
+}
+
+#[test]
+fn bus_log_replays_to_the_same_hashes() {
+    let log = record_market(40);
+    assert!(log.iter().any(|m| matches!(m, Msg::Act { ok: true, .. })), "the match must contain accepted acts");
+    let mut e = boot(MARKET, MARKET_PANEL).expect("valid");
+    let r = sim_rules::replay(&mut e, &log).expect("replay");
+    assert_eq!(r.ticks, 40);
+}
+
+#[test]
+fn tampered_log_is_detected() {
+    let mut log = record_market(40);
+    let act = log.iter_mut().find_map(|m| match m {
+        Msg::Act { ok: true, args, .. } => Some(args),
+        _ => None,
+    });
+    act.expect("an accepted act").insert("n".into(), 2);
+    let mut e = boot(MARKET, MARKET_PANEL).expect("valid");
+    let err = sim_rules::replay(&mut e, &log).expect_err("must diverge");
+    assert!(err.contains("diverged"), "{err}");
+}
+
+#[test]
+fn bus_filter_delivers_only_named_messages() {
+    let kills: Arc<Mutex<Vec<Msg>>> = Arc::default();
+    let mut e = boot(GAME, PANEL).expect("valid");
+    e.bus().subscribe(Filter::only(["kill"]), Box::new(kills.clone()));
+    for _ in 0..100 {
+        e.tick();
+    }
+    let got = kills.lock().unwrap();
+    assert!(!got.is_empty());
+    assert!(got.iter().all(|m| matches!(m, Msg::Event(ev) if ev.name == "kill")));
+}

@@ -59,6 +59,8 @@ pub struct Game {
     pub cfg: EngineConfig,
     /// game.ron varsayılanları + engine.toml ezmeleri.
     pub params: BTreeMap<String, i64>,
+    /// game.ron + engine.toml içeriğinin parmak izi (replay aynı oyunu mu oynuyor?).
+    pub source_hash: u64,
     rhai: Rhai,
     /// Önce kurallar, sonra eylemler (`is_action`). Tuzlar bu sırayla verilir.
     rules: Vec<CompiledRule>,
@@ -253,6 +255,10 @@ impl Game {
         let def: GameDef = ron::from_str(game_ron).map_err(|e| format!("game.ron: {e}"))?;
         let cfg: EngineConfig = toml::from_str(engine_toml).map_err(|e| format!("engine.toml: {e}"))?;
         let mut game = Self::compile(def, cfg);
+        game.source_hash = [game_ron, "\0", engine_toml].iter().flat_map(|s| s.bytes()).fold(
+            0xcbf2_9ce4_8422_2325_u64,
+            |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3),
+        );
         let (world, errs) = game.initial_world();
         game.compile_errors.extend(errs);
         Ok((world, game))
@@ -325,7 +331,7 @@ impl Game {
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
-        Game { def, cfg, params, rhai, rules, fsms, ends, score, compile_errors: errors, pool, p_map, near_kinds }
+        Game { def, cfg, params, source_hash: 0, rhai, rules, fsms, ends, score, compile_errors: errors, pool, p_map, near_kinds }
     }
 
     /// Dünya boyutu `layout`'tan ya da panelin `[world]`'ünden. Önce layout yerleşir,

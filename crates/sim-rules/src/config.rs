@@ -25,6 +25,18 @@ pub struct EngineConfig {
     pub rhai: RhaiCfg,
     #[serde(default)]
     pub agent: AgentCfg,
+    #[serde(default)]
+    pub bus: BusCfg,
+}
+
+/// Olay veriyolunun çıkışları. İkisi de isteğe bağlı.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BusCfg {
+    /// Her mesajı JSONL olarak bu dosyaya yazar (çalışma dizinine göre). Replay'in girdisi.
+    pub log: Option<String>,
+    /// Canlı izleyiciler için TCP adresi (ör. "127.0.0.1:7878"); bağlanan her istemci her mesajı alır.
+    pub listen: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

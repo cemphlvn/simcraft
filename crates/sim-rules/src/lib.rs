@@ -3,5 +3,7 @@
 mod compile;
 pub mod config;
 pub mod game;
+mod replay;
 
 pub use compile::{FAR, Game};
+pub use replay::{ReplayReport, replay};

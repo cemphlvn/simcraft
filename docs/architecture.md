@@ -50,6 +50,15 @@ tick:
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 - **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
 
+## Event bus
+
+Everything that happens is published once, in order, on `Engine::bus()`: `start` (game, seed, source fingerprint, start hash), `act` (every agent request, accepted or refused), `event` (game and engine events), `tick` (tick + hash), `end`.
+
+- `sim-core` owns only the message type, `Sink` and `Bus` (with an optional name `Filter`); it does no I/O. Sinks live in the host.
+- The operator wires outputs in the panel: `[bus] log = "runs/x.jsonl"` (JSONL, flushed every tick) and/or `listen = "127.0.0.1:7878"` (TCP, every client gets every line from when it connects; slow clients are dropped, the simulation never waits).
+- **Replay:** `simcraft-agent GAME --replay runs/x.jsonl` re-applies the accepted acts on a fresh engine and checks every tick's hash. A log holds only acts and hashes; determinism regenerates everything else. `same_source` reports whether `game.ron` + `engine.toml` match the recording.
+- With no subscribers publishing costs nothing.
+
 ## Determinism (non-negotiable)
 
 | Source | Safeguard |
@@ -112,7 +121,7 @@ Game (runtime) states are **data** (FSM, strings). Engine states are **types** (
 
 ## Agent protocol (`simcraft-agent [GAME_DIR] [--config PANEL.toml]`)
 
-One JSON request per line, one JSON response per line. On startup it prints `{"ok":true,"ready":...}`. On failure it prints `{"ok":false,"stage":"load|validate","errors":[...]}` and exits with code 2.
+One JSON request per line, one JSON response per line. On startup it prints `{"ok":true,"ready":...,"bus":{...}}`. On failure it prints `{"ok":false,"stage":"load|validate","errors":[...]}` and exits with code 2.
 
 | Request | Response |
 |---|---|
@@ -131,7 +140,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [x] JSON stdio agent interface, wolf/sheep
 - [x] Layout, declared actions, targets (`it`, `On`), end conditions (game 2)
 - [x] Seats, scores, `Need` guards, legend props (game 3)
-- [ ] Event log → `sim-replay` (same log → same hash)
+- [x] Event bus: JSONL log, live TCP stream, verified replay
 - [ ] MCP wrapper (so external agents can connect directly)
 - [ ] `sim-tui` (ratatui) viewer
 - [ ] Parameter sweep: the operator's panel tunes itself (survival / oscillation score)

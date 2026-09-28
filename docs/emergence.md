@@ -103,6 +103,21 @@ Why not ~10×: the world snapshot copy and `apply` are still sequential (Amdahl)
 
 ---
 
+## Request: event bus
+
+Also not a game. Until now events only came back to whoever sent `step`; nothing else could watch, and a match could not be kept.
+
+| # | Need | Refactor | Evidence |
+|---|---|---|---|
+| B.1 | Anyone (a viewer, a log, LOBI) can follow a run without being the player | `sim-core`: `Msg` (`start`, `act`, `event`, `tick`, `end`), `Sink`, `Bus` with name filters; the engine publishes events, hashes and the end; the host publishes start and every act. No I/O in the core | `bus_filter_delivers_only_named_messages` |
+| B.2 | Keep a match; show that nothing was lost | JSONL file sink (`[bus] log`) + `--replay`: re-applies accepted acts and checks every tick hash | a 150-day market match (234 acts) replays with 150/150 ticks verified; `bus_log_replays_to_the_same_hashes` |
+| B.3 | Tampering or a changed game must not replay silently | Hash check per tick; `start` carries a fingerprint of `game.ron` + `engine.toml` | one `sell` changed from n to n+1 → `diverged at tick 3`; `tampered_log_is_detected` |
+| B.4 | Watch live from another process | TCP sink (`[bus] listen`), non-blocking for the simulation (200 ms write timeout, slow clients dropped) | a second socket saw a refused `build` and six `tick` lines as they happened |
+
+A log is small because determinism does the rest: 437 lines for 150 days of two players.
+
+---
+
 ## What the engine became
 
 | | Before the games | After three games |

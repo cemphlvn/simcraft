@@ -47,6 +47,19 @@ When a rule doesn't fit the built-in actions, write it in [Rhai](https://rhai.rs
 predation = false
 ```
 
+## Watch and replay
+
+```toml
+[bus]
+log = "runs/market.jsonl"          # every act, event and tick hash
+listen = "127.0.0.1:7878"          # the same, live: nc 127.0.0.1 7878
+```
+
+```bash
+cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
+# {"ok":true,"verified_ticks":150,"acts":234,...}
+```
+
 ## Guarantees
 
 - **Deterministic.** Same seed, same inputs, same world, every tick.

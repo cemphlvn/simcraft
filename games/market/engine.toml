@@ -13,3 +13,10 @@ days = 150
 [agent]
 controllable = ["village"]
 seats = { alice = 1, bob = 2 }
+
+# Event bus: every action, event and tick hash, in order.
+# `log` is a replayable record:  simcraft-agent games/market --replay runs/market.jsonl
+# `listen` streams the same lines live to anyone who connects (e.g. `nc 127.0.0.1 7878`).
+[bus]
+log = "runs/market.jsonl"
+# listen = "127.0.0.1:7878"
