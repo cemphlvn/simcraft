@@ -211,7 +211,7 @@ NULL-safe, panic-safe, UTF-8, one handle per thread at a time. `[bus]` sinks in 
 
 | Host | Layer that needs the host | Layer that does not (tested without the host) |
 |---|---|---|
-| Unity (`adapters/unity/com.simcraft.core`, UPM package) | `SimcraftWorld` (MonoBehaviour: fixed tick rate, one GameObject per entity, prefab per kind or a coloured cube, `ISimcraftView` gets state glyph changes, bus events, save/load), `.ron`/`.toml` importer | `Simcraft.Native` (P/Invoke; `__Internal` on iOS/WebGL), `Simcraft.Simulation` (IDisposable) |
+| Unity (`adapters/unity/com.simcraft.core`, UPM package; tests in `adapters/unity/tests`) | `SimcraftWorld` (MonoBehaviour: fixed tick rate, one GameObject per entity, prefab per kind or a coloured cube, `ISimcraftView` gets state glyph changes, bus events, save/load), `.ron`/`.toml` importer | `Simcraft.Native` (P/Invoke; `__Internal` on iOS/WebGL), `Simcraft.Simulation` (IDisposable) |
 | Unreal (`adapters/unreal/Simcraft`, plugin) | `USimcraftSimulation` (Blueprint-callable), `ASimcraftWorld` (actor per entity, class per kind, `ISimcraftView`), `SimcraftLib` third-party module | `simcraft.hpp` (header-only C++17 RAII wrapper) |
 
 Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSize`. Native binaries are built and copied by `adapters/build-native.sh`, never committed.
@@ -228,7 +228,7 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] State charts: `sim-state` + game 4 (gamedev)
 - [x] World snapshot / restore
 - [x] `sim-ffi`: versioned C API
-- [ ] Unity adapter (C# package) + sample: written; not yet compiled (no .NET SDK / Unity on the dev machine)
+- [ ] Unity adapter (C# package) + sample: `Native`/`Simulation` tested with .NET (`adapters/unity/tests`); `SimcraftWorld` and the importer not yet compiled in Unity
 - [ ] Unreal adapter (C++ plugin + Blueprints): written; `simcraft.hpp` compiled and tested, the UE module not yet
 - [ ] MCP wrapper (so external agents can connect directly)
 - [ ] `sim-tui` (ratatui) viewer

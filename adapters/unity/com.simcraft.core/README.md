@@ -20,4 +20,5 @@ The core decides, Unity displays. The game lives in `game.ron`; this package run
 
 `Simcraft.Simulation` and `Simcraft.Native` do not use UnityEngine and can be used from any .NET code.
 
-**Status:** written against Unity 2021.3+ APIs but not yet compiled in the Unity editor.
+**Status:** `Simulation`/`Native` are tested with plain .NET (`dotnet run --project adapters/unity/tests`).
+`SimcraftWorld` and the importer are written against Unity 2021.3+ APIs but not yet compiled in the Unity editor.

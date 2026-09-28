@@ -161,7 +161,7 @@ Not a game. Product direction (architecture.md): hosts display, the core decides
 | U.2 | One protocol, not two (stdio and C) | `sim_agent::Session` moved into a library; the binary and the C API both use it | four games' hashes unchanged through the binary |
 | U.3 | A C boundary hosts can call | `sim-ffi` (`libsimcraft`, ABI 1): load from text, JSON requests, JSON-free `entities` per frame, bus `drain`; NULL- and panic-safe | golden wolf/sheep hash reproduced through the C API; a C program (`examples/smoke.c`) links the static library and runs game 4 |
 | U.4 | Save without a JSON library in the host | A save file is the `snapshot` reply as-is: `restore` ignores extra fields | `a_save_file_is_the_snapshot_reply_as_is` |
-| U.5 | Unity and Unreal faces | `adapters/`: C# package (`Simulation` has no UnityEngine; `SimcraftWorld` component) and UE plugin (`simcraft.hpp` has no Unreal types; `USimcraftSimulation`, `ASimcraftWorld`) | `simcraft.hpp` compiled with `-Wall -Wextra` and tested; the C#, the Unity layer and the UE module are **not compiled yet** |
+| U.5 | Unity and Unreal faces | `adapters/`: C# package (`Simulation` has no UnityEngine; `SimcraftWorld` component) and UE plugin (`simcraft.hpp` has no Unreal types; `USimcraftSimulation`, `ASimcraftWorld`) | `simcraft.hpp` compiled with `-Wall -Wextra` and tested; the C# `Simulation` passes 10 checks on .NET 10 against the real library (32-byte struct layout, golden hash, save/load, errors); the Unity component and the UE module are **not compiled yet** |
 
 ---
 
