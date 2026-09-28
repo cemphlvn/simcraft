@@ -178,7 +178,7 @@ pub fn cook_strips(scene: &Scene, p: &DioramaProps, list: &DisplayList) -> Resul
                     for iy in 0..img.h {
                         let px = img.get(ix, iy);
                         if px[3] > 0 {
-                            let c = recolor_image(list.season, Rgb(px[0], px[1], px[2]), horizon, l, ix + iy);
+                            let c = recolor_image(list.season, Rgb(px[0], px[1], px[2]), horizon, l, ix, iy);
                             pm.set(sx as i64, iy as i64, c);
                         }
                     }
@@ -196,8 +196,12 @@ pub fn cook_strips(scene: &Scene, p: &DioramaProps, list: &DisplayList) -> Resul
     Ok(out)
 }
 
-fn recolor_image(season: Season, c: Rgb, horizon: Rgb, l: &Layer, k: usize) -> Rgb {
-    season.recolor(mix(c, horizon, l.haze), k.is_multiple_of(7))
+/// The second autumn hue falls only on foliage (green pixels), in small scattered clumps, like turning leaves.
+/// Rock and sky-coloured pixels keep the plain seasonal tint.
+fn recolor_image(season: Season, c: Rgb, horizon: Rgb, l: &Layer, x: usize, y: usize) -> Rgb {
+    let foliage = c.1 > c.0 && c.1 > c.2;
+    let clump = foliage && noise((x / 2) as i64, (y / 2) as i64, 31).is_multiple_of(5);
+    season.recolor(mix(c, horizon, l.haze), clump)
 }
 
 /// The world's cross-section along the cut plane, with the grass line on top. Covers world x from `-MARGIN` to
