@@ -88,7 +88,9 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, 
     for pack in &view.assets {
         let path = find(dir, "assets", pack).ok_or_else(|| format!("asset pack '{pack}' not found (assets/{pack}.ron)"))?;
         let src = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        assets = assets.merged(ron::from_str(&src).map_err(|e| format!("{}: {e}", path.display()))?);
+        let mut pack: Assets = ron::from_str(&src).map_err(|e| format!("{}: {e}", path.display()))?;
+        pack.load_images(path.parent().unwrap_or(Path::new(".")))?;
+        assets = assets.merged(pack);
     }
     let series = { let s = view_series(&view); if s.is_empty() { default_series(engine.world()) } else { s } };
     let selected = pick(engine.world(), engine.rules(), None);

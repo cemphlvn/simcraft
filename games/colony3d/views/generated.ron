@@ -1,0 +1,34 @@
+#![enable(implicit_some)]
+// Generated art (assets/landscape.ron): Higgsfield backdrops and soil, pixelated. The procedural version: diorama.ron.
+// The colony as a pixel-art ant farm: sky and parallax backdrops, the surface, the nest cut open below.
+// Backdrop layers are data: each scrolls at `speed` % of the camera (far = slow) and fades into the horizon (`haze`).
+View(
+    theme: "dark",
+    assets: ["ants", "ants_pixel", "landscape"],
+    layout: Rows([
+        (Fixed(1), C(name: "Title")),
+        (Fill, Cols([
+            (Percent(72), C(name: "Diorama", props: (
+                title: "ant farm",
+                plane: 9, tile: 8, sky: 44,
+                season_env: "seasons",
+                tint: "temp", tint_max: 10000,
+                specks: "scent",
+                soil: "soil",
+                layers: [
+                    (kind: "clouds", color: (250, 250, 255), height: 12, detail: 5, seed: 3, speed: 8, haze: 10),
+                    (kind: "image", image: "far_mountains", height: 6, speed: 15, haze: 30),
+                    (kind: "image", image: "treeline",      height: 4, speed: 30, haze: 35),
+                    (kind: "image", image: "hills",         height: 0, speed: 55, haze: 0),
+                ],
+            ))),
+            (Fill, Rows([
+                (Fixed(5),  C(name: "Env")),
+                (Fill,      C(name: "Inspector")),
+                (Fixed(6),  C(name: "Counts")),
+            ])),
+        ])),
+        (Fixed(4), C(name: "Events", class: "calm")),
+        (Fixed(1), C(name: "Help")),
+    ]),
+)

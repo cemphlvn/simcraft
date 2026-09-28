@@ -13,3 +13,6 @@ adapters/unity/tests/obj/
 
 # Python caches
 __pycache__/
+
+# Generated image sources (large; see assets/src/README.md)
+assets/src/*.png

@@ -16,3 +16,8 @@ serde.workspace = true
 ron.workspace = true
 crossterm = "0.29"
 flate2 = "1"
+png = "0.18"
+
+[[bin]]
+name = "simcraft-pixelate"
+path = "src/bin/simcraft-pixelate.rs"

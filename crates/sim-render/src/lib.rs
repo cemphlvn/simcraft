@@ -4,6 +4,7 @@
 pub mod canvas;
 pub mod component;
 pub mod diorama;
+pub mod image;
 pub mod layered;
 pub mod layout;
 pub mod pixel;

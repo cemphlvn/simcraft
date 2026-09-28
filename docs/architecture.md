@@ -250,7 +250,11 @@ A framework for game interfaces, in this workspace, with its own terminal render
   - Sprites and tiles are data in asset packs: `palette: {'k': (r, g, b)}`, `sprites: {"ant_walk": (fps: 6,
     frames: [[".kk.", ...], ...])}`; a kind's look names a sprite per state (`sprite: "ant_carry"`).
   - Parallax backdrop layers are data in the view: `(kind: "hills" | "trees" | "clouds", color, height, detail,
-    seed, speed, haze)`; each scrolls at `speed` % of the camera (far layers move slower) and fades into the horizon.
+    seed, speed, haze)` or `(kind: "image", image: "hills", height, speed, haze)`; each scrolls at `speed` % of the
+    camera (far layers move slower), fades into the horizon and follows the season. `soil: "soil"` textures the ground.
+  - Asset packs name images: `images: {"hills": "pixel/hills.png"}` (paths relative to the pack). Any picture becomes
+    pixel art with `simcraft-pixelate IN OUT --height N --colors K` (key out magenta, crop, scale, median-cut
+    palette); generated sources and prompts are recorded next to them (`assets/src/README.md`).
   - Props: `plane` (the world row cut open), `tile` (pixels per voxel), `sky` (pixels above the ground). The sky and
     backdrop colours follow an environment's props (`season_env`), e.g. warmth and the season state.
   - The camera follows the selected entity; `h` / `l` pan.

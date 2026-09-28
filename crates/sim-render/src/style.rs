@@ -129,6 +129,12 @@ pub struct Assets {
     pub palette: BTreeMap<char, (u8, u8, u8)>,
     #[serde(default)]
     pub sprites: BTreeMap<String, crate::pixel::Sprite>,
+    /// Images by name → PNG path relative to the pack file (backdrops, textures).
+    #[serde(default)]
+    pub images: BTreeMap<String, String>,
+    /// The images, loaded (`load_images`).
+    #[serde(skip)]
+    pub loaded: BTreeMap<String, crate::image::Image>,
 }
 
 impl KindLook {
@@ -143,7 +149,17 @@ impl Assets {
         self.kinds.extend(over.kinds);
         self.palette.extend(over.palette);
         self.sprites.extend(over.sprites);
+        self.images.extend(over.images);
+        self.loaded.extend(over.loaded);
         self
+    }
+
+    /// Loads every image the pack names, relative to `dir` (the pack file's folder).
+    pub fn load_images(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        for (name, rel) in &self.images {
+            self.loaded.insert(name.clone(), crate::image::Image::load(&dir.join(rel))?);
+        }
+        Ok(())
     }
 
     /// The look for an entity in its current state: kind base, then the most specific matching state.

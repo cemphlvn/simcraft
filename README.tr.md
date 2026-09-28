@@ -161,7 +161,8 @@ cargo run --release -p sim-render -- games/colony3d     # yüzey, yuva kesiti, 3
 ```
 
 Paralaks tepeler ve mevsimlerle piksel sanatı bir karınca çiftliği (Ghostty, kitty ve WezTerm'de gerçek pikseller; başka
-yerlerde yarım bloklar): `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`.
+yerlerde yarım bloklar): `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`
+(prosedürel arka planlar) ya da `views/generated.ron` (Higgsfield ile üretilip `simcraft-pixelate` ile piksellenmiş).
 
 Tanımladığın ve tıklayarak geçtiğin perspektif durumlarıyla katmanlı 2.5B:
 `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.

@@ -163,3 +163,28 @@ fn the_diorama_paints_pixels_in_both_modes() {
     let blocks = (0..40).map(|y| canvas.row_text(y)).filter(|r| r.contains('▀')).count();
     assert!(blocks > 20, "the picture is made of half-blocks ({blocks} rows)");
 }
+
+#[test]
+fn generated_art_loads_from_the_landscape_pack() {
+    let (world, game) = Game::load(std::path::Path::new(LAYERS), None).expect("loads");
+    let engine = Engine::<Loaded, _>::new(world, game).validate().expect("valid").start();
+    let src = std::fs::read_to_string(format!("{LAYERS}/views/generated.ron")).unwrap();
+    let mut view: View = ron::from_str(&src).expect("parses");
+    let worlds = view.resolve(&Registry::default(), engine.world().depth).expect("resolves");
+    let dir = std::path::PathBuf::from(format!("{LAYERS}/../../assets"));
+    let mut assets = Assets::default();
+    for n in ["ants", "ants_pixel", "landscape"] {
+        let mut pack: Assets = ron::from_str(&std::fs::read_to_string(dir.join(format!("{n}.ron"))).unwrap()).unwrap();
+        pack.load_images(&dir).expect("images load");
+        assets = assets.merged(pack);
+    }
+    assert_eq!(assets.loaded["soil"].w, 32);
+    let scene = Scene { world: engine.world(), game: engine.rules(), assets: &assets };
+    let mut ui = Ui::new(worlds);
+    ui.graphics = true;
+    let mut canvas = Canvas::new(120, 40);
+    view.draw(&Registry::default(), &Theme::builtin("dark").unwrap(), &scene, &ui, &mut canvas);
+    let text: String = (0..40).map(|y| canvas.row_text(y)).collect();
+    assert!(!text.contains("Diorama:"), "no component error: {text}");
+    assert_eq!(ui.images.borrow().len(), 1);
+}

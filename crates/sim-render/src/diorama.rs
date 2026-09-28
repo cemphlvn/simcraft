@@ -16,7 +16,11 @@ use crate::pixel::{Backdrop, Pixmap, Season, mix, noise};
 #[serde(deny_unknown_fields)]
 pub struct Layer {
     pub kind: String,
+    #[serde(default)]
     pub color: (u8, u8, u8),
+    /// For `kind: "image"`: an image from the asset packs, tiled across and standing on the ground (`height` lifts it).
+    #[serde(default)]
+    pub image: String,
     #[serde(default)]
     pub height: i64,
     #[serde(default)]
@@ -31,13 +35,14 @@ pub struct Layer {
 }
 
 impl Layer {
-    fn backdrop(&self) -> Result<Backdrop, String> {
-        Ok(match self.kind.as_str() {
+    fn backdrop(&self) -> Result<Option<Backdrop>, String> {
+        Ok(Some(match self.kind.as_str() {
+            "image" => return Ok(None),
             "hills" => Backdrop::Hills(self.color, self.height, self.detail.max(1), self.seed),
             "trees" => Backdrop::Trees(self.color, self.height, self.detail.max(4), self.seed),
             "clouds" => Backdrop::Clouds(self.color, self.height, self.detail.max(1), self.seed),
-            k => return Err(format!("backdrop kind '{k}': use \"hills\", \"trees\" or \"clouds\"")),
-        })
+            k => return Err(format!("backdrop kind '{k}': use \"image\", \"hills\", \"trees\" or \"clouds\"")),
+        }))
     }
 }
 
@@ -58,6 +63,8 @@ pub struct DioramaProps {
     pub tint_max: i64,
     /// Field shown as faint specks on the surface (e.g. scent); "" = none.
     pub specks: String,
+    /// Soil texture: an image from the asset packs, tiled; "" = procedural soil.
+    pub soil: String,
     pub layers: Vec<Layer>,
 }
 
@@ -72,6 +79,7 @@ impl Default for DioramaProps {
             tint: String::new(),
             tint_max: 100,
             specks: String::new(),
+            soil: String::new(),
             layers: Vec::new(),
         }
     }
@@ -96,7 +104,15 @@ impl Component for Diorama {
         } else {
             (1, inner.w as usize * art_h / (inner.h as usize * 2).max(1))
         };
-        let layers = p.layers.iter().map(|l| l.backdrop().map(|b| (b, l.speed, l.haze))).collect::<Result<Vec<_>, _>>()?;
+        for l in p.layers.iter().filter(|l| l.kind == "image") {
+            if !ctx.scene.assets.loaded.contains_key(&l.image) {
+                return Err(format!("image '{}' is not in the asset packs' `images`", l.image));
+            }
+        }
+        if !p.soil.is_empty() && !ctx.scene.assets.loaded.contains_key(&p.soil) {
+            return Err(format!("soil image '{}' is not in the asset packs' `images`", p.soil));
+        }
+        let layers = p.layers.iter().map(|l| l.backdrop().map(|b| (b, l))).collect::<Result<Vec<_>, _>>()?;
         let art = paint(ctx, &p, &layers, art_w.max(8), art_h);
         if ctx.ui.graphics {
             let bg = ctx.style.color("bg");
@@ -109,7 +125,7 @@ impl Component for Diorama {
     }
 }
 
-fn paint(ctx: &Ctx, p: &DioramaProps, layers: &[(Backdrop, i64, u32)], w: usize, h: usize) -> Pixmap {
+fn paint(ctx: &Ctx, p: &DioramaProps, layers: &[(Option<Backdrop>, &Layer)], w: usize, h: usize) -> Pixmap {
     let scene = ctx.scene;
     let world = scene.world;
     let t = p.tile;
@@ -149,8 +165,27 @@ fn paint(ctx: &Ctx, p: &DioramaProps, layers: &[(Backdrop, i64, u32)], w: usize,
         }
     }
     // Parallax backdrops, far to near.
-    for (b, speed, haze) in layers {
-        b.draw(&mut pm, cam * speed / 100, ground, horizon, *haze, season);
+    for (b, l) in layers {
+        let lcam = cam * l.speed / 100;
+        match b {
+            Some(b) => b.draw(&mut pm, lcam, ground, horizon, l.haze, season),
+            None => {
+                // An image layer: tiled across, standing on the ground line, recoloured by the season and hazed.
+                let img = &scene.assets.loaded[&l.image];
+                let top = ground - l.height - img.h as i64;
+                for sx in 0..w as i64 {
+                    let ix = (sx + lcam).rem_euclid(img.w as i64) as usize;
+                    for iy in 0..img.h {
+                        let px = img.get(ix, iy);
+                        if px[3] == 0 {
+                            continue;
+                        }
+                        let c = season.recolor(mix(Rgb(px[0], px[1], px[2]), horizon, l.haze), (ix + iy).is_multiple_of(7));
+                        pm.set(sx, top + iy as i64, c);
+                    }
+                }
+            }
+        }
     }
     // Falling snow in winter (from the frame counter: moves while you watch, never touches the simulation).
     if season == Season::Winter {
@@ -181,7 +216,12 @@ fn paint(ctx: &Ctx, p: &DioramaProps, layers: &[(Backdrop, i64, u32)], w: usize,
             let level = 1 + depth / t;
             let soil_here = !inside || world.is_terrain(vx, p.plane, level);
             let base = mix(Rgb(122, 86, 56), Rgb(70, 48, 36), (depth * 100 / (h as i64 - ground).max(1)) as u32);
-            let mut c = if soil_here {
+            let texture = (!p.soil.is_empty()).then(|| &scene.assets.loaded[&p.soil]);
+            let mut c = if let (true, Some(tex)) = (soil_here, texture) {
+                // Texture from the asset pack, darker with depth.
+                let q = tex.get(wx.rem_euclid(tex.w as i64) as usize, depth.rem_euclid(tex.h as i64) as usize);
+                mix(Rgb(q[0], q[1], q[2]), Rgb(40, 28, 22), (depth * 60 / (h as i64 - ground).max(1)) as u32)
+            } else if soil_here {
                 // Texture: pebbles and grains, from position (stable while scrolling).
                 let n = noise(wx, y, 17);
                 let mut c = base;

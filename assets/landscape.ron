@@ -1,0 +1,11 @@
+#![enable(implicit_some)]
+// Landscape pack: parallax backdrops and a soil texture, generated with Higgsfield and pixelated with
+// simcraft-pixelate (sources and prompts: assets/src/README.md). Paths are relative to this file.
+Assets(
+    images: {
+        "far_mountains": "pixel/far_mountains.png",
+        "hills":         "pixel/hills.png",
+        "treeline":      "pixel/treeline.png",
+        "soil":          "pixel/soil.png",
+    },
+)

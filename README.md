@@ -161,7 +161,8 @@ cargo run --release -p sim-render -- games/colony3d     # surface, nest cross-se
 ```
 
 A pixel-art ant farm, with parallax hills and seasons (true pixels in Ghostty, kitty and WezTerm; half-blocks elsewhere):
-`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`.
+`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`
+(procedural backdrops) or `views/generated.ron` (Higgsfield-generated backdrops, pixelated with `simcraft-pixelate`).
 
 Layered 2.5D, with perspective states you define and switch by clicking:
 `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
