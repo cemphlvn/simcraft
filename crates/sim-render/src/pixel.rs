@@ -97,13 +97,19 @@ pub fn noise(a: i64, b: i64, seed: u64) -> u64 {
 
 // ------------------------------------------------------------------ sprites
 
-/// An animated sprite: frames of palette characters; '.' is transparent.
+/// An animated sprite: frames of palette characters ('.' is transparent), or frames that are images of the pack
+/// (`images: ["ant_walk_0", ...]`, transparent where alpha is 0). Baked to RGBA once, when the packs are merged.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sprite {
     #[serde(default = "fps")]
     pub fps: u32,
+    #[serde(default)]
     pub frames: Vec<Vec<String>>,
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(skip)]
+    pub baked: Vec<crate::image::Image>,
 }
 
 fn fps() -> u32 {
@@ -111,7 +117,44 @@ fn fps() -> u32 {
 }
 
 impl Sprite {
+    /// Turns the frames into RGBA pictures (palette characters or pack images). Missing images are reported.
+    pub fn bake(&mut self, palette: &BTreeMap<char, (u8, u8, u8)>, images: &BTreeMap<String, crate::image::Image>) -> Vec<String> {
+        let mut missing = Vec::new();
+        self.baked = if self.images.is_empty() {
+            let (w, h) = self.size();
+            self.frames
+                .iter()
+                .map(|frame| {
+                    let mut px = vec![[0u8; 4]; w * h];
+                    for (r, line) in frame.iter().enumerate() {
+                        for (c, ch) in line.chars().enumerate() {
+                            if let Some(&(pr, pg, pb)) = palette.get(&ch) {
+                                px[r * w + c] = [pr, pg, pb, 255];
+                            }
+                        }
+                    }
+                    crate::image::Image { w, h, px }
+                })
+                .collect()
+        } else {
+            self.images
+                .iter()
+                .filter_map(|n| {
+                    let i = images.get(n).cloned();
+                    if i.is_none() {
+                        missing.push(n.clone());
+                    }
+                    i
+                })
+                .collect()
+        };
+        missing
+    }
+
     pub fn size(&self) -> (usize, usize) {
+        if let Some(f) = self.baked.first() {
+            return (f.w, f.h);
+        }
         let f = self.frames.first();
         let h = f.map_or(0, |f| f.len());
         let w = f.and_then(|f| f.iter().map(|r| r.chars().count()).max()).unwrap_or(0);
@@ -121,6 +164,21 @@ impl Sprite {
     /// Draws frame `n` with its bottom-left at (x, y); `flip` mirrors it; `shade` % brightness.
     #[allow(clippy::too_many_arguments)]
     pub fn blit(&self, pm: &mut Pixmap, palette: &BTreeMap<char, (u8, u8, u8)>, n: usize, x: i64, y: i64, flip: bool, shade: u32) {
+        if !self.baked.is_empty() {
+            let f = &self.baked[n % self.baked.len()];
+            for row in 0..f.h {
+                let py = y - f.h as i64 + 1 + row as i64;
+                for col in 0..f.w {
+                    let [r, g, b, a] = f.px[row * f.w + col];
+                    if a == 0 {
+                        continue;
+                    }
+                    let cx = if flip { f.w - 1 - col } else { col };
+                    pm.set(x + cx as i64, py, Rgb(r, g, b).shade(shade));
+                }
+            }
+            return;
+        }
         let Some(frame) = self.frames.get(n % self.frames.len().max(1)) else { return };
         let (w, h) = self.size();
         for (row, line) in frame.iter().enumerate() {
@@ -322,7 +380,7 @@ pub fn png(pm: &Pixmap) -> io::Result<Vec<u8>> {
         }
         !c
     }
-    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    fn chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
         out.extend_from_slice(&(data.len() as u32).to_be_bytes());
         let mut body = kind.to_vec();
         body.extend_from_slice(data);
@@ -343,9 +401,9 @@ pub fn png(pm: &Pixmap) -> io::Result<Vec<u8>> {
     ihdr.extend_from_slice(&(pm.w as u32).to_be_bytes());
     ihdr.extend_from_slice(&(pm.h as u32).to_be_bytes());
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
-    chunk(&mut out, b"IHDR", &ihdr);
-    chunk(&mut out, b"IDAT", &z.finish()?);
-    chunk(&mut out, b"IEND", &[]);
+    chunk(&mut out, *b"IHDR", &ihdr);
+    chunk(&mut out, *b"IDAT", &z.finish()?);
+    chunk(&mut out, *b"IEND", &[]);
     Ok(out)
 }
 
@@ -418,10 +476,30 @@ mod tests {
     #[test]
     fn a_sprite_frame_blits_with_transparency() {
         let palette = [('k', (1, 2, 3))].into_iter().collect();
-        let sprite = Sprite { fps: 6, frames: vec![vec![".k".into(), "k.".into()]] };
+        let mut sprite = Sprite { fps: 6, frames: vec![vec![".k".into(), "k.".into()]], images: vec![], baked: vec![] };
         let mut p = Pixmap::new(2, 2, Rgb::WHITE);
         sprite.blit(&mut p, &palette, 0, 0, 1, false, 100);
         assert_eq!(p.px, vec![Rgb::WHITE, Rgb(1, 2, 3), Rgb(1, 2, 3), Rgb::WHITE]);
+        // Baked: the same picture.
+        assert!(sprite.bake(&palette, &BTreeMap::new()).is_empty());
+        let mut q = Pixmap::new(2, 2, Rgb::WHITE);
+        sprite.blit(&mut q, &palette, 0, 0, 1, false, 100);
+        assert_eq!(q.px, p.px);
+    }
+
+    #[test]
+    fn an_image_sprite_blits_its_frames_and_reports_missing_ones() {
+        let img = |c: [u8; 4]| crate::image::Image { w: 2, h: 1, px: vec![[0, 0, 0, 0], c] };
+        let images: BTreeMap<String, crate::image::Image> =
+            [("a".to_string(), img([9, 9, 9, 255])), ("b".to_string(), img([7, 7, 7, 255]))].into_iter().collect();
+        let mut s = Sprite { fps: 6, frames: vec![], images: vec!["a".into(), "b".into()], baked: vec![] };
+        assert!(s.bake(&BTreeMap::new(), &images).is_empty());
+        assert_eq!(s.size(), (2, 1));
+        let mut p = Pixmap::new(2, 1, Rgb::WHITE);
+        s.blit(&mut p, &BTreeMap::new(), 1, 0, 0, true, 100);
+        assert_eq!(p.px, vec![Rgb(7, 7, 7), Rgb::WHITE], "frame 1, mirrored, alpha 0 left alone");
+        let mut s = Sprite { fps: 6, frames: vec![], images: vec!["zz".into()], baked: vec![] };
+        assert_eq!(s.bake(&BTreeMap::new(), &images), vec!["zz".to_string()]);
     }
 }
 

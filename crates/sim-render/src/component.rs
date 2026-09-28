@@ -190,7 +190,8 @@ impl Component for Title {
         let p: TitleProps = props(v)?;
         let ui = ctx.ui;
         let name = p.text.unwrap_or_else(|| ctx.scene.game.def.name.clone());
-        let state = if ui.paused { "PAUSED".to_string() } else { format!("{:.0} ticks/s", ui.speed) };
+        let rate = ctx.scene.game.cfg.run.tick_rate.max(1) as f32;
+        let state = if ui.paused { "PAUSED".to_string() } else { format!("{:.0} ticks/s = {}x", ui.speed, ui.speed / rate) };
         let end = ui.outcome.as_ref().map(|o| format!("   END: {o}")).unwrap_or_default();
         let (fg, bg) = (ctx.style.color("title_text"), ctx.style.color("title_bg"));
         ctx.canvas.fill(r, Cell { ch: ' ', fg, bg });

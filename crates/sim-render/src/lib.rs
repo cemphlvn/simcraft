@@ -1,6 +1,7 @@
 //! simcraft renderer: a component library for game interfaces, with its own terminal renderer.
 //! See docs/architecture.md, "Renderer".
 
+pub mod anim;
 pub mod canvas;
 pub mod component;
 pub mod diorama;

@@ -195,7 +195,7 @@ fn find_diorama(n: &Node) -> Option<&ron::Value> {
 fn main() {
     let mut args = std::env::args().skip(1);
     let (mut dir, mut view_path, mut sets, mut save) = (PathBuf::from("games/colony3d"), None, Vec::new(), None);
-    let mut s = Settings { feel: Feel::default(), fps: 60.0, speed: 10.0, seconds: 40.0 };
+    let mut s = Settings { feel: Feel::default(), fps: 60.0, speed: 0.0, seconds: 40.0 };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--view" => view_path = args.next().map(PathBuf::from),
@@ -229,6 +229,10 @@ fn main() {
                 std::process::exit(2);
             }
         }
+    }
+    if s.speed <= 0.0 {
+        // 1x: the operator's tick rate from engine.toml.
+        s.speed = boot(&dir, SEEDS[0]).unwrap_or_else(|e| panic!("{e}")).rules().cfg.run.tick_rate as f32;
     }
     let props: DioramaProps = sim_render::props(find_diorama(&view.layout).expect("the view has a Diorama")).expect("props");
     let mut assets = Assets::default();
@@ -285,7 +289,10 @@ fn main() {
             ("min", Some(_)) => "worse",
             _ => "",
         };
-        println!("  {name:<16} {now:>9.3}   {:>9}  {verdict:<6}  {goal:<4}  {what}", before.map_or("-".to_string(), |b| format!("{b:.3}")));
+        println!(
+            "  {name:<16} {now:>9.3}   {:>9}  {verdict:<6}  {goal:<4}  {what}",
+            before.map_or_else(|| "-".to_string(), |b| format!("{b:.3}"))
+        );
     }
     if let Some(note) = save {
         std::fs::create_dir_all(&history_dir).expect("creates feel-evals");

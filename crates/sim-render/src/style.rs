@@ -151,7 +151,21 @@ impl Assets {
         self.sprites.extend(over.sprites);
         self.images.extend(over.images);
         self.loaded.extend(over.loaded);
+        self.bake();
         self
+    }
+
+    /// Bakes every sprite to RGBA frames (after packs are merged: palettes and images are shared).
+    /// Returns the image names sprites ask for that no pack has.
+    pub fn bake(&mut self) -> Vec<String> {
+        let (palette, loaded) = (&self.palette, &self.loaded);
+        let mut missing: Vec<String> = self
+            .sprites
+            .iter_mut()
+            .flat_map(|(name, s)| s.bake(palette, loaded).into_iter().map(move |i| format!("sprite '{name}': no image '{i}'")))
+            .collect();
+        missing.dedup();
+        missing
     }
 
     /// Loads every image the pack names, relative to `dir` (the pack file's folder).

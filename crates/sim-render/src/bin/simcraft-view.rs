@@ -91,8 +91,11 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>, scheme: Option<
         let path = find(dir, "assets", pack).ok_or_else(|| format!("asset pack '{pack}' not found (assets/{pack}.ron)"))?;
         let src = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let mut pack: Assets = ron::from_str(&src).map_err(|e| format!("{}: {e}", path.display()))?;
-        pack.load_images(path.parent().unwrap_or(Path::new(".")))?;
+        pack.load_images(path.parent().unwrap_or_else(|| Path::new(".")))?;
         assets = assets.merged(pack);
+    }
+    if let Some(m) = assets.bake().into_iter().next() {
+        return Err(m);
     }
     let series = {
         let s = view_series(&view);
@@ -136,7 +139,7 @@ fn pick(w: &World, g: &Game, after: Option<u64>) -> Option<u64> {
     kinds.sort_by_key(|k| (!controllable(k), std::cmp::Reverse(w.count(k))));
     let ids: Vec<u64> = kinds.iter().flat_map(|k| w.of_kind(k).map(|e| e.id)).collect();
     match after {
-        Some(a) => ids.iter().position(|id| *id == a).and_then(|i| ids.get(i + 1)).or(ids.first()).copied(),
+        Some(a) => ids.iter().position(|id| *id == a).and_then(|i| ids.get(i + 1)).or_else(|| ids.first()).copied(),
         None => ids.first().copied(),
     }
 }
@@ -315,11 +318,11 @@ fn main() {
     let mut view_file: Option<PathBuf> = None;
     let mut scheme: Option<String> = None;
     let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) =
-        (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
+        (PathBuf::from("games/colony"), None, None, 60.0f32, None, (120u16, 40u16));
     while let Some(a) = args.next() {
         match a.as_str() {
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()),
-            "--speed" => speed = args.next().and_then(|s| s.parse().ok()).unwrap_or(speed),
+            "--speed" => speed = args.next().and_then(|s| s.parse::<f32>().ok()),
             "--fps" => fps = args.next().and_then(|s| s.parse().ok()).unwrap_or(fps),
             "--dump" => dump = args.next().and_then(|s| s.parse::<u32>().ok()),
             "--ansi" => ansi = true,
@@ -343,7 +346,8 @@ fn main() {
             std::process::exit(2);
         }
     };
-    app.ui.speed = speed;
+    // 1x = the operator's tick rate (engine.toml `tick_rate`); `--speed` overrides it in ticks/s.
+    app.ui.speed = speed.unwrap_or_else(|| app.engine.rules().cfg.run.tick_rate as f32);
     app.ui.graphics = !blocks && sim_render::pixel::kitty_supported();
 
     if let Some(ticks) = dump {

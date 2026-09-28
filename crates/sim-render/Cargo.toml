@@ -28,3 +28,6 @@ path = "src/bin/simcraft-pixelate.rs"
 [[bin]]
 name = "simcraft-feel"
 path = "src/bin/simcraft-feel.rs"
+
+[lints]
+workspace = true

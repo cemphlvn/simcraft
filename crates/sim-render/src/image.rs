@@ -60,6 +60,10 @@ impl Image {
             if d <= tolerance {
                 p[3] = 0;
             }
+            // Anti-aliased fringe of a magenta key: pinkish pixels (red and blue well above green).
+            if key == Rgb(255, 0, 255) && (p[0].min(p[2]) as i32 - p[1] as i32) > 70 {
+                p[3] = 0;
+            }
         }
     }
 
@@ -103,6 +107,59 @@ impl Image {
             }
         }
         Image { w, h, px }
+    }
+
+    /// Majority downscale to `w × h`: each target pixel takes the most common opaque colour of its block (ties: the
+    /// smallest colour), transparent when most of the block is. Keeps edges and outlines crisp where averaging
+    /// would smear them; quantize first so "most common" means something.
+    pub fn downscale_mode(&self, w: usize, h: usize) -> Image {
+        let mut px = Vec::with_capacity(w * h);
+        let mut counts: std::collections::BTreeMap<[u8; 3], u32> = std::collections::BTreeMap::new();
+        for ty in 0..h {
+            for tx in 0..w {
+                let (x0, x1) = (tx * self.w / w, ((tx + 1) * self.w / w).max(tx * self.w / w + 1));
+                let (y0, y1) = (ty * self.h / h, ((ty + 1) * self.h / h).max(ty * self.h / h + 1));
+                counts.clear();
+                let (mut n, mut total) = (0u32, 0u32);
+                for y in y0..y1.min(self.h) {
+                    for x in x0..x1.min(self.w) {
+                        let p = self.get(x, y);
+                        total += 1;
+                        if p[3] > 0 {
+                            *counts.entry([p[0], p[1], p[2]]).or_insert(0) += 1;
+                            n += 1;
+                        }
+                    }
+                }
+                px.push(match counts.iter().max_by_key(|(c, k)| (**k, std::cmp::Reverse(**c))) {
+                    Some((c, _)) if n * 2 >= total => [c[0], c[1], c[2], 255],
+                    _ => [0, 0, 0, 0],
+                });
+            }
+        }
+        Image { w, h, px }
+    }
+
+    /// Darkens the silhouette's edge pixels (opaque with a transparent or outside 4-neighbour) to `pct` %:
+    /// an inner outline that keeps a small sprite readable on any background without growing it.
+    pub fn outline(&mut self, pct: u32) {
+        let edge: Vec<bool> = (0..self.w * self.h)
+            .map(|i| {
+                let (x, y) = ((i % self.w) as i64, (i / self.w) as i64);
+                self.px[i][3] > 0
+                    && [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| {
+                        let (nx, ny) = (x + dx, y + dy);
+                        nx < 0 || ny < 0 || nx >= self.w as i64 || ny >= self.h as i64 || self.get(nx as usize, ny as usize)[3] == 0
+                    })
+            })
+            .collect();
+        for (p, e) in self.px.iter_mut().zip(edge) {
+            if e {
+                for c in &mut p[..3] {
+                    *c = (*c as u32 * pct / 100) as u8;
+                }
+            }
+        }
     }
 
     /// Reduces opaque pixels to at most `n` colours (median cut, then nearest colour).
@@ -156,14 +213,29 @@ impl Image {
 
 /// Everything at once: key the background, crop, scale to `height` pixels (width by aspect), `colors` colours.
 pub fn pixelate(src: &Image, key: Option<Rgb>, height: usize, colors: usize) -> Image {
+    pixelate_with(src, key, height, colors, false, None)
+}
+
+/// `pixelate` with the pixel-art options: `mode` = quantize at full size, then majority downscale (crisp edges);
+/// `outline` = darken the silhouette's edge to this % (sprites).
+pub fn pixelate_with(src: &Image, key: Option<Rgb>, height: usize, colors: usize, mode: bool, outline: Option<u32>) -> Image {
     let mut img = src.clone();
     if let Some(k) = key {
         img.key(k, 150);
     }
-    let img = img.crop();
+    let mut img = img.crop();
     let w = (img.w * height / img.h.max(1)).max(1);
-    let mut out = img.downscale(w, height);
-    out.quantize(colors);
+    let mut out = if mode {
+        img.quantize(colors);
+        img.downscale_mode(w, height)
+    } else {
+        let mut out = img.downscale(w, height);
+        out.quantize(colors);
+        out
+    };
+    if let Some(pct) = outline {
+        out.outline(pct);
+    }
     out
 }
 
@@ -184,6 +256,19 @@ mod tests {
         let distinct: std::collections::BTreeSet<[u8; 4]> = out.px.iter().copied().collect();
         assert!(distinct.len() <= 3, "{} colours", distinct.len());
         assert!(out.px.iter().all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn majority_downscale_keeps_a_thin_dark_line_crisp() {
+        // 8x8: white, with a 3-pixel-wide black bar through columns 2..5. At 2x2 per target pixel a block is never
+        // blended: every row reads light, dark, dark, light (averaging would give a third, grey value).
+        let src = img(8, 8, |x, _| if (2..5).contains(&x) { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
+        let out = pixelate_with(&src, None, 4, 16, true, None);
+        let row: Vec<[u8; 4]> = (0..4).map(|x| out.get(x, 0)).collect();
+        assert_eq!(row, vec![[255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255], [255, 255, 255, 255]]);
+        let mut o = img(3, 3, |x, y| if (x, y) == (1, 1) || x == 0 { [200, 200, 200, 255] } else { [0, 0, 0, 0] });
+        o.outline(50);
+        assert_eq!(o.get(1, 1), [100, 100, 100, 255], "an edge pixel darkens");
     }
 
     #[test]

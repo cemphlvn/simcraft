@@ -405,22 +405,18 @@ pub fn build_atlas(assets: &crate::style::Assets) -> Atlas {
     let mut placed: Vec<Placed> = Vec::new();
     let (mut x, mut y, mut row_h) = (2usize, 0usize, 1usize);
     for (name, sprite) in &assets.sprites {
-        let (w, h) = sprite.size();
-        for (i, frame) in sprite.frames.iter().enumerate() {
+        let mut sprite = sprite.clone();
+        if sprite.baked.is_empty() {
+            sprite.bake(&assets.palette, &assets.loaded);
+        }
+        for (i, frame) in sprite.baked.iter().enumerate() {
+            let (w, h) = (frame.w, frame.h);
             if x + w + 1 > width {
                 x = 0;
                 y += row_h + 1;
                 row_h = 1;
             }
-            let mut px = vec![[0u8; 4]; w * h];
-            for (r, line) in frame.iter().enumerate() {
-                for (c, ch) in line.chars().enumerate() {
-                    if let Some(&(pr, pg, pb)) = assets.palette.get(&ch) {
-                        px[r * w + c] = [pr, pg, pb, 255];
-                    }
-                }
-            }
-            placed.push(((name.clone(), i), x, y, px, w, h));
+            placed.push(((name.clone(), i), x, y, frame.px.clone(), w, h));
             x += w + 1;
             row_h = row_h.max(h);
         }
