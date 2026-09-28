@@ -1,0 +1,15 @@
+{
+  "name": "com.simcraft.core",
+  "version": "0.1.0",
+  "displayName": "simcraft",
+  "description": "Deterministic simulation core. Write the game in game.ron, run it in Unity: the core decides, Unity displays.",
+  "unity": "2021.3",
+  "license": "MIT",
+  "samples": [
+    {
+      "displayName": "Wolf and sheep",
+      "description": "Drop SimcraftWorld on an empty GameObject and assign game.ron and engine.toml.",
+      "path": "Samples~/WolfSheep"
+    }
+  ]
+}

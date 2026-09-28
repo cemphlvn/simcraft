@@ -1,0 +1,6 @@
+{
+  "name": "Simcraft.Runtime",
+  "rootNamespace": "Simcraft",
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

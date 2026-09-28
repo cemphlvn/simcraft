@@ -1,0 +1,7 @@
+{
+  "name": "Simcraft.Editor",
+  "rootNamespace": "Simcraft.Editor",
+  "references": ["Simcraft.Runtime"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false
+}

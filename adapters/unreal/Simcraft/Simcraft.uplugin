@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "simcraft",
+  "Description": "Deterministic simulation core. Write the game in game.ron, run it in Unreal: the core decides, Unreal displays.",
+  "Category": "Simulation",
+  "CanContainContent": false,
+  "Modules": [
+    { "Name": "Simcraft", "Type": "Runtime", "LoadingPhase": "Default" }
+  ]
+}

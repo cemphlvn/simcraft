@@ -80,6 +80,16 @@ cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
 
 `{"cmd":"snapshot"}` returns the whole game; `{"cmd":"restore",...}` goes back to it, and the future is bit-identical.
 
+## Unity and Unreal
+
+The core is also a C library (`libsimcraft`, header `crates/sim-ffi/include/simcraft.h`).
+`adapters/build-native.sh` builds it for the host adapters:
+
+- Unity: `adapters/unity/com.simcraft.core` (UPM package, `SimcraftWorld` component)
+- Unreal: `adapters/unreal/Simcraft` (plugin, `ASimcraftWorld` actor, Blueprint-callable)
+
+Hosts display; the core decides. The same `game.ron` runs everywhere.
+
 ## Guarantees
 
 - **Deterministic.** Same seed, same inputs, same world, every tick.

@@ -1,2 +1,8 @@
 target/
 runs/
+# adapters/build-native.sh output
+adapters/unity/com.simcraft.core/Plugins/
+adapters/unity/com.simcraft.core/Samples~/WolfSheep/*.ron
+adapters/unity/com.simcraft.core/Samples~/WolfSheep/*.toml
+adapters/unreal/Simcraft/Source/ThirdParty/SimcraftLib/lib/
+adapters/unreal/Simcraft/Source/ThirdParty/SimcraftLib/include/simcraft.h
