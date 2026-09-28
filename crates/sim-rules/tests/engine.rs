@@ -587,10 +587,120 @@ fn climb_on_a_missing_prop_is_rejected() {
 
 #[test]
 fn golden_colony_hash() {
-    let mut e = boot(COLONY, COLONY_PANEL).expect("valid");
+    let mut e = boot_colony(COLONY, &colony_envs()).expect("valid");
     for _ in 0..200 {
         e.tick();
     }
-    // Recorded at eval step 007. Change only on purpose, together with the game (and its EVALS.md).
-    assert_eq!(format!("{:016x}", e.world().hash()), "f74c4cf6b5648afd");
+    // Recorded at eval step 011 (seasons as an environment; behaviour identical to 010). Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "72aaa5caea6bc031");
+}
+
+// --- environments ---
+
+const SEASONS: &str = include_str!("../../../envs/seasons.ron");
+
+fn colony_envs() -> Vec<(String, String)> {
+    vec![("seasons".to_string(), SEASONS.to_string())]
+}
+
+fn boot_colony(game: &str, envs: &[(String, String)]) -> Result<Engine<Running, Game>, Vec<String>> {
+    let (world, g) = Game::from_parts(game, COLONY_PANEL, envs).map_err(|e| vec![e])?;
+    Ok(Engine::<Loaded, _>::new(world, g).validate()?.start())
+}
+
+/// The seasons environment written by hand: what a C++ port would implement.
+struct NativeSeasons;
+
+impl sim_rules::NativeEnv for NativeSeasons {
+    fn step(
+        &self,
+        tick: u64,
+        p: &std::collections::BTreeMap<String, i64>,
+        props: &std::collections::BTreeMap<String, i64>,
+        state: &str,
+    ) -> (std::collections::BTreeMap<String, i64>, String) {
+        let (summer, autumn, winter) = (p["summer"], p["autumn"], p["winter"]);
+        let t = tick as i64 % (summer + autumn + winter);
+        let grow = summer + autumn;
+        let ripeness = if t > grow { 0 } else { 100 - (t * 200 / grow - 100).abs() };
+        // Transitions see the start of the tick, exactly like the .ron machine.
+        let next = match state {
+            "Summer" if t >= summer => "Autumn",
+            "Autumn" if t >= grow => "Winter",
+            "Winter" if t < summer => "Summer",
+            s => s,
+        };
+        let mut out = props.clone();
+        out.insert("ripeness".into(), ripeness);
+        (out, next.to_string())
+    }
+}
+
+#[test]
+fn a_native_environment_matches_its_ron_reference() {
+    let ticks = sim_rules::conformance(COLONY, COLONY_PANEL, &colony_envs(), "seasons", Arc::new(NativeSeasons), 1500)
+        .expect("bit-identical");
+    // Seed 1's colony dies at tick 1460: three full years of seasons compared, to the end of the game.
+    assert!(ticks >= 3 * 480, "{ticks}");
+}
+
+#[test]
+fn a_wrong_native_environment_is_caught() {
+    struct Late;
+    impl sim_rules::NativeEnv for Late {
+        fn step(
+            &self,
+            tick: u64,
+            p: &std::collections::BTreeMap<String, i64>,
+            props: &std::collections::BTreeMap<String, i64>,
+            state: &str,
+        ) -> (std::collections::BTreeMap<String, i64>, String) {
+            // Off by one tick: winter starts a tick late.
+            NativeSeasons.step(tick.saturating_sub(1), p, props, state)
+        }
+    }
+    let err = sim_rules::conformance(COLONY, COLONY_PANEL, &colony_envs(), "seasons", Arc::new(Late), 1500)
+        .expect_err("must diverge");
+    assert!(err.contains("tick"), "{err}");
+}
+
+#[test]
+fn environments_are_checked_like_everything_else() {
+    // Missing file.
+    let errs = boot_colony(COLONY, &[]).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("environment 'seasons' not found")), "{errs:?}");
+    // A game reading something the environment does not provide.
+    let game = COLONY.replace("env.seasons.ripeness", "env.seasons.ripness");
+    let errs = boot_colony(&game, &colony_envs()).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("ripness")), "{errs:?}");
+    // A name clash.
+    let game = COLONY.replace(r#""evaporation": 4,"#, r#""evaporation": 4, "summer": 1,"#);
+    let errs = boot_colony(&game, &colony_envs()).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("param 'summer' is also a game param")), "{errs:?}");
+}
+
+#[test]
+fn an_environment_is_one_hidden_entity() {
+    let e = boot_colony(COLONY, &colony_envs()).expect("valid");
+    let seasons: Vec<_> = e.world().of_kind("seasons").collect();
+    assert_eq!(seasons.len(), 1);
+    assert!(e.rules().is_hidden("seasons") && !e.rules().is_hidden("ant"));
+    // Unplaced by the layout: it appears once, at (0, 0).
+    let game = COLONY.replace(r#"'S': "seasons""#, r#"'S': "wall""#);
+    let e = boot_colony(&game, &colony_envs()).expect("valid");
+    let s: Vec<_> = e.world().of_kind("seasons").map(|x| (x.x, x.y)).collect();
+    assert_eq!(s, vec![(0, 0)]);
+}
+
+#[test]
+fn maths_helpers_are_integer_curves() {
+    let game = r#"#![enable(implicit_some)]
+    Game(name: "maths", kinds: { "probe": (glyph: 'p', props: { "a": 0, "b": 0, "c": 0, "d": 0, "e": 0 }) },
+      rules: [ (name: "calc", for: "probe", then: [
+        Set("a", "triangle(90, 360, 100)"), Set("b", "triangle(180, 360, 100)"), Set("c", "ramp(50, 100, 30)"),
+        Set("d", "clamp(-5, 0, 10)"), Set("e", "pct(250, 40)") ]) ])"#;
+    let mut e = boot(game, "[run]\nseed = 1\nmax_ticks = 5\n[world]\nwidth = 1\nheight = 1\n[spawn]\nprobe = 1\n").expect("valid");
+    e.tick();
+    let p = &e.world().of_kind("probe").next().unwrap().props;
+    assert_eq!((p["a"], p["b"], p["c"], p["d"], p["e"]), (50, 100, 15, 0, 100));
 }

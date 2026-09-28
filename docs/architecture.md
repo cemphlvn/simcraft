@@ -126,7 +126,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 
 **Seats (panel):** `[agent] seats = {alice = 1, bob = 2}` makes the game multi-player. Requests carry `"as": "<seat>"`; an entity belongs to a seat when its `owner` prop equals the seat's number, and controllable kinds must declare `owner`.
 
-**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, and `glyphs: {state: char}` for per-state rendering (the deepest matching state wins).
+**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, `hidden: bool` (not drawn), and `glyphs: {state: char}` for per-state rendering (the deepest matching state wins).
 
 ## State machines (`fsms:`)
 
@@ -164,6 +164,42 @@ Words come from tools designers already know (Unity Animator, Unreal StateTree /
 **Validation.** Names may not contain `. | # ^ = ,` or be `*`. Every compound state needs `initial` or `pick`; transitions name existing children; `use` must exist and must not loop (`a → b → a`: use `interrupt` for recursion); a state with `use` cannot also declare `states`/`layers`/`initial`/`pick`/`transitions`; every `state:` selector, glyph key and `Goto`/`Interrupt` target must match a state of its kind (`Goto` needs exactly one). Machine rule names share the switch namespace.
 
 **In the world** the state stays one string (`sim-core` is untouched): the active states, then `#` remembered children, then `^` saved interrupts, e.g. `Life.Awake.Stuck.Refactor.Warmup|Mood.Tired#Life.Awake.Work=Build^Life.Awake=Work.Build.Flow`. A flat machine's state is still just `Roam`, so existing games keep their hashes. Observers (`states` in `observe`/`step`) see only the active part.
+
+## Environments (`envs/<name>.ron`)
+
+An environment is the world's own state machine: seasons, weather, a market, a day cycle. It is written like a game
+and shared between games.
+
+```ron
+Environment(
+    name: "seasons",
+    params: { "summer": 240, "autumn": 120, "winter": 120 },
+    props:  { "ripeness": 0 },
+    fsm: "season",
+    fsms: { "season": (initial: "Summer", transitions: [ ... ]) },
+    rules: [ (name: "ripen", then: [ Set("ripeness", "triangle(tick % 480, 360, 100)") ]) ],
+)
+```
+
+- A game lists what it uses: `environments: ["seasons"]`. `Game::load` finds `envs/seasons.ron` in the game's folder
+  or the nearest ancestor with an `envs/` folder; `Game::from_parts` takes them as text (the C API does not yet).
+- It becomes a **hidden singleton entity** of kind `seasons` (its state machine, props and rules are ordinary ones;
+  its rules have no `for`). It is placed where the game's layout puts its glyph, else at (0, 0) after the layout.
+  Hidden kinds are not drawn. Being an entity, it is in the hash, snapshots and replays.
+- **Reading it:** every expression sees `env.<name>.<prop>` and `env.<name>.state` (the active states), a snapshot
+  from the start of the tick. Agents can combine it with their own state and the world (`pick: Best` scores,
+  `Climb`) into dynamic utilities.
+- **Merging:** its params join `p` (the operator tunes them in `engine.toml` as usual), its machines join `fsms`.
+  A name clash with the game (kind, param, machine, rule) is an error.
+- **Compatibility** is the existing dry run: a game reading `env.seasons.ripness` fails at load with the typo named.
+- **Native implementations:** `Game::set_native_env(name, impl NativeEnv)` replaces the environment's own machine
+  and rules with a pure function `(tick, params, props, state) → (props, state)`, integer-only. It is correct
+  only if `sim_rules::conformance` shows it bit-identical to the `.ron` reference, tick by tick, on the game's
+  panel. Rust today; C++ through the C API with the same contract.
+
+**Maths helpers** (integers, deterministic): `clamp(x, lo, hi)`; `pct(x, percent)` = `x * percent / 100`;
+`ramp(x, len, peak)` rises from 0 at 0 to `peak` at `len` (clamped); `triangle(x, len, peak)` is 0 at 0, `peak`
+at `len / 2`, 0 at `len` (and 0 outside).
 
 ## Validation (typestate `Loaded → Validated`)
 
@@ -228,6 +264,9 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Event bus: JSONL log, live TCP stream, verified replay
 - [x] State charts: `sim-state` + game 4 (gamedev)
 - [x] Gradients (`Climb`) + game 5 (colony); eval-driven development (`tools/eval.py`, `docs/evals.md`)
+- [x] Environments (`envs/`, `env.<name>`, native implementations with conformance), maths helpers
+- [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)
+- [ ] Fields: a number per cell with deposit, evaporation and diffusion built in (replaces entity-per-cell scent)
 - [x] World snapshot / restore
 - [x] `sim-ffi`: versioned C API
 - [ ] Unity adapter (C# package) + sample: `Native`/`Simulation` tested with .NET (`adapters/unity/tests`); `SimcraftWorld` and the importer not yet compiled in Unity

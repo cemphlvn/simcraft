@@ -13,7 +13,8 @@ use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, PickSpec, Spec, TransitionSpec};
 
 use crate::config::EngineConfig;
-use crate::game::{Do, GameDef, PickDef, RuleDef, StateDef, Target};
+use crate::game::{Do, EnvDef, GameDef, PickDef, RuleDef, StateDef, Target};
+use crate::env::NativeEnv;
 
 /// Compiled state chart: conditions index into `exprs`, action blocks into `blocks`.
 type StateChart = Chart<usize, usize>;
@@ -94,6 +95,10 @@ pub struct Game {
     /// Condition/score expressions and action blocks of the charts.
     exprs: Vec<AST>,
     blocks: Vec<Vec<CDo>>,
+    /// Environment kinds (hidden singletons), in `environments` order.
+    envs: Vec<String>,
+    /// Environments whose own machine and rules are replaced by native code.
+    natives: BTreeMap<String, Arc<dyn NativeEnv>>,
     /// Kind → state text at birth.
     initial_states: BTreeMap<String, String>,
     /// Definitions of rules written inside states (in `rules` order, for validation).
@@ -401,14 +406,35 @@ impl Game {
         let game_src = read(&dir.join("game.ron"))?;
         let cfg_path = config.map(Path::to_path_buf).unwrap_or_else(|| dir.join("engine.toml"));
         let cfg_src = read(&cfg_path)?;
-        Self::from_strs(&game_src, &cfg_src)
+        let def: GameDef = ron::from_str(&game_src).map_err(|e| format!("game.ron: {e}"))?;
+        let mut envs = Vec::new();
+        for name in &def.environments {
+            // envs/<name>.ron in the game's folder or the nearest ancestor that has one.
+            let found = dir.ancestors().map(|a| a.join("envs").join(format!("{name}.ron"))).find(|p| p.exists());
+            let path = found
+                .ok_or_else(|| format!("environment '{name}': no envs/{name}.ron next to or above {}", dir.display()))?;
+            envs.push((name.clone(), read(&path)?));
+        }
+        Self::from_parts(&game_src, &cfg_src, &envs)
     }
 
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<(World, Game), String> {
-        let def: GameDef = ron::from_str(game_ron).map_err(|e| format!("game.ron: {e}"))?;
+        Self::from_parts(game_ron, engine_toml, &[])
+    }
+
+    /// `envs`: (name, text of `envs/<name>.ron`) for every environment the game lists.
+    pub fn from_parts(game_ron: &str, engine_toml: &str, envs: &[(String, String)]) -> Result<(World, Game), String> {
+        let mut def: GameDef = ron::from_str(game_ron).map_err(|e| format!("game.ron: {e}"))?;
         let cfg: EngineConfig = toml::from_str(engine_toml).map_err(|e| format!("engine.toml: {e}"))?;
+        let parsed: Vec<EnvDef> = envs
+            .iter()
+            .map(|(n, src)| ron::from_str(src).map_err(|e| format!("envs/{n}.ron: {e}")))
+            .collect::<Result<_, _>>()?;
+        let merge_errors = def.merge_envs(&parsed).err().unwrap_or_default();
         let mut game = Self::compile(def, cfg);
-        game.source_hash = [game_ron, "\0", engine_toml].iter().flat_map(|s| s.bytes()).fold(
+        game.compile_errors.extend(merge_errors);
+        let texts: Vec<&str> = envs.iter().flat_map(|(_, s)| ["\0", s.as_str()]).collect();
+        game.source_hash = [game_ron, "\0", engine_toml].into_iter().chain(texts).flat_map(|s| s.bytes()).fold(
             0xcbf2_9ce4_8422_2325_u64,
             |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3),
         );
@@ -431,6 +457,12 @@ impl Game {
             CTX.with(|c| c.borrow().around(kind, Some(state), r))
         });
         rhai.register_fn("rand", |n: i64| CTX.with(|c| c.borrow_mut().rand(n)));
+        rhai.register_fn("clamp", |x: i64, lo: i64, hi: i64| x.max(lo).min(hi));
+        rhai.register_fn("pct", |x: i64, percent: i64| x * percent / 100);
+        rhai.register_fn("ramp", |x: i64, len: i64, peak: i64| if len <= 0 { 0 } else { (x * peak / len).clamp(0, peak) });
+        rhai.register_fn("triangle", |x: i64, len: i64, peak: i64| {
+            if len <= 0 || x < 0 || x > len { 0 } else { peak - (x * 2 * peak / len - peak).abs() }
+        });
         rhai.register_fn("near_in", |kind: &str, sel: &str| CTX.with(|c| c.borrow().near_in(kind, sel)));
         rhai.register_fn("in_state", |sel: &str| CTX.with(|c| sim_state::in_label(&c.borrow().state, sel)));
         rhai.register_fn("in_state", |m: Map, sel: &str| sim_state::in_label(&map_str(&m, "state"), sel));
@@ -457,6 +489,9 @@ impl Game {
             c.home = Some((m.clone(), p.clone()));
             rules.push(c);
         }
+        // Environment rules after everything: adding an environment never shifts a game's salts.
+        let base = rules.len() as u64;
+        rules.extend(def.env_rules.iter().enumerate().map(|(i, r)| cc.rule(r, base + i as u64 + 1, false, &cfg)));
         let ends = def
             .end
             .iter()
@@ -523,7 +558,7 @@ impl Game {
         for f in def.fsms.values() {
             state_sources(f, &mut sources);
         }
-        for r in def.rules.iter().chain(&def.actions) {
+        for r in def.rules.iter().chain(&def.actions).chain(&def.env_rules) {
             sources.extend(r.when.as_deref());
             sources.extend(r.script.as_deref());
             r.then.iter().for_each(|d| do_sources(d, &mut sources));
@@ -532,6 +567,7 @@ impl Game {
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
+        let envs = def.env_kinds.clone();
         Game {
             def,
             cfg,
@@ -546,6 +582,8 @@ impl Game {
             p_map,
             near_kinds,
             kind_charts,
+            envs,
+            natives: BTreeMap::new(),
             machine_rules: mach.rules.into_iter().map(|(_, _, r)| r).collect(),
             exprs: mach.exprs,
             blocks: mach.blocks,
@@ -598,6 +636,18 @@ impl Game {
                     props.extend(entry.props().into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
                     world.spawn(kind, &state, x as i64, y as i64, props);
                 }
+            }
+        }
+
+        // Environments the layout did not place: one each, at (0, 0). Placed twice is an error.
+        for name in &self.envs {
+            match world.count(name) {
+                0 => {
+                    let (state, props) = self.template(name);
+                    world.spawn(name, &state, 0, 0, props);
+                }
+                1 => {}
+                n => errs.push(format!("environment '{name}' is placed {n} times in the layout; it is one world")),
             }
         }
 
@@ -680,6 +730,20 @@ impl Game {
             Some(c) => c.paths().map(str::to_string).collect(),
             None => ["-".to_string()].into(),
         }
+    }
+
+    /// Replaces an environment's own machine and rules with native code. Check it with `conformance`.
+    pub fn set_native_env(&mut self, name: &str, native: Arc<dyn NativeEnv>) -> Result<(), String> {
+        if !self.envs.iter().any(|e| e == name) {
+            return Err(format!("'{name}' is not an environment of this game"));
+        }
+        self.natives.insert(name.to_string(), native);
+        Ok(())
+    }
+
+    /// Whether a kind is drawn (environments are not).
+    pub fn is_hidden(&self, kind: &str) -> bool {
+        self.def.kinds.get(kind).is_some_and(|k| k.hidden)
     }
 
     /// State as observers see it: active ones only.
@@ -791,7 +855,21 @@ impl Game {
         scope.push_constant("p", self.p_map.clone());
         scope.push_constant("tick", world.tick as i64);
         scope.push_constant("count", counts.clone());
+        scope.push_constant("env", self.env_map(world));
         scope
+    }
+
+    /// `env.<name>.<prop>` and `env.<name>.state`: the environments at the start of the tick.
+    fn env_map(&self, world: &World) -> Map {
+        self.envs
+            .iter()
+            .filter_map(|name| {
+                let e = world.of_kind(name).next()?;
+                let mut m: Map = e.props.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
+                m.insert("state".into(), Dynamic::from(sim_state::active_part(&e.state).to_string()));
+                Some((name.as_str().into(), Dynamic::from(m)))
+            })
+            .collect()
     }
 
     /// Per entity: me, near.
@@ -863,6 +941,23 @@ impl Game {
             actor: Some(e.id),
             effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
         };
+
+        // A native environment replaces its own machine and rules with one pure step.
+        if let Some(native) = self.natives.get(&e.kind) {
+            let (props, state) = native.step(world.tick, &self.params, &e.props, &e.state);
+            let mut effects: Vec<Effect> = props
+                .into_iter()
+                .filter(|(k, v)| e.props.get(k) != Some(v))
+                .map(|(prop, v)| Effect::Set { e: e.id, prop, v })
+                .collect();
+            if state != e.state {
+                effects.push(Effect::SetState { e: e.id, state });
+            }
+            if !effects.is_empty() {
+                out.push(Group { source: "env".into(), actor: Some(e.id), effects });
+            }
+            return out;
+        }
 
         // State chart: one group (transitions, picks, enter/exit). Rules see the old state this tick.
         let chart = self.kind_charts.get(&e.kind);
@@ -1306,7 +1401,7 @@ impl Game {
         }
 
         let mut seen = BTreeSet::new();
-        let defs = self.def.rules.iter().chain(&self.def.actions).chain(&self.machine_rules);
+        let defs = self.def.rules.iter().chain(&self.def.actions).chain(&self.machine_rules).chain(&self.def.env_rules);
         for (r, def) in self.rules.iter().zip(defs) {
             let what = if r.is_action { "action" } else { "rule" };
             if !seen.insert(&r.name) {

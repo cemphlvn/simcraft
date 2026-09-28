@@ -206,6 +206,11 @@ impl World {
         (x.clamp(0, self.width - 1), y.clamp(0, self.height - 1))
     }
 
+    /// Entities of a kind, in id order.
+    pub fn of_kind(&self, kind: &str) -> impl Iterator<Item = &Entity> {
+        self.by_kind.get(kind).into_iter().flatten().map(|id| &self.entities[id])
+    }
+
     pub fn count(&self, kind: &str) -> usize {
         self.by_kind.get(kind).map_or(0, BTreeSet::len)
     }

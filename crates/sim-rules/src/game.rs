@@ -27,6 +27,80 @@ pub struct GameDef {
     /// Score expression for each controllable entity; summed per seat.
     #[serde(default)]
     pub score: Option<String>,
+    /// Environments this game uses (`envs/<name>.ron`); merged in at load.
+    #[serde(default)]
+    pub environments: Vec<String>,
+    /// Filled by the merge: the environments' own rules (salted after every other rule).
+    #[serde(skip)]
+    pub env_rules: Vec<RuleDef>,
+    /// Filled by the merge: the environment kinds, in `environments` order.
+    #[serde(skip)]
+    pub env_kinds: Vec<String>,
+}
+
+/// An environment: the world's own state machine, written like a game and shared between games.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename = "Environment", deny_unknown_fields)]
+pub struct EnvDef {
+    pub name: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub props: BTreeMap<String, i64>,
+    #[serde(default)]
+    pub fsm: Option<String>,
+    #[serde(default)]
+    pub fsms: BTreeMap<String, FsmDef>,
+    /// Rules of the environment itself (no `for`).
+    #[serde(default)]
+    pub rules: Vec<RuleDef>,
+}
+
+impl GameDef {
+    /// Merges environments in as ordinary parts: a hidden kind, its machines, params and rules.
+    /// A name clash with the game is an error.
+    pub fn merge_envs(&mut self, envs: &[EnvDef]) -> Result<(), Vec<String>> {
+        let mut errs = Vec::new();
+        for name in self.environments.clone() {
+            let Some(env) = envs.iter().find(|e| e.name == name) else {
+                errs.push(format!("environment '{name}' not found (envs/{name}.ron)"));
+                continue;
+            };
+            if self.kinds.contains_key(&name) {
+                errs.push(format!("environment '{name}': the game already has a kind named '{name}'"));
+                continue;
+            }
+            self.kinds.insert(
+                name.clone(),
+                KindDef {
+                    glyph: ' ',
+                    props: env.props.clone(),
+                    fsm: env.fsm.clone(),
+                    solid: false,
+                    hidden: true,
+                    glyphs: BTreeMap::new(),
+                },
+            );
+            for (k, v) in &env.params {
+                if self.params.insert(k.clone(), *v).is_some() {
+                    errs.push(format!("environment '{name}': param '{k}' is also a game param"));
+                }
+            }
+            for (k, f) in &env.fsms {
+                if self.fsms.insert(k.clone(), f.clone()).is_some() {
+                    errs.push(format!("environment '{name}': machine '{k}' is also a game machine"));
+                }
+            }
+            for r in &env.rules {
+                if r.for_kind.is_some() {
+                    errs.push(format!("environment '{name}': rule '{}' belongs to the environment; drop `for`", r.name));
+                }
+                self.env_rules.push(RuleDef { for_kind: Some(name.clone()), ..r.clone() });
+            }
+            self.env_kinds.push(name);
+        }
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +159,9 @@ pub struct KindDef {
     /// At most one solid per cell; solids cannot pass through each other.
     #[serde(default)]
     pub solid: bool,
+    /// Not drawn (environments).
+    #[serde(default)]
+    pub hidden: bool,
     /// Glyph per state (else `glyph`).
     #[serde(default)]
     pub glyphs: BTreeMap<String, char>,

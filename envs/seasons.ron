@@ -1,0 +1,31 @@
+#![enable(implicit_some)]
+// Seasons: summer, autumn, winter, and how ripe the land is.
+// Any game can use it: `environments: ["seasons"]`, then read `env.seasons.state` and `env.seasons.ripeness`.
+Environment(
+    name: "seasons",
+
+    params: {
+        // Calendar (ticks). A year is summer + autumn + winter.
+        "summer": 240, "autumn": 120, "winter": 120,
+    },
+
+    // Ripeness 0..100: rises from the start of summer to a peak, falls to 0 by the end of autumn, 0 in winter.
+    props: { "ripeness": 0 },
+
+    fsm: "season",
+    fsms: {
+        "season": (
+            initial: "Summer",
+            transitions: [
+                (from: "Summer", to: "Autumn", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer"),
+                (from: "Autumn", to: "Winter", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer + p.autumn"),
+                (from: "Winter", to: "Summer", when: "tick % (p.summer + p.autumn + p.winter) < p.summer"),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "ripening",
+         then: [ Set("ripeness", "triangle(tick % (p.summer + p.autumn + p.winter), p.summer + p.autumn, 100)") ]),
+    ],
+)

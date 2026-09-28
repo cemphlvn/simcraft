@@ -193,7 +193,7 @@ impl Session {
                 rows[(y - y0) as usize][(x - x0) as usize] = c;
             }
         };
-        for e in w.entities().values() {
+        for e in w.entities().values().filter(|e| !self.game().is_hidden(&e.kind)) {
             paint(e.x, e.y, self.game().glyph_of(e));
         }
         if let Some(e) = me.and_then(|id| w.get(id)) {
