@@ -46,6 +46,10 @@ pub struct Ui {
     pub tween: std::cell::RefCell<crate::feel::Tween>,
     pub camera: std::cell::RefCell<crate::feel::Spring>,
     pub dt: f32,
+    /// Manual camera offset (art pixels), from the `Pan` action.
+    pub pan: i64,
+    /// The help line, generated from the input map.
+    pub help: String,
 }
 
 impl Ui {
@@ -72,6 +76,8 @@ impl Ui {
             tween: Default::default(),
             camera: Default::default(),
             dt: 1.0 / 60.0,
+            pan: 0,
+            help: String::new(),
         }
     }
 
@@ -378,7 +384,8 @@ impl Component for Events {
 pub struct Help;
 impl Component for Help {
     fn draw(&self, ctx: &mut Ctx, _: &ron::Value, _: Option<usize>, r: Rect) -> Result<(), String> {
-        ctx.text(r, 1, 0, "space pause · +/- speed · s step · click/p perspective · ←→↑↓ orbit / level · [ ] cut · tab select · q quit", "dim");
+        let help = if ctx.ui.help.is_empty() { "q quit" } else { ctx.ui.help.as_str() };
+        ctx.text(r, 1, 0, help, "dim");
         Ok(())
     }
 }

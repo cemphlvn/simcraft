@@ -1,0 +1,40 @@
+// The viewer's built-in controls. A game can ship its own games/<name>/input.ron (same format).
+// Schemes: right_hand = mouse in the right hand, keys on the left of the keyboard; left_hand = the mirror.
+Input(
+    scheme: "right_hand",
+    schemes: {
+        "right_hand": {
+            "pan":         Dpad(up: "w", down: "s", left: "a", right: "d"),
+            "orbit":       Dpad(up: "up", down: "down", left: "left", right: "right"),
+            "pause":       Key("space"),
+            "step":        Key("e"),
+            "select":      Key("tab"),
+            "faster":      Key("plus"),
+            "slower":      Key("minus"),
+            "perspective": Any([Key("p"), Mouse(left)]),
+            "cut_in":      Key("]"),
+            "cut_out":     Key("["),
+            "quit":        Any([Key("q"), Key("esc")]),
+        },
+        "left_hand": {
+            "pan":         Dpad(up: "i", down: "k", left: "j", right: "l"),
+            "orbit":       Dpad(up: "up", down: "down", left: "left", right: "right"),
+            "pause":       Key("enter"),
+            "step":        Key("o"),
+            "select":      Key("u"),
+            "faster":      Key("plus"),
+            "slower":      Key("minus"),
+            "perspective": Any([Key("p"), Mouse(left)]),
+            "cut_in":      Key("]"),
+            "cut_out":     Key("["),
+            "quit":        Any([Key("q"), Key("esc")]),
+        },
+    },
+    contexts: [
+        (name: "watch", actions: {
+            "pan": View(Pan), "orbit": View(Orbit), "pause": View(Pause), "step": View(Step),
+            "select": View(SelectNext), "faster": View(Faster), "slower": View(Slower),
+            "perspective": View(Perspective), "cut_in": View(CutIn), "cut_out": View(CutOut), "quit": View(Quit),
+        }),
+    ],
+)

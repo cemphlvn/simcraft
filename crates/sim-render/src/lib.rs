@@ -7,6 +7,7 @@ pub mod diorama;
 pub mod display;
 pub mod feel;
 pub mod image;
+pub mod input;
 pub mod layered;
 pub mod layout;
 pub mod pixel;

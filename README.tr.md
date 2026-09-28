@@ -167,6 +167,10 @@ yerlerde yarım bloklar): `cargo run --release -p sim-render -- games/colony3d -
 Tanımladığın ve tıklayarak geçtiğin perspektif durumlarıyla katmanlı 2.5B:
 `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
 
+Zindanı kendin oyna: `cargo run --release -p sim-render -- games/mercy_dungeon` (WASD kahramanı yürütür, F dövüşür,
+R bağışlar; IJKL için `--scheme left_hand`). Kontroller de veridir (`games/<ad>/input.ron`): iki el için şemalar ve oyunu
+takip eden bağlamlar; aynı tuşlar, neyin seçili olduğuna göre kahramanı yürütür ya da görüntüyü kaydırır.
+
 Arayüz de veridir: `games/colony3d/view.ron` bileşenleri (2B, 2.5B, 3B ya da herhangi bir kesitte dünya görünümleri,
 inceleyici, eğilimler) bir tema ve bir asset paketiyle (`assets/ants.ron`) yerleştirir.
 

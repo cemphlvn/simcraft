@@ -188,3 +188,42 @@ fn generated_art_loads_from_the_landscape_pack() {
     assert!(!text.contains("Diorama:"), "no component error: {text}");
     assert_eq!(ui.images.borrow().len(), 1);
 }
+
+// --- input ---
+
+#[test]
+fn the_dungeon_controls_walk_the_hero_through_the_games_own_action() {
+    use sim_render::input::{Event, InputMap, Target, arg_value};
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../games/mercy_dungeon");
+    let map = InputMap::parse(&std::fs::read_to_string(format!("{dir}/input.ron")).unwrap()).expect("parses");
+    map.check().expect("consistent");
+    let (world, game) = Game::load(std::path::Path::new(dir), None).expect("loads");
+    let mut engine = Engine::<Loaded, _>::new(world, game).validate().expect("valid").start();
+    let hero = engine.world().of_kind("hero").next().map(|e| (e.id, e.x, e.y)).expect("a hero");
+
+    // Contexts see the game: with the hero selected, "play" is active and D walks it right.
+    fn when(engine: &Engine<sim_core::Running, Game>, selected: u64, expr: &str) -> bool {
+        let (w, g) = (engine.world(), engine.rules());
+        let mut sel = rhai::Map::new();
+        let kind = w.get(selected).map_or(String::new(), |e| e.kind.clone());
+        sel.insert("controllable".into(), g.cfg.agent.controllable.contains(&kind).into());
+        let mut extra = rhai::Map::new();
+        extra.insert("selected".into(), sel.into());
+        extra.insert("paused".into(), false.into());
+        g.eval_world(w, expr, extra).unwrap().as_bool().unwrap()
+    }
+    let fired = map.resolve(&Event::Key("d".into()), |c| c.when.as_deref().is_none_or(|w| when(&engine, hero.0, w))).unwrap();
+    assert_eq!(fired.context, "play");
+    let Target::Game { action, args } = fired.target else { panic!("a game action") };
+    let args = args.iter().map(|(k, v)| (k.clone(), arg_value(v, fired.value).unwrap())).collect();
+    let group = engine.rules().act(engine.world(), None, hero.0, &action, &args).expect("the game accepts the move");
+    engine.queue(group);
+    engine.tick();
+    let after = engine.world().get(hero.0).map(|e| (e.x, e.y)).unwrap();
+    assert_eq!(after, (hero.1 + 1, hero.2), "the hero walked one cell to the right");
+
+    // Selecting something the player does not control, the same key only pans the view.
+    let ghost = engine.world().of_kind("ghost").next().unwrap().id;
+    let watch = map.resolve(&Event::Key("d".into()), |c| c.when.as_deref().is_none_or(|w| when(&engine, ghost, w))).unwrap();
+    assert_eq!(watch.context, "watch");
+}

@@ -431,6 +431,51 @@ Feel is developed **eval-driven**, like rules: `simcraft-feel <game> --view <vie
 fixed frame rate with the viewer's own code and measures camera jumps, jerk and lag, sprite steps and stutter;
 `--set` tries a setting, `--save` records a step (`games/<name>/feel-evals/`, log in `games/<name>/FEEL.md`).
 
+## Input: actions, schemes and contexts (`input.ron`)
+
+What the player presses is an abstraction, like everything else: devices produce **actions**, and actions go to
+the view (camera, time, selection) or to the game (a declared action, through the same checks as any agent).
+Modelled on Unreal's Enhanced Input and Unity's Input System, but as data, and with contexts bound to the game's
+state.
+
+```ron
+Input(
+    // Named control schemes; the player picks one (`--scheme left_hand`), or a view sets its default.
+    scheme: "right_hand",
+    schemes: {
+        "right_hand": {
+            "pan":     Dpad(up: "w", down: "s", left: "a", right: "d"),   // four keys -> one 2D direction
+            "pause":   Key("space"),
+            "select":  Key("tab"),
+            "act":     Mouse(left),
+        },
+        "left_hand": { "pan": Dpad(up: "up", down: "down", left: "left", right: "right"), ... },
+    },
+    // Contexts, highest priority first; the first active one that binds an action wins.
+    contexts: [
+        // When the selected entity can be controlled, the pad walks it (a game action).
+        (name: "drive", when: "selected.controllable", actions: {
+            "pan": Game(do: "move", args: { "dx": "x", "dy": "y" }),
+        }),
+        (name: "watch", actions: {
+            "pan": View(Pan), "pause": View(Pause), "select": View(SelectNext),
+        }),
+    ],
+)
+```
+
+- **Bindings:** `Key(name)` (`"a"`..`"z"`, `"0"`..`"9"`, `"space"`, `"tab"`, `"enter"`, `"esc"`, arrows `"up"`...,
+  `"plus"`, `"minus"`, `"["`, `"]"`), `Dpad(up, down, left, right)` (a 2D action), `Mouse(left | right | middle)`,
+  `Scroll`. Every backend (terminal, GPU window, browser) translates its events into these names.
+- **Targets:** `View(Pause | Faster | Slower | Step | SelectNext | Pan | Orbit | Perspective | CutIn | CutOut | Quit)`
+  or `Game(do, args)`: a declared action of the selected entity; `args` map to the input (`"x"`, `"y"` for a 2D
+  action, or a number). Refusals are shown, never hidden.
+- **Contexts** are active when `when` holds: an expression over the view (`paused`, `selected.kind`,
+  `selected.controllable`, `selected.state`) and the world (as scenarios see it: `count`, `env`, `tick`...). The first
+  active context (in order) that binds an action handles it; unbound actions fall through to the next.
+- A game ships `games/<name>/input.ron`; without one the viewer's defaults apply (the keys it always had).
+  Schemes and bindings are data, so rebinding is editing (or later a settings screen writing) that file.
+
 ## Platforms and builds
 
 One game, every platform: the rule file and the core never change; a thin shell per platform does
@@ -482,6 +527,7 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Environments (`envs/`, `env.<name>`, native implementations with conformance), maths helpers
 - [x] Test suite (`test/`, `simtest`): scenarios, insta snapshots, proptest properties
 - [x] Game feel: tick interpolation, spring camera, walk bob; `simcraft-feel` evals
+- [x] Input: actions, schemes (right/left hand, mouse), contexts bound to game state (`input.ron`)
 - [ ] Capabilities: pick renderer and quality per machine
 - [ ] Platforms: core on wasm32, `sim-gpu` (wgpu), `simcraft-build` (web, macOS, Linux, Windows, Steam; iOS and Android next)
 - [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)

@@ -1,0 +1,32 @@
+// Mercy dungeon: you are the hero. When the hero is selected, the pad walks it and two keys fight or spare
+// (the game's own declared actions, checked like any player's). Everything else is the viewer's.
+Input(
+    scheme: "right_hand",
+    schemes: {
+        "right_hand": {
+            "walk":  Dpad(up: "w", down: "s", left: "a", right: "d"),
+            "fight": Key("f"),
+            "spare": Key("r"),
+            "pause": Key("space"), "select": Key("tab"), "faster": Key("plus"), "slower": Key("minus"),
+            "quit":  Any([Key("q"), Key("esc")]),
+        },
+        "left_hand": {
+            "walk":  Dpad(up: "i", down: "k", left: "j", right: "l"),
+            "fight": Key("h"),
+            "spare": Key("y"),
+            "pause": Key("enter"), "select": Key("u"), "faster": Key("plus"), "slower": Key("minus"),
+            "quit":  Any([Key("q"), Key("esc")]),
+        },
+    },
+    contexts: [
+        (name: "play", when: "selected.controllable", actions: {
+            "walk":  Game(do: "move", args: { "dx": "x", "dy": "y" }),
+            "fight": Game(do: "fight"),
+            "spare": Game(do: "spare"),
+        }),
+        (name: "watch", actions: {
+            "walk": View(Pan), "pause": View(Pause), "select": View(SelectNext),
+            "faster": View(Faster), "slower": View(Slower), "quit": View(Quit),
+        }),
+    ],
+)

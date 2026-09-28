@@ -136,7 +136,7 @@ impl Component for Diorama {
         // The camera follows the selected entity's drawn (interpolated) position, through a spring.
         let target = ctx.ui.selected.and_then(|id| list.sprites.iter().find(|d| d.selected).map(|d| d.x + p.tile as f32 / 2.0).or_else(|| scene.world.get(id).map(|e| (e.x * p.tile + p.tile / 2) as f32)));
         let w = art_w.max(8) as i64;
-        let goal = display::camera(list.world_px, target.map_or(list.world_px / 2, |t| t.round() as i64), w) as f32;
+        let goal = display::camera(list.world_px, target.map_or(list.world_px / 2, |t| t.round() as i64) + ctx.ui.pan, w) as f32;
         let cam = ctx.ui.camera.borrow_mut().update(goal, ctx.ui.dt, feel.camera).round() as i64;
         let (strips, section) = (&strips.as_ref().expect("cooked").1, &section.as_ref().expect("cooked").1);
         let art = display::rasterize(scene, &list, strips, section, w as usize, cam, ctx.ui.frame);

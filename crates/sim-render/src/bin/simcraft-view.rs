@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use sim_core::{Engine, Loaded, Running, World};
 use sim_render::projection::Projection;
+use sim_render::input::{self, InputMap, Target, ViewAction};
 use sim_render::{Assets, Canvas, Registry, Renderer, Scene, TerminalGuard, Theme, Ui, View};
 use sim_rules::Game;
 
@@ -24,6 +25,7 @@ struct App {
     assets: Assets,
     ui: Ui,
     series: Vec<String>,
+    input: InputMap,
 }
 
 /// `name.ron` in the game's folder, or in `<ancestor>/<shared>/` (e.g. `assets/`, `themes/`).
@@ -50,7 +52,7 @@ fn view_series(view: &View) -> Vec<String> {
     out
 }
 
-fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, String> {
+fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>, scheme: Option<&str>) -> Result<App, String> {
     let config = match seed {
         Some(s) => {
             let panel = std::fs::read_to_string(dir.join("engine.toml")).map_err(|e| e.to_string())?;
@@ -97,7 +99,17 @@ fn load(dir: &Path, seed: Option<u64>, view_file: Option<&Path>) -> Result<App, 
     let mut ui = Ui::new(worlds);
     ui.feel = view.feel.clone();
     ui.selected = selected;
-    Ok(App { engine, view, registry, theme, assets, ui, series })
+    // Controls: the game's input.ron, else the viewer's built-in ones; a scheme can be chosen at start.
+    let mut input = match std::fs::read_to_string(dir.join("input.ron")) {
+        Ok(src) => InputMap::parse(&src).map_err(|e| format!("input.ron: {e}"))?,
+        Err(_) => InputMap::builtin(),
+    };
+    if let Some(s) = scheme {
+        input.scheme = s.to_string();
+    }
+    input.check().map_err(|e| e.join("\n"))?;
+    ui.help = input.help();
+    Ok(App { engine, view, registry, theme, assets, ui, series, input })
 }
 
 /// Props of kinds that exist once (the nest, a market...): worth watching.
@@ -116,9 +128,11 @@ fn pick(w: &World, g: &Game, after: Option<u64>) -> Option<u64> {
     let interesting = |kind: &str| {
         !g.is_hidden(kind) && g.def.kinds.get(kind).is_some_and(|k| k.fsm.is_some()) && w.count(kind) <= 200
     };
-    // The most numerous individual kind first (ants before bushes), then by id.
-    let mut kinds: Vec<&str> = g.def.kinds.keys().map(String::as_str).filter(|k| interesting(k)).collect();
-    kinds.sort_by_key(|k| std::cmp::Reverse(w.count(k)));
+    // What the player controls first (the hero), then the most numerous individual kind (ants before bushes).
+    let controllable = |k: &str| g.cfg.agent.controllable.iter().any(|c| c == k);
+    let mut kinds: Vec<&str> =
+        g.def.kinds.keys().map(String::as_str).filter(|k| interesting(k) || (controllable(k) && !g.is_hidden(k))).collect();
+    kinds.sort_by_key(|k| (!controllable(k), std::cmp::Reverse(w.count(k))));
     let ids: Vec<u64> = kinds.iter().flat_map(|k| w.of_kind(k).map(|e| e.id)).collect();
     match after {
         Some(a) => ids.iter().position(|id| *id == a).and_then(|i| ids.get(i + 1)).or(ids.first()).copied(),
@@ -176,38 +190,109 @@ impl App {
         self.view.draw(&self.registry, &self.theme, &scene, &self.ui, canvas);
     }
 
-    /// A click on a component: a 2.5D world goes to its perspective's `click` state.
-    fn click(&mut self, x: u16, y: u16) {
-        if let Some(Projection::Layers(l)) = self.ui.hit(x, y).and_then(|i| self.ui.worlds.get_mut(i)) {
-            l.click();
-        }
+    /// A mouse click, as an input event.
+    fn click(&mut self, x: u16, y: u16) -> bool {
+        self.handle(&input::Event::Mouse(input::MouseButton::Left, x, y))
     }
 
+    /// A key, as an input event (names shared by every backend).
     fn key(&mut self, code: KeyCode) -> bool {
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => return false,
-            KeyCode::Char(' ') => self.ui.paused = !self.ui.paused,
-            KeyCode::Char('+') | KeyCode::Char('=') => self.ui.speed = (self.ui.speed * 2.0).min(2000.0),
-            KeyCode::Char('-') => self.ui.speed = (self.ui.speed / 2.0).max(0.5),
-            KeyCode::Char('s') => self.step(1),
-            KeyCode::Tab => self.ui.selected = pick(self.engine.world(), self.engine.rules(), self.ui.selected),
-            KeyCode::Char('p') => self.ui.worlds.iter_mut().for_each(|p| {
-                if let Projection::Layers(l) = p {
-                    l.click();
+        let name = match code {
+            KeyCode::Char(' ') => "space".to_string(),
+            KeyCode::Char('+') | KeyCode::Char('=') => "plus".to_string(),
+            KeyCode::Char('-') => "minus".to_string(),
+            KeyCode::Char(c) => c.to_lowercase().to_string(),
+            KeyCode::Tab => "tab".into(),
+            KeyCode::Enter => "enter".into(),
+            KeyCode::Esc => "esc".into(),
+            KeyCode::Up => "up".into(),
+            KeyCode::Down => "down".into(),
+            KeyCode::Left => "left".into(),
+            KeyCode::Right => "right".into(),
+            KeyCode::Backspace => "backspace".into(),
+            _ => return true,
+        };
+        self.handle(&input::Event::Key(name))
+    }
+
+    /// Is a context's `when` true now? It sees the view (`paused`, `selected.*`) and the world.
+    fn active(&self, when: Option<&str>) -> bool {
+        let Some(expr) = when else { return true };
+        let (w, g) = (self.engine.world(), self.engine.rules());
+        let mut sel = rhai::Map::new();
+        let e = self.ui.selected.and_then(|id| w.get(id));
+        sel.insert("id".into(), (e.map_or(0, |e| e.id) as i64).into());
+        sel.insert("kind".into(), e.map_or(String::new(), |e| e.kind.clone()).into());
+        sel.insert("state".into(), e.map_or(String::new(), |e| g.state_label(e).to_string()).into());
+        sel.insert("controllable".into(), e.is_some_and(|e| g.cfg.agent.controllable.contains(&e.kind)).into());
+        let mut extra = rhai::Map::new();
+        extra.insert("paused".into(), self.ui.paused.into());
+        extra.insert("selected".into(), sel.into());
+        g.eval_world(w, expr, extra).ok().and_then(|v| v.as_bool().ok()).unwrap_or(false)
+    }
+
+    /// Resolves an input event through the map and does it. False = quit.
+    fn handle(&mut self, e: &input::Event) -> bool {
+        let contexts = self.input.contexts.clone();
+        let active: Vec<bool> = contexts.iter().map(|c| self.active(c.when.as_deref())).collect();
+        let mut i = 0;
+        let Some(fired) = self.input.resolve(e, |_| {
+            i += 1;
+            active[i - 1]
+        }) else {
+            return true;
+        };
+        match fired.target {
+            Target::View(a) => return self.view_action(a, fired.value, fired.at),
+            Target::Game { action, args } => {
+                let Some(id) = self.ui.selected else { return true };
+                let args = args.iter().filter_map(|(k, v)| input::arg_value(v, fired.value).map(|n| (k.clone(), n))).collect();
+                let (w, g) = (self.engine.world(), self.engine.rules());
+                // With seats, act as the seat that owns the entity.
+                let seat = w.get(id).and_then(|e| e.props.get("owner")).and_then(|o| g.cfg.agent.seats.iter().find(|(_, n)| *n == o).map(|(s, _)| s.clone()));
+                match g.act(w, seat.as_deref(), id, &action, &args) {
+                    Ok(group) => self.engine.queue(group),
+                    Err(why) => self.ui.events.push_back(format!("tick {:>5}  {action}: {why}", self.engine.world().tick)),
                 }
-            }),
-            _ => {
-                let depth = self.engine.world().depth;
+            }
+        }
+        true
+    }
+
+    fn view_action(&mut self, a: ViewAction, (dx, dy): (i64, i64), at: Option<(u16, u16)>) -> bool {
+        let depth = self.engine.world().depth;
+        match a {
+            ViewAction::Quit => return false,
+            ViewAction::Pause => self.ui.paused = !self.ui.paused,
+            ViewAction::Faster => self.ui.speed = (self.ui.speed * 2.0).min(2000.0),
+            ViewAction::Slower => self.ui.speed = (self.ui.speed / 2.0).max(0.5),
+            ViewAction::Step => self.step(1),
+            ViewAction::SelectNext => {
+                self.ui.selected = pick(self.engine.world(), self.engine.rules(), self.ui.selected);
+                self.ui.pan = 0;
+            }
+            ViewAction::Pan => self.ui.pan += dx * 8,
+            ViewAction::Perspective => {
+                // A click switches the world under the mouse; a key switches every layered world.
+                let target = at.and_then(|(x, y)| self.ui.hit(x, y));
+                for (i, p) in self.ui.worlds.iter_mut().enumerate() {
+                    if let Projection::Layers(l) = p
+                        && target.is_none_or(|t| t == i)
+                    {
+                        l.click();
+                    }
+                }
+            }
+            ViewAction::Orbit | ViewAction::CutIn | ViewAction::CutOut => {
                 for p in self.ui.worlds.iter_mut() {
-                    match (p, code) {
-                        (Projection::Dim3(cam), KeyCode::Left) => cam.yaw -= 10.0,
-                        (Projection::Dim3(cam), KeyCode::Right) => cam.yaw += 10.0,
-                        (Projection::Dim3(cam), KeyCode::Up) => cam.pitch = (cam.pitch + 5.0).min(89.0),
-                        (Projection::Dim3(cam), KeyCode::Down) => cam.pitch = (cam.pitch - 5.0).max(-10.0),
-                        (Projection::Dim3(cam), KeyCode::Char(']')) => cam.cut = Some(cam.cut.map_or(0, |c| c + 1)),
-                        (Projection::Dim3(cam), KeyCode::Char('[')) => cam.cut = cam.cut.and_then(|c| (c > 0).then(|| c - 1)),
-                        (Projection::Dim2 { level, .. }, KeyCode::Down) => *level = (*level + 1).min(depth - 1),
-                        (Projection::Dim2 { level, .. }, KeyCode::Up) => *level = (*level - 1).max(0),
+                    match (p, a) {
+                        (Projection::Dim3(cam), ViewAction::Orbit) => {
+                            cam.yaw += dx as f32 * 10.0;
+                            cam.pitch = (cam.pitch - dy as f32 * 5.0).clamp(-10.0, 89.0);
+                        }
+                        (Projection::Dim3(cam), ViewAction::CutIn) => cam.cut = Some(cam.cut.map_or(0, |c| c + 1)),
+                        (Projection::Dim3(cam), ViewAction::CutOut) => cam.cut = cam.cut.and_then(|c| (c > 0).then(|| c - 1)),
+                        (Projection::Dim2 { level, .. }, ViewAction::Orbit) => *level = (*level + dy).clamp(0, depth - 1),
                         _ => {}
                     }
                 }
@@ -224,6 +309,7 @@ fn main() {
     let mut png_out: Option<PathBuf> = None;
     let mut perspective = 0usize;
     let mut view_file: Option<PathBuf> = None;
+    let mut scheme: Option<String> = None;
     let (mut dir, mut seed, mut speed, mut fps, mut dump, mut size) = (PathBuf::from("games/colony"), None, 10.0f32, 60.0f32, None, (120u16, 40u16));
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -235,6 +321,7 @@ fn main() {
             "--blocks" => blocks = true,
             "--png" => png_out = args.next().map(PathBuf::from),
             "--view" => view_file = args.next().map(PathBuf::from),
+            "--scheme" => scheme = args.next(),
             "--perspective" => perspective = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--size" => {
                 if let Some((w, h)) = args.next().and_then(|s| s.split_once('x').map(|(w, h)| (w.to_string(), h.to_string()))) {
@@ -244,7 +331,7 @@ fn main() {
             _ => dir = PathBuf::from(a),
         }
     }
-    let mut app = match load(&dir, seed, view_file.as_deref()) {
+    let mut app = match load(&dir, seed, view_file.as_deref(), scheme.as_deref()) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}");
@@ -364,7 +451,11 @@ fn run(app: &mut App, fps: f32) -> io::Result<()> {
                         return Ok(());
                     }
                 }
-                Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => app.click(m.column, m.row),
+                Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    if !app.click(m.column, m.row) {
+                        return Ok(());
+                    }
+                }
                 Event::Resize(w, h) => {
                     canvas = Canvas::new(w, h);
                     measure(app);

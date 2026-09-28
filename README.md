@@ -167,6 +167,10 @@ A pixel-art ant farm, with parallax hills and seasons (true pixels in Ghostty, k
 Layered 2.5D, with perspective states you define and switch by clicking:
 `cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
 
+Play the dungeon yourself: `cargo run --release -p sim-render -- games/mercy_dungeon` (WASD walks the hero, F fights,
+R spares; `--scheme left_hand` for IJKL). Controls are data too (`games/<name>/input.ron`): schemes for either hand,
+and contexts that follow the game, so the same keys walk the hero or pan the view depending on what is selected.
+
 The interface is data too: `games/colony3d/view.ron` lays out components (world views in 2D, 2.5D, 3D or any
 cross-section, inspector, trends) with a theme and an asset pack (`assets/ants.ron`).
 
