@@ -50,7 +50,8 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 | `sim-ffi` | `cdylib` + `staticlib`, C header; the agent protocol behind `extern "C"` | No |
-| `sim-gpu` | GPU renderer (`wgpu` + `winit`): textured quads, backdrops and atlas uploaded once; `simcraft-play`; web via wasm | No |
+| `sim-gpu` | HD renderer (`wgpu` 29 + `winit` 0.30): a game's side-view `stage.ron` (2.5D quads) or first-person `track.ron` (3D: perspective camera, depth, fog), composed without a GPU (`stage`, `track`, tested) and drawn by `gpu`; camera effects driven by game events (`fx`); `simcraft-play` (window, `--shot`, `--record`, `--bench`), `simcraft-import` | No |
+| `sim-kernel` (`kernel/`) | 32-bit integer tensor machine that runs ONNX graphs (brains, rules as graphs); `Graph` builds models in code; `genome`/`mutate` for learning | No |
 | `sim-render` | Terminal renderer (cell buffer, diff, frame loop), primitives, 3D voxel view, `view.ron`; `simcraft-view` | No |
 
 ## Tick loop
@@ -86,6 +87,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 |---|---|
 | Iteration order | `BTreeMap`, id order |
 | Randomness | No shared RNG: `rand(seed, tick, entity, salt)` via splitmix64. Evaluation order does not affect results. Rhai `rand(n)` adds a per-evaluation call index |
+| Salts | A top-level rule's salt is its index + 1 (append new rules at the end). Actions, rules written in states and environment rules are salted by **identity** (name, machine, state path): adding a rule or an action never changes the dice of the others |
 | Arithmetic | Rhai `no_float` + `only_i64`; props are `i64` |
 | Script side effects | `me`, `p`, `near` etc. are constants. Scripts only return effect maps; `print` is disabled |
 | Verification | Test: same panel → identical hash on every tick for 300 ticks |
@@ -103,16 +105,17 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 | `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | One step (8 directions) |
 | `Climb(kind, prop)` | One step up a gradient: to the neighbouring cell whose `kind` entity has the highest `prop`, if higher than here. Ties go to the first in a per-entity, per-tick shuffled order. Nothing higher → no move (a later rule may move instead) |
 | `Goto(state)` | Changes the entity's FSM state (validated against the kind's states) |
-| `Move(dx, dy)` | One step; `dx`, `dy` are expressions (e.g. `arg.dx`) |
+| `Move(dx, dy)` | One step; `dx`, `dy` are expressions (e.g. `arg.dx`). Asked for more than one cell it still takes one, and says so: a `clamped: …` event names the rule (`simcraft-check` reports it) |
+| `MoveBy(dx, dy)` | Exactly `dx`, `dy` cells in one tick (a dash, a leap) if the destination is open; nothing between is checked. The entity's one move this tick |
 | `On(Me \| It \| Nearest(kind), [...])` | Applies the nested actions to that entity instead of the owner |
 | `Need(prop, min)` | Guard: `prop >= min` on the subject. Checked at request/eval time and again at apply time against the live state; if it fails the whole group is dropped (`short`). Prevents double spending under simultaneous moves |
 
 **B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
 
-**What expressions can see:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev distance, 9999 if none), `count.<kind>`, `tick`, `roll` (0..99, deterministic per rule and entity).
+**What expressions can see:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev distance, 9999 if none), `count.<kind>`, `tick`, `tick_rate` (ticks per second of game time, from `engine.toml`), `roll` (0..99, deterministic per rule and entity).
 
-**World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `nearest_prop(kind, prop, r, default)` reads a prop of the nearest such entity within `r` (else `default`: what you feel of the nest you sit in); `rand(n)` → 0..n-1, deterministic.
+**World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `nearest_prop(kind, prop, r, default)` reads a prop of the nearest such entity within `r` (else `default`: what you feel of the nest you sit in); `rand(n)` → 0..n-1, deterministic; `pace(n)` / `pace(n, secs)` → true on `n` evenly spaced ticks out of every second (or `secs` seconds) of game time, each entity with its own phase. Write speeds with `pace`, not `rand(100) < speed`: the cadence stays even and the speed per second stays the same at any `tick_rate`. `tick_rate` and `pace` are an agent's own clock, so kinds with `senses` may use them without a sense.
 
 `near.<kind>` is computed only for kinds that some expression mentions as `near.<kind>`.
 
@@ -188,6 +191,39 @@ By default an agent does **not** see external reality. It senses it, through fun
 - `perception: Direct` in `game.ron` turns this off (every expression sees everything). The first five games use it;
   new games get senses.
 
+## Brains (`brain:`): agents that learn
+
+A kind can think instead of (or besides) following rules: a small integer network, run by `sim-kernel`, picks one
+of its `outputs` each tick. Every entity has its own weights (its **genome**); young inherit it with mutation. What
+is selected is whatever the game rewards (life, young): natural selection, deterministic and replayable.
+
+```ron
+"ant": (fsm: "ant",
+        senses: { "food_x": r#"toward_x("bush", "Ripe")"#, "home_x": r#"toward_x("nest")"#, ... },
+        brain: (inputs: { "food_x": "sense.food_x * 100", "load": "me.load * 100", "noise": "rand(201) - 100" },
+                hidden: [8],                                 // hidden layer sizes (default [8])
+                outputs: ["north", "east", "south", "west"],
+                sense: "choice",                             // default "choice"
+                mutation: 40, step: 12,                      // per mille of genes a newborn changes, by ±1..step
+                inherit: true)),                             // false = young get fresh random weights (the control)
+...
+(name: "north", when: r#"sense.choice == "north""#, then: [ Move("0", "-1") ]),
+```
+
+- **Inputs** are expressions in the kind's own view (`me`, `p`, `sense`, spatial queries, `rand`), in name order,
+  clamped to -127..127; a bias input (64) is added. The network is int8 weights, int32 sums, `Relu`, ÷128, clipped
+  back to int8, then `ArgMax` over the outputs (ties → the first).
+- **When:** after the kind's senses, at the start of the tick. The chosen output's name is `sense.<sense>` for the
+  kind's rules and state machine this tick. A brain needs `perception: Senses`.
+- **Genomes:** random (-32..32) at the start, per entity, from the seed. `Spawn(kind)` by an entity of the same kind
+  → the parent's genome mutated (`world.rand` of the parent and rule); by anything else → a fresh one. The genome is
+  part of the entity (`genome`, one byte per weight): hashed, saved in snapshots, restored. Worlds without brains
+  hash exactly as before.
+- **Direction queries** (any kind): `toward_x(kind)`, `toward_y(kind)`, `toward_x(kind, state)`, `toward_y(kind, state)`
+  → -1, 0 or 1: which way the nearest such entity lies (0 if none).
+- Cost: forage's brain (6 inputs, 8 hidden, 4 outputs) is 88 bytes of genome per ant.
+- Evidence: `games/forage` (EVALS.md): the same world with `inherit: false` forages at <1 % of the rate.
+
 ## 3D worlds and fields (physical environments)
 
 A world has `width × height × depth` voxels; 2D games have depth 1 and behave (and hash) exactly as before.
@@ -249,7 +285,11 @@ A framework for game interfaces, in this workspace, with its own terminal render
   pixels through the kitty graphics protocol (Ghostty, kitty, WezTerm; zlib-compressed, re-sent only when the
   picture changed, integer-upscaled so pixels stay crisp) or as half-block characters anywhere else (`--blocks`).
   - Sprites and tiles are data in asset packs: `palette: {'k': (r, g, b)}`, `sprites: {"ant_walk": (fps: 6,
-    frames: [[".kk.", ...], ...])}`; a kind's look names a sprite per state (`sprite: "ant_carry"`).
+    frames: [[".kk.", ...], ...])}`, or frames that are the pack's images (`"ant_walk": (fps: 8, images:
+    ["ant_walk_0", "ant_walk_1"])`, e.g. generated and pixelated; alpha 0 is transparent); a kind's look names a
+    sprite per state (`sprite: "ant_carry"`). Every sprite is baked to RGBA frames once when packs are merged
+    (later packs replace sprites of the same name), so drawing never looks up a palette; a sprite naming a missing
+    image stops the view at load.
   - Parallax backdrop layers are data in the view: `(kind: "hills" | "trees" | "clouds", color, height, detail,
     seed, speed, haze)` or `(kind: "image", image: "hills", height, speed, haze)`; each scrolls at `speed` % of the
     camera (far layers move slower), fades into the horizon and follows the season. `soil: "soil"` textures the ground.
@@ -299,6 +339,49 @@ Environment(
 **Maths helpers** (integers, deterministic): `clamp(x, lo, hi)`; `pct(x, percent)` = `x * percent / 100`;
 `ramp(x, len, peak)` rises from 0 at 0 to `peak` at `len` (clamped); `triangle(x, len, peak)` is 0 at 0, `peak`
 at `len / 2`, 0 at `len` (and 0 outside).
+
+## Checking: bugs that show themselves
+
+- **Format** (`rustfmt.toml`: the house style, width 140). `cargo fmt --all` formats everything; the edit hook
+  formats each Rust file Claude writes, `ruff` each Python file.
+- **`simcraft-check <game>`** (a fraction of a second): loads the game with every panel it has (`engine.toml`,
+  `play.toml`), checks its views (every image; every animation channel; every button names a declared action with
+  its args, for a kind the game has; piles, meters, bars and the switch read props that exist), then plays 300 ticks
+  pressing the views' buttons in turn (or the declared actions), and reports `error` (broken) and `warn` (runs, but
+  probably not as meant): error events, `clamped` moves, on-screen buttons the game never takes, a game that ends at
+  once. Exit code 1 on errors.
+- **Claude hook** (`.claude/settings.json`, `.claude/hooks/check.sh`): after every edit, the file is formatted and,
+  for a game's files (or a shared asset pack), `simcraft-check` runs; its findings go straight back to Claude, so a
+  broken edit is fixed in the same loop instead of being searched for later.
+- Principle: a mistake the engine can notice, it reports where it happened (the rule, the tick, the fix), instead of
+  quietly doing something else. New engine features add their check to `simcraft-check`.
+- **`tools/check.sh`** (`--quick` skips evals): the whole gate, cheapest first, stops at the first failure: fmt check,
+  clippy with warnings as errors, ruff (`ruff.toml`: width 140, bugbear), `cargo test`, `simcraft-check` on every
+  game, `eval --check` on every game with `evals/`.
+
+## Efficiency that shows itself
+
+Time is noise; work is not. The rules count what they do, exactly (`Game::work`, `rule_work`): the same numbers on
+every machine and at any core count, so they are tested like any other output.
+
+- **Counters:** `evals` (Rhai evaluations: conditions, values, senses, scripts), `queries` (spatial and field
+  queries), `maps` (entity maps built for `me` / `it`); per rule, `checks` (entities it was tried on) and `fires`
+  (groups it produced).
+- **Work profiles** (`test/tests/all/work.rs`, `test/snapshots/work__<game>.snap`): every game's counts per tick and
+  per entity-tick over 60 ticks, and its hottest rules. A change that makes a game do more work is a snapshot diff to
+  review; an optimization is one too, with its size. `work_counts_do_not_depend_on_the_core_count` keeps them exact.
+- **`simcraft-check` cost notes:** the same counts for 300 played ticks, the three hottest rules, rules checked but
+  never fired; over budget (25 evals or 10 queries per entity-tick) it warns.
+- **Clippy perf lints** (`[workspace.lints.clippy]`, every crate opts in): needless clones and passes by value,
+  eager `ok_or`/`unwrap_or` calls, allocations in `to_string`/`format!` loops, boxed collections.
+- **Fast paths, each exact** (`fast_paths_change_nothing` runs every game with them off, `Game::set_fast_paths`, and
+  compares every tick's hash):
+  - a kind's *plan*, computed once: kinds with nothing to evaluate are skipped; `me` and `near` are built only for
+    kinds whose expressions mention them (read from the source text, so it can only err towards building);
+  - native guards: a `when` (rule or transition) that is `true` or `me.<prop> <op> <number | p.param>` joined by
+    `&&` is checked in Rust; a kind whose machine stays put and whose every rule guard is false is skipped before any
+    scope is built (colony's ground: 559 cells a tick);
+  - the world is lent to queries (`bind_world` returns a guard), never copied: binding costs the same at any size.
 
 ## Validation (typestate `Loaded → Validated`)
 
@@ -412,6 +495,12 @@ both only decide how it is shown.
 `simcraft-play` opens a GPU window when it can and falls back to the terminal; the title says which path was
 chosen and why. `--terminal` / `--window` force one.
 
+**Tick rate** (`[run] tick_rate` in `engine.toml`, default 10): the operator's hyperparameter for ticks per second
+of game time. Viewers play at `tick_rate` ticks/s at 1x (`--speed` overrides it; the title shows `N ticks/s = Kx`);
+rules see it as `tick_rate` and `pace`. A game written with `pace` and per-second quantities keeps its speeds at any
+tick rate; one that counts raw ticks runs faster when the rate rises. Pick per game type (`docs/research/kernel.md`):
+ecosystems 10–20, RTS 10–30, action 60, management 1–5.
+
 **Game feel** (`sim_render::feel`): the simulation ticks at a fixed rate; frames are drawn at the display's rate and
 **interpolate** between the last two ticks, so an ant glides from cell to cell instead of jumping ("fix your
 timestep"). A view declares its feel as data:
@@ -424,12 +513,171 @@ feel: (
 ),
 ```
 
+**Animation** (`sim_render::anim`): animation is data, sampled as a pure function of the time since it started,
+so any frame can be computed (and tested) alone, at any frame rate, and the simulation never sees it. An `Anim` is a
+set of tracks over the channels `scale`, `x`, `y` (in the thing's own size), `rot` (degrees), `alpha`, `bright`;
+each track is keys `(time, value)` or `(time, value, ease)` with easing `linear step quad_in quad_out quad_in_out
+cubic_out sine_in_out back_out elastic_out bounce_out`; `loop: true` repeats. Poses stack (`then`: scales and
+alphas multiply, offsets and rotations add), which is how a hover sits on an idle loop and a press on both; a
+`Player` runs one-shots over a looping base; `unknown_channels` catches typos at load.
+
+```ron
+"press": (tracks: { "scale": [(0.0, 1.0), (0.07, 0.84, quad_out), (0.3, 1.06, back_out), (0.42, 1.0)] }),
+"idle":  (tracks: { "rot": [(0.0, -3.0), (1.6, 3.0, sine_in_out), (3.2, -3.0, sine_in_out)] }, loop: true),
+```
+
 Feel is a component library like the rest of the renderer: new feel components (easing, tweens, screen shake,
 hit-stop, particles) are added there, used by every backend, and switched on per view.
 
 Feel is developed **eval-driven**, like rules: `simcraft-feel <game> --view <view>` plays the game headless at a
 fixed frame rate with the viewer's own code and measures camera jumps, jerk and lag, sprite steps and stutter;
 `--set` tries a setting, `--save` records a step (`games/<name>/feel-evals/`, log in `games/<name>/FEEL.md`).
+
+## Kernel: ONNX graphs (`kernel/`, crate `sim-kernel`)
+
+A **32-bit integer tensor machine** that runs standard ONNX files. Its job: brains that learn, and (next) rules
+compiled to graphs, at a cost a phone can carry for thousands of agents.
+
+- **One model per kind, one row per entity.** Every entity of a kind is a row of one batch; the weights are shared.
+  A row never depends on the rest of its batch.
+- **Integer only, bit-exact.** Values are `i32`, wrapped to their ONNX type (int8, uint8, int16, uint16, int32,
+  int64 within 32 bits, bool) after every op, like WGSL, so a CPU, wasm and a future GPU backend agree bit for bit.
+  Division truncates; `x / 0 = x` (WGSL's rule). Float tensors, `QuantizeLinear`/`DequantizeLinear`/`QLinear*`
+  (float scales), external weights and unknown ops are refused at load with the reason. A quantised model rescales
+  with `Div` by a constant.
+- **Operators:** Add Sub Mul Div Min Max Sum And Or Xor Not Equal Less Greater LessOrEqual GreaterOrEqual BitShift
+  Identity Neg Abs Sign Relu Clip Cast Where MatMul MatMulInteger Gemm (alpha = beta = 1) ArgMax ArgMin ReduceSum
+  ReduceMax ReduceMin Reshape Flatten Squeeze Unsqueeze Concat Gather Transpose Constant.
+- **Budget:** a model over `Budget::model_bytes` (1 MB) does not load. `footprint` reports shared weight bytes,
+  bytes per row (one agent) and genome bytes.
+- **Learning:** `genome()` = the model's int8 weights in file order (one byte per weight); `run_genome` runs an
+  agent's own genome; `mutate(genome, seed, per_mille, step)` makes a deterministic child. Offline training
+  (PyTorch → integer-only ONNX) and in-game evolution use the same files.
+- **Ecosystem:** `Graph` writes models in code; the files pass `onnx.checker` (full check) and onnxruntime returns
+  the same bits (verified on a 16→32→4 int8 policy, 1000 agents).
+- Games use it through a kind's `brain` (see Brains).
+
+## HD stage (`games/<name>/stage.ron`, `sim-gpu`)
+
+The GPU face of a game: high-resolution art (natural-history illustration in `games/colony3d`), no pixelation. The
+terminal renderer stays the developer's view; the stage is what players see. Same world, same determinism: the
+stage only reads.
+
+**Space.** x along the world (1 = a cell), y down (0 = the ground line, 1 = one level underground), and **depth**
+into the screen (1 = the cut plane). A point at depth d moves 1/d as fast as the camera and is drawn 1/d as big, so
+**parallax is perspective**, not a per-layer speed. World rows behind the cut stand `row_depth` deeper each, so the
+surface reads as a strip of land: ants on far rows are smaller and hazier.
+
+```ron
+Stage(
+    assets: ["nature_hd"], cells_across: 8.0, horizon: 0.6, plane: 9, row_depth: 0.05,
+    season_env: "seasons", follow: "ant", sky: "sky",
+    layers: [ (image: "mountains", depth: 30.0, height: 50.0, haze: 35, blur: 1.0),
+              (image: "grass_front", depth: 0.55, height: 0.5, lift: -0.12, front: true, blur: 1.6) ],
+    soil: (image: "soil", scale: 5.0, hollow: "hollow", darken: 55),
+    kinds: { "ant": (frames: ["ant", "ant_b"], height: 0.42, bob: 0.015, fps: 7.0,
+                     states: { "Carry": ["ant_carry"], "Dormant": ["ant_dormant"] }) },
+    season_cards: { "Autumn": "card_autumn" }, vignette: 35,
+)
+```
+
+- **Layers** stand on the ground line (vertical position rides with the ground, so looking down into the nest never
+  sinks the mountains behind the soil); `height` and `lift` are world units at the layer's depth; `haze` blends
+  towards the horizon colour, `blur` is a mip bias (depth of field for free), `front` layers are drawn over the
+  sprites and fade out as the camera goes underground. Bands repeat along x only (`--tile` at import makes them
+  seamless; `mirror: true` for art that is not).
+- **Soil** is one repeating texture below the ground line, darker with depth; **hollows** (voxels of the cut plane
+  without terrain) are soft dark blobs, stretched over the joint to hollow neighbours, so they read as galleries.
+- **Kinds**: frames per state (the deepest matching selector, as in asset packs), height in world units, a walk
+  cycle that runs only while the entity moves, a bob, a contact shadow; facing follows the last step.
+- **Seasons**: a colour grade per season (multiply + desaturation), the season's sky gradient behind the painted sky,
+  snow in winter; `season_cards` fade in over the scene when the season changes (a transition screen).
+- **Camera shots** (`c` cycles; springs, so a cut is a move): *close* on the followed entity (surface, or down the
+  cut), *wide* (the whole world), *nest* (down at the chambers). The followed entity is one the stage shows.
+- **Draw**: one pipeline, instanced quads (a 4-vertex strip each), premultiplied alpha, sRGB textures with mip
+  chains, linear light; consecutive quads with one texture and wrap mode are one draw call. Quad colours are sRGB.
+- **Import** (`simcraft-import IN OUT [--max N] [--crop | --bottom] [--white] [--tile PCT]`): the texture's import
+  settings, like an engine's: trim, cap the size (area average, alpha-weighted), key a white ground softly (scenery a
+  background remover would erase), make a band seamless. Sources and prompts: `assets/src/README.md`.
+- **Piles** (quantities made visible): `piles: [(kind: "nest", prop: "food", item: "berry", per: 1, max: 60,
+  size: 0.14, offset: (0.75, 0.0), spoil: (prop: "spoiled", item: "berry_spoiled"))]`. A prop becomes a heap of
+  items standing at the entity (centre first, rows rising into the gaps). The renderer remembers items between
+  frames (`PileMemory`): new units drop in on top (`enter`: a bounce and a pop, staggered so a delivery pours in),
+  missing ones leave from the top (`leave`: lift and shrink), and the bottom `spoil` units show the spoiled item.
+  What was there at the first frame does not pop. `anims` overrides `enter`, `leave`, `idle` (defaults in code).
+- **Buttons** (what the player can do): `buttons: [(action: "lay_egg", on: "nest", icon: "btn_egg", key: "1",
+  at: (0.07, 0.87), size: 0.11, args: {}, anims: {...})]`. A button is a declared game action (`game.ron`
+  `actions`) for the first entity of kind `on`; every frame it asks `Game::act` whether the game would take it now
+  (the same checks as any agent) and looks lit or greyed accordingly, easing between the two. Mouse (hit by circle,
+  hover) or its key presses it: the action is queued for the next tick and the button plays `press`, or the game
+  refuses and it plays `denied` (the reason shows in the window title). A press always shows at full colour.
+  Animations `idle` (loops), `hover` (held), `press`, `denied` have defaults and are overridden per button.
+- **Player panel**: `simcraft-play` runs `games/<name>/play.toml` when it exists (the player's settings: which kinds
+  are controllable, gameplay levers such as spoilage), else `engine.toml`; `--panel` picks another. Evals and tests
+  keep `engine.toml`.
+- **Record** (`--shot out.png --record N [--press ACTION@FRAME]...`): N frames at 30 fps from the shot state, with
+  presses on given frames: a clip for review (`ffmpeg -i out_%03d.png`), and a way to judge animation, not frames.
+- **Measured** (`simcraft-play games/colony3d --bench 600`, 1600x900, M-series Mac): sim 0.18–0.48 ms, compose
+  0.02 ms, GPU 2–2.6 ms per frame (with a full CPU wait per frame, so an upper bound); up to 244 quads; textures
+  43 MB with mips (11 MB if block-compressed).
+
+## First person: tracks (`games/<name>/track.ron`, `sim-gpu`)
+
+A game whose world is lanes (x) and a road ahead (y) can be played from inside: the camera rides with the followed
+entity. Same simulation, same rules; the track only reads. `simcraft-play` picks it when the game has a `track.ron`.
+
+**Space.** X across the road (0 = its middle), Y up (0 = the road), Z forward (row + 0.5). A real 3D pass: perspective
+camera (`math::Eye`: position, target, roll, field of view), depth buffer, perspective-correct textures, distance fog
+towards the horizon colour. Around it, 2D passes: sky and skyline behind, hood, effects and HUD in front.
+
+```ron
+Track(
+    assets: ["road"], follow: "car", sky: "sky", skyline: (image: "mesas", height: 0.2, drift: 0.4),
+    road: (image: "asphalt", lanes: 4, repeat: 2.5, shoulder: "sand", shoulder_width: 45.0),
+    camera: (height: 0.62, back: 0.9, fov: 68.0, pitch: 4.0, rumble: 0.006, bank: 0.9, max_bank: 9.0),
+    views: [ (name: "chase", height: 1.35, back: 3.2, fov: 62.0, pitch: 10.0, body: ("car_rear", 0.75)) ],
+    view: 70.0, fog: ((236, 150, 118), 18.0, 68.0),
+    kinds: { "cone": (frames: ["cone"], height: 0.62), "oil": (frames: ["oil"], height: 0.95, flat: true),
+             "coin": (frames: ["coin"], height: 0.42, lift: 0.25, spin: 0.8, bob: 0.06) },
+    scenery: [ (images: ["cactus", "rock"], height: (1.4, 3.2), every: 3.0, side: (2.0, 14.0), seed: 2) ],
+    hood: (image: "hood", height: 0.3, follow: 0.6),
+    switch: (...), fx: {}, buttons: [...], meters: [...], bars: [...],
+)
+```
+
+- **Road**: a textured strip (`repeat` world units per tile), dashed lane lines and solid edges (`paint`), shoulders
+  and ground to the horizon. **Kinds**: standing props face the camera (height; width from the picture), `flat` ones
+  lie on the road (oil, pads), `lift`/`bob`/`spin` for pickups, soft contact shadows; frames per state as elsewhere.
+  **Scenery**: roadside decoration placed deterministically along the road (not in the rules): speed you can see.
+- **Views** (`c` cycles; the main `camera` first): height, distance behind, field of view, pitch, hood on/off, and a
+  `body` image for the followed entity seen from outside. The camera travels between views on springs.
+- **Switch** (moving between positions: the core mechanic of games like `lanes`). The game says *where*: a prop of
+  the followed entity (`prop`, e.g. `lane_to`) set by the player's action; the simulation moves there cell by cell,
+  so what is on the way still counts. The track says *how it feels*: `positions` (world X of each, may be uneven),
+  duration `base + per_lane × lanes crossed`, the `ease` curve (`back_out` overshoots and settles), a `hop` of the
+  camera per lane, and `start` / `arrive` effects scaled by the lanes crossed (a 1 → 4 swing punches three times a
+  2 → 3 step). A new switch starts from wherever the camera is (fast inputs stay smooth); between switches the camera
+  holds the heading. The bank follows the curve's sideways speed, clamped to `max_bank`, on a spring.
+- **Camera effects** (`fx`, built in): a game event of the followed entity starts an animation over camera channels
+  `fov shake lift roll pitch streaks flash vignette`; running effects add up. Defaults: `dashed` (field-of-view
+  punch, speed lines, jolt, flash), `jumped` (an arc), `landed` (a dip and a jolt), `crashed` (hard shake, flash,
+  pinch), `braked`, `skidded`, soft flashes for pickups. `fx: { "dashed": (tracks: {...}) }` replaces one; unknown
+  channels are refused at load.
+- **HUD**: `buttons` as on the stage (declared actions, `Game::act` decides lit or grey; several buttons may share a
+  key, the live one is pressed: keys `1`–`4`, `space`, `enter`...; buttons in one spot show as one), `meters` (a prop
+  as a row of icons), `bars` (a prop as a bar, pulsing below `warn`).
+- **Record** as for stages (`--shot out.png --record N --press KEY@FRAME`, `--view N`); effects of warm-up ticks are
+  dropped before the first frame.
+- **Replay**: every accepted press is kept as (tick, action, args); the simulation is deterministic, so the presses
+  from the same start are the run. A finished run is saved to `runs/<game>-<unix time>.jsonl`; in the window `R`
+  watches the last run again (a red dot pulses), `N` starts a new one; `--replay FILE` plays a saved run in a window
+  or into `--shot` / `--record` (a video of a real run). A replay ignores the player's keys.
+- **Gone things** (`kinds.X.gone`): when an entity of that kind vanishes near the camera (smashed, picked up), it
+  keeps playing an animation where it was: `x` (sideways, away from the followed entity), `y`, `rot`, `scale`,
+  `alpha`, carried along at `push` × the followed entity's speed (a smashed cone flies ahead and tumbles off).
+- **Meters animate**: a new icon pops in, a lost one bursts off (grows, spins, fades) while the rest shake.
+  `blink: "Wobbly"` blinks the followed entity's body while it is in that state (invulnerable after a hit). The
+  `hurt` effect channel reds the edges of the screen.
 
 ## Input: actions, schemes and contexts (`input.ron`)
 
@@ -487,7 +735,7 @@ playtest it with real players, on the web today and in the stores as the game gr
 | Layer | What | Where it runs |
 |---|---|---|
 | Core | `sim-core`, `sim-state`, `sim-rules` (deterministic, integer, no I/O) | native and **wasm32** (feature `parallel` = rule evaluation on every core; off in the browser) |
-| GPU renderer | `sim-gpu`: `wgpu` + `winit`. Everything is a textured quad drawn by one shader (nearest sampling, alpha blending): the sky, **backdrop layers uploaded once** and scrolled by UV offset in the shader (parallax on the GPU), the world cross-section as a small texture re-uploaded only when it changed, **sprites from one atlas** built at load. The CPU uploads what changed and a list of quads | Metal (macOS, iOS, visionOS), Vulkan (Linux, Android), DX12 (Windows), WebGPU / WebGL2 (browser, via wasm) |
+| GPU renderer | `sim-gpu` (see HD stage): every image one mipmapped sRGB texture uploaded once, every quad one instance; a frame uploads only the instance list | Metal (macOS, iOS, visionOS), Vulkan (Linux, Android), DX12 (Windows), WebGPU / WebGL2 (browser, via wasm; not built yet) |
 | Terminal renderer | `sim-render` (cells, half-blocks, kitty graphics) | developer and debugging view |
 | Platform shell | `simcraft-build` | one command per target (below) |
 
@@ -529,7 +777,14 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Game feel: tick interpolation, spring camera, walk bob; `simcraft-feel` evals
 - [x] Input: actions, schemes (right/left hand, mouse), contexts bound to game state (`input.ron`)
 - [ ] Capabilities: pick renderer and quality per machine
-- [ ] Platforms: core on wasm32, `sim-gpu` (wgpu), `simcraft-build` (web, macOS, Linux, Windows, Steam; iOS and Android next)
+- [x] HD stage: `sim-gpu` (wgpu), `stage.ron`, `simcraft-play`, `simcraft-import`; colony3d in natural-history art
+- [x] First person: `track.ron`, 3D camera and fog, views, built-in camera effects, tunable position switch (game 8, `games/lanes`)
+- [x] Checking: `rustfmt.toml`, `simcraft-check`, the edit hook; `MoveBy` and the `clamped` warning
+- [x] Tracks: replays (`R`, `N`, `--replay`), lives meter, gone animations, hurt effect
+- [ ] Track next: a feel eval for switches (arrival time, overshoot, bank), text for scores, sound
+- [ ] Stage next: texture handles instead of names, cached static quads (soil, hollows), sprite atlas, compressed
+  textures (KTX2: BC7 / ASTC), simulation on its own thread with a double-buffered snapshot, the web build
+- [ ] Platforms: core on wasm32, `simcraft-build` (web, macOS, Linux, Windows, Steam; iOS and Android next)
 - [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)
 - [x] 3D worlds (depth, z, 26-neighbourhood) and fields (per-voxel numbers, native diffusion, decay, terrain)
 - [x] `sim-render`: native terminal renderer, components, themes, asset packs, projections, `view.ron`
@@ -543,4 +798,10 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [ ] `sim-tui` (ratatui) viewer
 - [ ] Parameter sweep: the operator's panel tunes itself (survival / oscillation score)
 - [x] Spatial grid + per-kind index for `near` (was O(n²))
-- [ ] Performance: `me` map is still rebuilt per entity per tick; world snapshot is cloned per tick
+- [x] Performance: work counters and profiles, perf lints, per-kind plans, native guards, no world copies (`tools/check.sh`)
+- [ ] Performance next: build `me` lazily inside a kind that mixes guarded and unguarded rules; guards for `rand(n) < p.x`
+- [x] Tick rate as an operator hyperparameter (`tick_rate`, `pace`)
+- [x] Kernel: integer ONNX runtime (`sim-kernel`)
+- [x] Brains: a kind's network, per-entity genomes, heredity with mutation (game 7, `games/forage`)
+- [ ] Kernel next: brains from `.onnx` files (offline training), batching identical genomes, rules as graphs, WGSL backend
+- [ ] Adapters read `tick_rate` (Unity/Unreal still have their own `ticksPerSecond`)
