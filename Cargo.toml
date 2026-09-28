@@ -19,3 +19,12 @@ toml = "1"
 # sync: rules are evaluated on multiple cores
 rhai = { version = "1.26", features = ["no_float", "only_i64", "sync"] }
 rayon = "1.12"
+
+# Lean debug builds: our code keeps line numbers (readable panics and backtraces), dependencies carry no debug
+# info at all. A debug test build is several times smaller and links faster; step into a dependency with a
+# debugger by raising its `debug` here.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

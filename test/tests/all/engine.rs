@@ -1,8 +1,8 @@
 use sim_core::{Engine, Loaded, Running};
 use sim_rules::Game;
 
-const GAME: &str = include_str!("../../games/wolf_sheep/game.ron");
-const PANEL: &str = include_str!("../../games/wolf_sheep/engine.toml");
+const GAME: &str = include_str!("../../../games/wolf_sheep/game.ron");
+const PANEL: &str = include_str!("../../../games/wolf_sheep/engine.toml");
 
 fn boot(game: &str, panel: &str) -> Result<Engine<Running, Game>, Vec<String>> {
     let (world, g) = Game::from_strs(game, panel).map_err(|e| vec![e])?;
@@ -107,8 +107,8 @@ fn unknown_field_in_game_is_rejected() {
 
 // --- forest fire ---
 
-const FIRE: &str = include_str!("../../games/forest_fire/game.ron");
-const FIRE_PANEL: &str = include_str!("../../games/forest_fire/engine.toml");
+const FIRE: &str = include_str!("../../../games/forest_fire/game.ron");
+const FIRE_PANEL: &str = include_str!("../../../games/forest_fire/engine.toml");
 
 #[test]
 fn solid_kinds_fill_one_per_cell() {
@@ -142,8 +142,8 @@ fn glyph_for_unknown_state_is_rejected() {
 
 // --- mercy dungeon ---
 
-const DUNGEON: &str = include_str!("../../games/mercy_dungeon/game.ron");
-const DUNGEON_PANEL: &str = include_str!("../../games/mercy_dungeon/engine.toml");
+const DUNGEON: &str = include_str!("../../../games/mercy_dungeon/game.ron");
+const DUNGEON_PANEL: &str = include_str!("../../../games/mercy_dungeon/engine.toml");
 
 fn hero(e: &Engine<Running, Game>) -> sim_core::Entity {
     e.world().entities().values().find(|x| x.kind == "hero").cloned().expect("a hero")
@@ -235,8 +235,8 @@ fn panel_world_must_match_layout() {
 
 // --- market ---
 
-const MARKET: &str = include_str!("../../games/market/game.ron");
-const MARKET_PANEL: &str = include_str!("../../games/market/engine.toml");
+const MARKET: &str = include_str!("../../../games/market/game.ron");
+const MARKET_PANEL: &str = include_str!("../../../games/market/engine.toml");
 
 fn village(e: &Engine<Running, Game>, owner: i64) -> sim_core::Entity {
     let vs = e.world().entities().values();
@@ -385,8 +385,8 @@ fn bus_filter_delivers_only_named_messages() {
 
 // --- gamedev (state charts) ---
 
-const DEV: &str = include_str!("../../games/gamedev/game.ron");
-const DEV_PANEL: &str = include_str!("../../games/gamedev/engine.toml");
+const DEV: &str = include_str!("../../../games/gamedev/game.ron");
+const DEV_PANEL: &str = include_str!("../../../games/gamedev/engine.toml");
 
 fn dev_run(panel: &str, ticks: u64) -> (Engine<Running, Game>, Vec<String>) {
     let mut e = boot(DEV, panel).expect("valid");
@@ -558,8 +558,8 @@ fn a_log_with_a_restore_still_replays() {
 
 // --- colony (stigmergy) ---
 
-const COLONY: &str = include_str!("../../games/colony/game.ron");
-const COLONY_PANEL: &str = include_str!("../../games/colony/engine.toml");
+const COLONY: &str = include_str!("../../../games/colony/game.ron");
+const COLONY_PANEL: &str = include_str!("../../../games/colony/engine.toml");
 
 #[test]
 fn climb_steps_up_the_gradient_and_stops_at_the_top() {
@@ -597,7 +597,7 @@ fn golden_colony_hash() {
 
 // --- environments ---
 
-const SEASONS: &str = include_str!("../../envs/seasons.ron");
+const SEASONS: &str = include_str!("../../../envs/seasons.ron");
 
 fn colony_envs() -> Vec<(String, String)> {
     vec![("seasons".to_string(), SEASONS.to_string())]
