@@ -1,0 +1,129 @@
+{
+ "step": 8,
+ "change": "measure income and food per trip (no game change)",
+ "seeds": {
+  "1": {
+   "survived": 538,
+   "winters": 1,
+   "first_delivery": 114,
+   "deliveries": 3,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 2,
+   "trail_cells": 12,
+   "income": 18,
+   "food_per_trip": 6.0
+  },
+  "2": {
+   "survived": 933,
+   "winters": 2,
+   "first_delivery": 71,
+   "deliveries": 41,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 12,
+   "winter_store": 18,
+   "trail_cells": 23,
+   "income": 246,
+   "food_per_trip": 6.0
+  },
+  "3": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 73,
+   "deliveries": 244,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 1,
+   "winter_store": 96,
+   "trail_cells": 47,
+   "income": 1464,
+   "food_per_trip": 6.0
+  },
+  "4": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 53,
+   "deliveries": 282,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 0,
+   "winter_store": 222,
+   "trail_cells": 42,
+   "income": 1692,
+   "food_per_trip": 6.0
+  },
+  "5": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 65,
+   "deliveries": 256,
+   "peak_ants": 12,
+   "births": 4,
+   "starved": 0,
+   "winter_store": 105,
+   "trail_cells": 38,
+   "income": 1536,
+   "food_per_trip": 6.0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 1734.2,
+   "min": 538,
+   "max": 2400
+  },
+  "winters": {
+   "mean": 3.6,
+   "min": 1,
+   "max": 5
+  },
+  "first_delivery": {
+   "mean": 75.2,
+   "min": 53,
+   "max": 114
+  },
+  "deliveries": {
+   "mean": 165.2,
+   "min": 3,
+   "max": 282
+  },
+  "peak_ants": {
+   "mean": 12.2,
+   "min": 12,
+   "max": 13
+  },
+  "births": {
+   "mean": 4.2,
+   "min": 4,
+   "max": 5
+  },
+  "starved": {
+   "mean": 5.2,
+   "min": 0,
+   "max": 13
+  },
+  "winter_store": {
+   "mean": 88.6,
+   "min": 2,
+   "max": 222
+  },
+  "trail_cells": {
+   "mean": 32.4,
+   "min": 12,
+   "max": 47
+  },
+  "income": {
+   "mean": 991.2,
+   "min": 18,
+   "max": 1692
+  },
+  "food_per_trip": {
+   "mean": 6.0,
+   "min": 6.0,
+   "max": 6.0
+  }
+ },
+ "errors": {}
+}

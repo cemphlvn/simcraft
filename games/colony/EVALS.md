@@ -13,6 +13,10 @@ Raw results: `evals/NNN-*.json`. Re-run the last step: `tools/eval.py games/colo
 | 005 | More scouts (`scout_chance` 2 → 6) | 275.6 | 9.6 | 75 | Every seed now finds food; trails 21 cells. Same numbers as the probe (determinism) |
 | 006 | Easier recruitment (`contacts` 2 → 1, panel) | 322.6 | 19.8 | 75 | Deliveries double; one seed reaches winter. `winter_store` still 0 |
 | 007 | Richer world: a berry is worth 6 food (`berry_value` 1 → 6; step 006 re-checked identical with the new param at 1) | 1734.2 | 165.2 | 75 | 3 of 5 colonies live all five years; winter store 89. Probes: 3 → 439, 4 → 568, 5 → 1134, 6 → 1734, 10 → 1804 but boom and bust (67 ants, one crash at tick 484) |
+| 008 | Measure income and food per trip (no game change; `--check` identical on the old metrics) | 1734.2 | 165.2 | 75 | Baseline for value: 991 food brought home, exactly 6 per trip |
+| 009 | Berry value fluctuates: per-bush quality (50–150 %) × seasonal ripeness (0 → peak mid-season → 0) | 865 | 78.2 | 72 | **Worse (−50 %).** Food per trip barely moved (6.3), deliveries halved: ripeness starts at 0 each summer, so the colony meets its early famine with its poorest food (a *spring gap*) |
+| 010 | Trails weighted by value (scent = value × `trail_per_value`) | 861.6 | 41.2 | 72 | **Worse again.** Food per trip fell (6.15): no concentration on the best bushes. Low early values mean weak early trails, exactly when the colony needs them. The mechanism is real in ants; here the constraint is timing, not choice |
+| 011 | Refactor: seasons moved to a shared environment (`envs/seasons.ron`, read as `env.seasons.*`) | 861.6 | 41.2 | 72 | **Identical** to step 010 on every metric and seed (`--check`): the engine change and the move changed nothing the game does |
 
 ## Probes after step 004 (one lever each, `--set`, not saved)
 

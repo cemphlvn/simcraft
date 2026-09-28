@@ -169,8 +169,9 @@ def main():
     if a.check:
         if not last:
             sys.exit("nothing saved yet: run with --save first")
+        # Only metrics both runs have: adding a metric is not a regression.
         moved = {k: (last["seeds"][str(s)][k], per_seed[s][k]) for s in cfg["seeds"] for k in cfg["metrics"]
-                 if last["seeds"][str(s)].get(k) != per_seed[s][k]}
+                 if k in last["seeds"][str(s)] and last["seeds"][str(s)][k] != per_seed[s][k]}
         print(f"check against {history[-1].name}: " + ("OK, identical" if not moved else f"{len(moved)} values moved"))
         for k, (b, n) in list(moved.items())[:10]:
             print(f"  {k}: {b} -> {n}")

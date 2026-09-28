@@ -40,3 +40,11 @@ goal = "max"              # food in the nest as the first winter starts
 [metrics.trail_cells]
 expr = "peak('state.ground.Trail')"
 goal = "info"             # did stigmergy form trails at all
+
+[metrics.income]
+expr = "last('sum.nest.income')"
+goal = "max"              # food brought home over the whole run
+
+[metrics.food_per_trip]
+expr = "round(last('sum.nest.income') / max(1, events['delivered']), 2)"
+goal = "max"              # what an average trip was worth

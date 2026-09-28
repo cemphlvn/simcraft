@@ -12,17 +12,15 @@
 // Ends when the last ant dies. The score is how long the colony lasted.
 Game(
     name: "colony",
+    environments: ["seasons"],
 
     kinds: {
         "wall":   (glyph: '#', solid: true),
-        // The season clock. Its state is the season everyone else reads.
-        "sun":    (glyph: 'S', fsm: "season",
-                   glyphs: { "Summer": 'S', "Autumn": 'A', "Winter": 'W' }),
         // Every free cell has ground; the ground holds the scent.
         "ground": (glyph: ' ', solid: true, fsm: "ground", props: { "scent": 0 },
                    glyphs: { "Plain": ' ', "Trail": ':' }),
-        "nest":   (glyph: 'N', solid: true, props: { "food": 0, "born": 0 }),
-        "bush":   (glyph: '*', solid: true, fsm: "bush", props: { "berries": 0 },
+        "nest":   (glyph: 'N', solid: true, props: { "food": 0, "born": 0, "income": 0 }),
+        "bush":   (glyph: '*', solid: true, fsm: "bush", props: { "berries": 0, "quality": -1, "value": 1 },
                    glyphs: { "Ripe": '*', "Bare": 'o' }),
         "ant":    (glyph: 'a', fsm: "ant",
                    props: { "age": 0, "threshold": -1, "tolerance": -1, "store": 0, "hunger": 0,
@@ -31,12 +29,11 @@ Game(
     },
 
     params: {
-        // Calendar (ticks).
-        "summer": 240, "autumn": 120, "winter": 120,
         // Food.
         "start_food": 40,
         "bush_max": 6,            // berries on a full bush
-        "berry_value": 6,         // food one delivered berry is worth (one trip must feed more than the forager eats)
+        "berry_value": 6,         // average food a berry is worth (one trip must feed more than the forager eats)
+        "quality_min": 50, "quality_spread": 101,  // each bush's quality, % of average
         "regrow_every": 12,       // one berry per bush this often, summer only
         "meal_every": 16,         // an active ant eats one food this often
         "winter_meal_every": 48,  // a dormant ant eats this rarely
@@ -53,14 +50,14 @@ Game(
         // Searching and stigmergy.
         "noise": 20,              // % of steps a searcher wanders instead of climbing the scent
         "patience": 80,           // a searcher gives up and goes back after this long
-        "trail_max": 60, "trail_step": 3,   // scent laid right at the food, and how fast it weakens on the way home
+        "trail_per_value": 10, "trail_step": 3, // scent laid at the food per unit of berry value, and how fast it weakens on the way home
         "scent_max": 200,
         "evaporation": 4,         // % of the scent lost per tick
         "trail_seen": 10,         // scent at or above this shows as a trail
     },
 
     layout: (
-        legend: { '#': "wall", ',': "ground", 'N': "nest", '*': "bush", 'a': "ant", 'S': "sun" },
+        legend: { '#': "wall", ',': "ground", 'N': "nest", '*': "bush", 'a': "ant", 'S': "seasons" },
         rows: [
             "################################",
             "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
@@ -84,15 +81,6 @@ Game(
     ),
 
     fsms: {
-        "season": (
-            initial: "Summer",
-            transitions: [
-                (from: "Summer", to: "Autumn", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer"),
-                (from: "Autumn", to: "Winter", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer + p.autumn"),
-                (from: "Winter", to: "Summer", when: "tick % (p.summer + p.autumn + p.winter) < p.summer"),
-            ],
-        ),
-
         "ground": (
             initial: "Plain",
             transitions: [
@@ -123,7 +111,7 @@ Game(
                         "Nurse": (rules: [
                             (name: "stay_home", then: [ MoveToward("nest") ]),
                             (name: "raise_brood", target: Nearest("nest"),
-                             when: r#"it.dist <= 1 && it.food >= p.egg_cost + p.brood_reserve && near_in("sun", "Summer") < 9999 && roll < p.lay_chance"#,
+                             when: r#"it.dist <= 1 && it.food >= p.egg_cost + p.brood_reserve && env.seasons.state == "Summer" && roll < p.lay_chance"#,
                              then: [ On(It, [ Need("food", "p.egg_cost"), Add("food", "-p.egg_cost"), Add("born", "1") ]),
                                      Spawn("ant"), Emit("born") ]),
                         ]),
@@ -143,7 +131,8 @@ Game(
                                         (name: "search_time", then: [ Add("searched", "1") ]),
                                         (name: "pick_berry", target: NearestIn("bush", "Ripe"), when: "it.dist <= 1",
                                          then: [ On(It, [ Need("berries", "1"), Add("berries", "-1") ]),
-                                                 Set("load", "1"), Set("trail", "p.trail_max"), Goto("Carry") ]),
+                                                 // Better food, stronger trail (Pharaoh's ants, Lasius niger): the colony concentrates on the best bushes.
+                                                 Set("load", "it.value"), Set("trail", "min(p.scent_max, it.value * p.trail_per_value)"), Goto("Carry") ]),
                                     ],
                                 ),
                                 // Loaded: walk home and mark the way.
@@ -153,7 +142,8 @@ Game(
                                      then: [ On(It, [ Set("scent", "min(p.scent_max, it.scent + me.trail)") ]),
                                              Set("trail", "max(0, me.trail - p.trail_step)") ]),
                                     (name: "deliver", target: Nearest("nest"), when: "it.dist <= 1",
-                                     then: [ On(It, [ Add("food", "me.load * p.berry_value") ]), Set("load", "0"), Goto("Ready"), Emit("delivered") ]),
+                                     then: [ On(It, [ Add("food", "me.load"), Add("income", "me.load") ]),
+                                             Set("load", "0"), Goto("Ready"), Emit("delivered") ]),
                                 ]),
                             },
                             transitions: [
@@ -174,8 +164,8 @@ Game(
                 "Dormant": (rules: [ (name: "huddle", then: [ MoveToward("nest") ]) ]),
             },
             transitions: [
-                (from: "Active",  to: "Dormant", when: r#"near_in("sun", "Winter") < 9999"#),
-                (from: "Dormant", to: "Active",  when: r#"near_in("sun", "Winter") >= 9999"#),
+                (from: "Active",  to: "Dormant", when: r#"env.seasons.state == "Winter""#),
+                (from: "Dormant", to: "Active",  when: r#"env.seasons.state != "Winter""#),
             ],
             rules: [
                 (name: "temperament", when: "me.threshold < 0",
@@ -195,8 +185,15 @@ Game(
 
     rules: [
         (name: "regrow", for: "bush",
-         when: r#"near_in("sun", "Summer") < 9999 && tick % p.regrow_every == 0 && me.berries < p.bush_max"#,
+         when: r#"env.seasons.state == "Summer" && tick % p.regrow_every == 0 && me.berries < p.bush_max"#,
          then: [ Add("berries", "1") ]),
+        // Each bush is a little better or worse than average, for life.
+        (name: "bush_quality", for: "bush", when: "me.quality < 0",
+         then: [ Set("quality", "p.quality_min + rand(p.quality_spread)") ]),
+        // A berry is worth 2 × berry_value × quality × the land's ripeness (from the seasons environment),
+        // so on average about berry_value, from 1 up to ~3×.
+        (name: "ripen", for: "bush",
+         then: [ Set("value", "max(1, 2 * p.berry_value * max(0, me.quality) * env.seasons.ripeness / 10000)") ]),
         (name: "evaporate", for: "ground", when: "me.scent > 0",
          then: [ Set("scent", "me.scent * (100 - p.evaporation) / 100") ]),
         (name: "provision", for: "nest", when: "tick == 0", then: [ Set("food", "p.start_food") ]),
