@@ -89,6 +89,20 @@ None of these numbers are written in any rule; they come from `price = price_k /
 
 ---
 
+## Request: multicore
+
+Not a game this time. The operator asked for more ticks per second.
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| M.1 | One core: forest fire 2,048 cells ≈ 480 ticks/s; wolf/sheep ~2,100 entities ≈ 170 | Use the other 9 cores | Rule evaluation only reads, so entities are split across cores (rayon, 64 per batch) and results merged in id order; `apply` stays single-threaded. Rhai `sync`; query context became thread-local. Panel: `[run] threads` (0 = all, 1 = one) | `thread_count_does_not_change_the_world`: 1, 4 and all cores give the same hash every tick; golden hash unchanged |
+| M.2 | First multicore run was **up to 10× slower** (forest fire 479 → 25 ticks/s) | The single-core optimisation 1.8 (`p`, `count` as shared Rhai values) became `Arc<RwLock>` under `sync`: every `p.grow` read took a lock, and 10 cores fought over it | No sharing: each batch builds one scope with `p`/`tick`/`count`; each entity pushes `me`/`near` on top and rewinds | 10 cores: forest fire **2.4×**, wolf/sheep big **2.2×**, 32,768 cells **2.8×**; single-core also faster (479 → 542) |
+| M.3 | Small games (≤ 100 entities) were 10–30 % slower on the pool | Scheduling costs more than the work | Worlds under 256 entities take the sequential path | mercy / wolf_sheep back to 1.0× |
+
+Why not ~10×: the world snapshot copy and `apply` are still sequential (Amdahl), and 6 of the 10 cores are efficiency cores.
+
+---
+
 ## What the engine became
 
 | | Before the games | After three games |

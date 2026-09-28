@@ -46,6 +46,7 @@ tick:
 - **Rules never mutate the world.** They produce a `Group`: the effects of one rule firing.
 - **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently. Likewise, if any `Need` in the group no longer holds against the live state, the group is dropped with a `short` event.
 - An entity **moves at most once per tick**. The first `Move` wins.
+- Evaluation (read-only) runs on `[run] threads` cores (0 = all); results merge in entity-id order, so the core count never changes the outcome. `apply` is single-threaded.
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 - **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
 

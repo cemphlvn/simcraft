@@ -298,3 +298,17 @@ fn seats_need_an_owner_prop() {
     let errs = boot(GAME, &panel).err().expect("must fail");
     assert!(errs.iter().any(|e| e.contains("needs an 'owner' prop")), "{errs:?}");
 }
+
+// --- multicore ---
+
+#[test]
+fn thread_count_does_not_change_the_world() {
+    let run_with = |threads: usize| {
+        let panel = FIRE_PANEL.replace("max_ticks = 2000", &format!("max_ticks = 2000\nthreads = {threads}"));
+        let mut e = boot(FIRE, &panel).expect("valid");
+        (0..150).map(|_| e.tick().hash).collect::<Vec<_>>()
+    };
+    let one = run_with(1);
+    assert_eq!(one, run_with(4));
+    assert_eq!(one, run_with(0));
+}

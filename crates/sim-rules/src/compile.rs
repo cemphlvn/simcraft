@@ -5,8 +5,9 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
+use rayon::prelude::*;
 use rhai::{AST, Array, Dynamic, Engine as Rhai, Map, Scope};
 use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 
@@ -19,11 +20,14 @@ pub const FAR: i64 = 9_999;
 /// FSM geçişlerinin tuzu kural tuzlarıyla çakışmasın.
 const FSM_SALT: u64 = 1 << 32;
 
+/// Bir çekirdek bu kadar entity'yi tek parça alır; küçük dünyalarda paralel yük olmaz.
+const CHUNK: usize = 64;
+
 /// Rhai'ye kayıtlı dünya sorgularının (`around`, `rand`) gördüğü bağlam.
-/// Tick başında dünyanın anlık görüntüsü bağlanır; her değerlendirmeden önce `me` ve tuz.
+/// Her çekirdeğin kendi bağlamı var (thread-local): dünyanın anlık görüntüsü, `me`, tuz.
 #[derive(Default)]
 struct QueryCtx {
-    world: Option<Rc<World>>,
+    world: Option<Arc<World>>,
     me: EntityId,
     pos: (i64, i64),
     salt: u64,
@@ -46,6 +50,10 @@ impl QueryCtx {
     }
 }
 
+thread_local! {
+    static CTX: RefCell<QueryCtx> = RefCell::new(QueryCtx::default());
+}
+
 pub struct Game {
     pub def: GameDef,
     pub cfg: EngineConfig,
@@ -58,9 +66,10 @@ pub struct Game {
     ends: Vec<CompiledEnd>,
     score: Option<AST>,
     compile_errors: Vec<String>,
-    ctx: Rc<RefCell<QueryCtx>>,
-    /// `p` bir kez kurulur, entity'ler arasında paylaşılır (kopyalanmaz).
-    p_shared: Dynamic,
+    /// None = tek çekirdek.
+    pool: Option<rayon::ThreadPool>,
+    /// `p`, bir kez kurulur. Her çekirdek kendi scope'una bir kez kopyalar (kilit yok).
+    p_map: Map,
     /// İfadelerin gerçekten okuduğu `near.<kind>`'lar. None = hepsi (belirlenemedi).
     near_kinds: Option<BTreeSet<String>>,
 }
@@ -258,13 +267,15 @@ impl Game {
         rhai.on_print(|_| {});
         rhai.on_debug(|_, _, _| {});
 
-        let ctx = Rc::new(RefCell::new(QueryCtx::default()));
-        let c = ctx.clone();
-        rhai.register_fn("around", move |kind: &str, r: i64| c.borrow().around(kind, None, r));
-        let c = ctx.clone();
-        rhai.register_fn("around", move |kind: &str, state: &str, r: i64| c.borrow().around(kind, Some(state), r));
-        let c = ctx.clone();
-        rhai.register_fn("rand", move |n: i64| c.borrow_mut().rand(n));
+        rhai.register_fn("around", |kind: &str, r: i64| CTX.with(|c| c.borrow().around(kind, None, r)));
+        rhai.register_fn("around", |kind: &str, state: &str, r: i64| {
+            CTX.with(|c| c.borrow().around(kind, Some(state), r))
+        });
+        rhai.register_fn("rand", |n: i64| CTX.with(|c| c.borrow_mut().rand(n)));
+        let pool = match cfg.run.threads {
+            1 => None,
+            n => rayon::ThreadPoolBuilder::new().num_threads(n).build().ok(),
+        };
 
         let mut cc = Compiler { rhai: &rhai, errors: Vec::new() };
         let fsms = def
@@ -299,7 +310,7 @@ impl Game {
         let mut params = def.params.clone();
         params.extend(cfg.params.iter().map(|(k, v)| (k.clone(), *v)));
         let p: Map = params.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
-        let p_shared = Dynamic::from_map(p).into_shared();
+        let p_map = p;
 
         let mut sources: Vec<&str> = Vec::new();
         for f in def.fsms.values() {
@@ -314,7 +325,7 @@ impl Game {
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
-        Game { def, cfg, params, rhai, rules, fsms, ends, score, compile_errors: errors, ctx, p_shared, near_kinds }
+        Game { def, cfg, params, rhai, rules, fsms, ends, score, compile_errors: errors, pool, p_map, near_kinds }
     }
 
     /// Dünya boyutu `layout`'tan ya da panelin `[world]`'ünden. Önce layout yerleşir,
@@ -538,15 +549,23 @@ impl Game {
         out
     }
 
-    /// Tick başına bir kez; entity'ler arasında paylaşılır.
-    fn counts(&self, world: &World) -> Dynamic {
-        let m: Map =
-            self.def.kinds.keys().map(|k| (k.as_str().into(), Dynamic::from(world.count(k) as i64))).collect();
-        Dynamic::from_map(m).into_shared()
+    /// Tick başına bir kez.
+    fn counts(&self, world: &World) -> Map {
+        self.def.kinds.keys().map(|k| (k.as_str().into(), Dynamic::from(world.count(k) as i64))).collect()
     }
 
-    /// Kural ifadelerinin gördüğü dünya: me, p, tick, near, count (+ kurala özel roll, it, arg).
-    fn base_scope(&self, world: &World, e: &Entity, counts: &Dynamic) -> Scope<'static> {
+    /// Tick boyunca sabit olanlar: p, tick, count. Çekirdek başına bir kez kurulur;
+    /// entity'ye özel değişkenler üstüne eklenip geri sarılır.
+    fn tick_scope(&self, world: &World, counts: &Map) -> Scope<'static> {
+        let mut scope = Scope::new();
+        scope.push_constant("p", self.p_map.clone());
+        scope.push_constant("tick", world.tick as i64);
+        scope.push_constant("count", counts.clone());
+        scope
+    }
+
+    /// Entity'ye özel: me, near.
+    fn push_entity(&self, scope: &mut Scope<'static>, world: &World, e: &Entity) {
         let near: Map = self
             .def
             .kinds
@@ -554,33 +573,93 @@ impl Game {
             .filter(|k| self.near_kinds.as_ref().is_none_or(|ks| ks.contains(*k)))
             .map(|k| (k.as_str().into(), Dynamic::from(world.nearest(e, k).map_or(FAR, |(_, d)| d))))
             .collect();
-
-        let mut scope = Scope::new();
         scope.push_constant("me", entity_map(e, None));
-        scope.push_constant("p", self.p_shared.clone());
-        scope.push_constant("tick", world.tick as i64);
         scope.push_constant("near", near);
-        scope.push_constant("count", counts.clone());
+    }
+
+    /// Kural ifadelerinin gördüğü dünya: p, tick, count, me, near (+ kurala özel roll, it, arg).
+    fn base_scope(&self, world: &World, e: &Entity, counts: &Map) -> Scope<'static> {
+        let mut scope = self.tick_scope(world, counts);
+        self.push_entity(&mut scope, world, e);
         scope
     }
 
     /// `end` ifadelerinin gördüğü dünya: p, tick, count.
     fn world_scope(&self, world: &World) -> Scope<'static> {
-        let mut scope = Scope::new();
-        scope.push_constant("p", self.p_shared.clone());
-        scope.push_constant("tick", world.tick as i64);
-        scope.push_constant("count", self.counts(world));
-        scope
+        self.tick_scope(world, &self.counts(world))
     }
 
     /// Sorgu bağlamını bir entity'ye ve tuza bağlar (her değerlendirmeden önce).
     fn bind(&self, e: &Entity, salt: u64) {
-        let mut c = self.ctx.borrow_mut();
-        (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y), salt, 0);
+        CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y), salt, 0);
+        });
     }
 
+    /// Bu çekirdeğin bağlamına dünyayı bağlar (kopya yoksa oluşturur).
     fn bind_world(&self, world: Option<&World>) {
-        self.ctx.borrow_mut().world = world.map(|w| Rc::new(w.clone()));
+        self.bind_snapshot(world.map(|w| Arc::new(w.clone())).as_ref());
+    }
+
+    fn bind_snapshot(&self, snap: Option<&Arc<World>>) {
+        CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.world.as_ref().map(Arc::as_ptr) != snap.map(Arc::as_ptr) {
+                c.world = snap.cloned();
+            }
+        });
+    }
+
+    /// Bir entity'nin bu tick'teki tüm grupları: önce FSM geçişi, sonra kurallar (sırayla).
+    fn eval_entity(&self, world: &World, e: &Entity, scope: &mut Scope<'static>) -> Vec<Group> {
+        let len = scope.len();
+        self.push_entity(scope, world, e);
+        let out = self.eval_entity_in(world, e, scope);
+        scope.rewind(len);
+        out
+    }
+
+    fn eval_entity_in(&self, world: &World, e: &Entity, base: &mut Scope<'static>) -> Vec<Group> {
+        let mut out = Vec::new();
+        let error = |source: &str, m: String| Group {
+            source: source.into(),
+            actor: Some(e.id),
+            effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
+        };
+
+        // FSM: ilk eşleşen geçiş; kurallar bu tick eski durumu görür.
+        let transitions = self.fsm_of(&e.kind).into_iter().flatten().enumerate();
+        for (i, t) in transitions.filter(|(_, t)| t.from == e.state) {
+            self.bind(e, FSM_SALT + i as u64);
+            match self.eval_bool(base, &t.when) {
+                Ok(true) => {
+                    out.push(Group {
+                        source: "fsm".into(),
+                        actor: Some(e.id),
+                        effects: vec![Effect::SetState { e: e.id, state: t.to.clone() }],
+                    });
+                    break;
+                }
+                Ok(false) => {}
+                Err(m) => {
+                    out.push(error("fsm", m));
+                    break;
+                }
+            }
+        }
+
+        let active = self.rules.iter().filter(|r| {
+            !r.is_action && r.enabled && Self::applies(r, &e.kind) && r.state.as_ref().is_none_or(|s| *s == e.state)
+        });
+        for rule in active {
+            match self.eval_rule(world, e, rule, base) {
+                Ok(Some(g)) => out.push(g),
+                Ok(None) => {}
+                Err(m) => out.push(error(&rule.name, m)),
+            }
+        }
+        out
     }
 
     fn eval_bool(&self, scope: &mut Scope, ast: &AST) -> Result<bool, String> {
@@ -929,53 +1008,28 @@ impl Rules for Game {
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
+    /// Değerlendirme yalnızca okur → entity'ler çekirdeklere bölünür. Sonuçlar id
+    /// sırasıyla birleşir; bu yüzden çekirdek sayısı sonucu değiştirmez.
     fn eval(&self, world: &World) -> Vec<Group> {
         let counts = self.counts(world);
-        let mut out = Vec::new();
-        let error = |source: &str, e: &Entity, m: String| Group {
-            source: source.into(),
-            actor: Some(e.id),
-            effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }],
+        let snap = Arc::new(world.clone());
+        let entities: Vec<&Entity> = world.entities().values().collect();
+        // Her iş parçası kendi scope'unu bir kez kurar: paylaşılan, kilitli değer yok.
+        let init = || self.tick_scope(world, &counts);
+        let per = |scope: &mut Scope<'static>, e: &&Entity| {
+            self.bind_snapshot(Some(&snap));
+            self.eval_entity(world, e, scope)
         };
-
-        self.bind_world(Some(world));
-        for e in world.entities().values() {
-            let mut base = self.base_scope(world, e, &counts);
-
-            // FSM: ilk eşleşen geçiş; kurallar bu tick eski durumu görür.
-            let transitions = self.fsm_of(&e.kind).into_iter().flatten().enumerate();
-            for (i, t) in transitions.filter(|(_, t)| t.from == e.state) {
-                self.bind(e, FSM_SALT + i as u64);
-                match self.eval_bool(&mut base, &t.when) {
-                    Ok(true) => {
-                        out.push(Group {
-                            source: "fsm".into(),
-                            actor: Some(e.id),
-                            effects: vec![Effect::SetState { e: e.id, state: t.to.clone() }],
-                        });
-                        break;
-                    }
-                    Ok(false) => {}
-                    Err(m) => {
-                        out.push(error("fsm", e, m));
-                        break;
-                    }
-                }
+        // Küçük dünyada iş dağıtmak işin kendisinden pahalı: sıralı yol.
+        let pool = self.pool.as_ref().filter(|_| entities.len() >= 4 * CHUNK);
+        let groups: Vec<Vec<Group>> = match pool {
+            Some(pool) => pool.install(|| entities.par_iter().with_min_len(CHUNK).map_init(init, per).collect()),
+            None => {
+                let mut scope = init();
+                entities.iter().map(|e| per(&mut scope, e)).collect()
             }
-
-            let active = self.rules.iter().filter(|r| {
-                !r.is_action && r.enabled && Self::applies(r, &e.kind) && r.state.as_ref().is_none_or(|s| *s == e.state)
-            });
-            for rule in active {
-                match self.eval_rule(world, e, rule, &mut base) {
-                    Ok(Some(g)) => out.push(g),
-                    Ok(None) => {}
-                    Err(m) => out.push(error(&rule.name, e, m)),
-                }
-            }
-        }
-        self.bind_world(None);
-        out
+        };
+        groups.into_iter().flatten().collect()
     }
 
     fn outcome(&self, world: &World) -> Option<String> {

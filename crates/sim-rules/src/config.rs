@@ -32,6 +32,10 @@ pub struct EngineConfig {
 pub struct RunCfg {
     pub seed: u64,
     pub max_ticks: u64,
+    /// Kural değerlendirmesi için çekirdek sayısı (kazan sayısı). 0 = hepsi, 1 = tek çekirdek.
+    /// Sonucu değiştirmez: aynı seed her çekirdek sayısında aynı hash'i verir.
+    #[serde(default)]
+    pub threads: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -15,4 +15,6 @@ serde_json = "1"
 ron = "0.12"
 toml = "1"
 # no_float + only_i64: script aritmetiği platformdan bağımsız, deterministik kalır
-rhai = { version = "1.26", features = ["no_float", "only_i64"] }
+# sync: kurallar birden çok çekirdekte değerlendirilir
+rhai = { version = "1.26", features = ["no_float", "only_i64", "sync"] }
+rayon = "1.12"
