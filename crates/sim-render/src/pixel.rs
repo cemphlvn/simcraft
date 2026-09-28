@@ -424,3 +424,44 @@ mod tests {
         assert_eq!(p.px, vec![Rgb::WHITE, Rgb(1, 2, 3), Rgb(1, 2, 3), Rgb::WHITE]);
     }
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// `cargo test --release -p sim-render bench_frame_costs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_frame_costs() {
+        // A diorama-sized picture with varied pixels (like the real art).
+        let mut art = Pixmap::new(129, 84, Rgb::BLACK);
+        for (i, p) in art.px.iter_mut().enumerate() {
+            let n = noise(i as i64, 0, 1);
+            *p = Rgb((n % 256) as u8 / 8 * 8, (n / 256 % 256) as u8 / 8 * 8, 60);
+        }
+        let t = |f: &mut dyn FnMut()| {
+            let s = std::time::Instant::now();
+            for _ in 0..50 {
+                f();
+            }
+            s.elapsed().as_secs_f64() * 1000.0 / 50.0
+        };
+        let scaled = art.scaled(7);
+        let up = t(&mut || drop(art.scaled(7)));
+        let mut size7 = 0;
+        let send7 = t(&mut || {
+            let mut out = Vec::new();
+            kitty(&mut out, &scaled, 1, 0, 0, 100, 40).unwrap();
+            size7 = out.len();
+        });
+        let mut size1 = 0;
+        let send1 = t(&mut || {
+            let mut out = Vec::new();
+            kitty(&mut out, &art, 1, 0, 0, 100, 40).unwrap();
+            size1 = out.len();
+        });
+        println!("upscale x7 on the CPU:        {up:6.2} ms");
+        println!("encode+compress 903x588 (x7): {send7:6.2} ms, {:>7} bytes to the terminal", size7);
+        println!("encode+compress 129x84 (x1):  {send1:6.2} ms, {:>7} bytes to the terminal", size1);
+    }
+}
