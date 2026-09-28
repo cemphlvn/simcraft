@@ -1,0 +1,15 @@
+[package]
+name = "sim-ffi"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+# libsimcraft.{dylib,so,dll,a}: Unity loads it with [DllImport("simcraft")], Unreal links it from a plugin.
+name = "simcraft"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+sim-core.workspace = true
+sim-agent = { path = "../sim-agent" }
+serde_json.workspace = true

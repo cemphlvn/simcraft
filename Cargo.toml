@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent"]
+members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi"]
 
 [workspace.package]
 edition = "2024"

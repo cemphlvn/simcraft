@@ -188,7 +188,24 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 | `{"cmd":"step","n":N}` | tick, done, result (from `end`), `scores`, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `short`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
 | `{"cmd":"snapshot"}` | `tick`, `hash`, `game`, `source` (fingerprint of `game.ron` + `engine.toml`), `snapshot`: the whole engine between ticks (world, queued acts, outcome; `format` = 1) |
-| `{"cmd":"restore","snapshot":{...}[,"source":S]}` | Back to that moment; the future is bit-identical. Refused (nothing changes) if the format differs, the world is inconsistent, a kind or state is unknown to this game, or `source` does not match. |
+| `{"cmd":"restore","snapshot":{...}[,"source":S]}` | Back to that moment; the future is bit-identical. Refused (nothing changes) if the format differs, the world is inconsistent, a kind or state is unknown to this game, or `source` does not match. Extra fields are ignored, so a **save file is the `snapshot` reply as-is**: restore = `{"cmd":"restore", …save}` |
+
+## C API (`sim-ffi`, `include/simcraft.h`, ABI 1)
+
+`libsimcraft.{dylib,so,dll,a}`. The host loads a whole game as text; everything else is the agent protocol above, so there is one protocol, not two (`simcraft-agent` and the C API share `sim_agent::Session`).
+
+| Function | Job |
+|---|---|
+| `simcraft_abi_version()` | Check at startup against `SIMCRAFT_ABI_VERSION` |
+| `simcraft_new(game_ron, engine_toml, &err)` / `simcraft_free` | Load (NULL + JSON error on failure) / release |
+| `simcraft_request(sim, json)` | Any protocol request → JSON reply |
+| `simcraft_step(sim, n)` | Advance without building JSON (stops at `end` / `max_ticks`) |
+| `simcraft_entities(sim, out, cap)` | Hot path: `{id, x, y, kind, glyph}` per entity into a flat array, no JSON. `glyph` is the designer's state → look map |
+| `simcraft_kind_name(sim, i)` | Kind index → name (owned by the handle) |
+| `simcraft_drain(sim)` | Every bus message since the last drain (JSON array) |
+| `simcraft_string_free(s)` | Every returned `char*` |
+
+NULL-safe, panic-safe, UTF-8, one handle per thread at a time. `[bus]` sinks in `engine.toml` are not attached through the C API; the host drains instead.
 
 ## Roadmap
 
@@ -201,7 +218,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 - [x] Event bus: JSONL log, live TCP stream, verified replay
 - [x] State charts: `sim-state` + game 4 (gamedev)
 - [x] World snapshot / restore
-- [ ] `sim-ffi`: versioned C API
+- [x] `sim-ffi`: versioned C API
 - [ ] Unity adapter (C# package) + sample
 - [ ] Unreal adapter (C++ plugin + Blueprints)
 - [ ] MCP wrapper (so external agents can connect directly)

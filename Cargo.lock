@@ -400,6 +400,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-ffi"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sim-agent",
+ "sim-core",
+]
+
+[[package]]
 name = "sim-rules"
 version = "0.1.0"
 dependencies = [
