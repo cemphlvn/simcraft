@@ -99,6 +99,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 | `Despawn(Me \| Nearest(kind))` | If there is no target, the rule does not fire |
 | `Spawn(kind)` | Spawns at the entity's position from the kind's template |
 | `MoveToward(kind)` / `MoveAway(kind)` / `Wander` | One step (8 directions) |
+| `Climb(kind, prop)` | One step up a gradient: to the neighbouring cell whose `kind` entity has the highest `prop`, if higher than here. Ties go to the first in a per-entity, per-tick shuffled order. Nothing higher → no move (a later rule may move instead) |
 | `Goto(state)` | Changes the entity's FSM state (validated against the kind's states) |
 | `Move(dx, dy)` | One step; `dx`, `dy` are expressions (e.g. `arg.dx`) |
 | `On(Me \| It \| Nearest(kind), [...])` | Applies the nested actions to that entity instead of the owner |
@@ -226,6 +227,7 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Seats, scores, `Need` guards, legend props (game 3)
 - [x] Event bus: JSONL log, live TCP stream, verified replay
 - [x] State charts: `sim-state` + game 4 (gamedev)
+- [x] Gradients (`Climb`) + game 5 (colony); eval-driven development (`tools/eval.py`, `docs/evals.md`)
 - [x] World snapshot / restore
 - [x] `sim-ffi`: versioned C API
 - [ ] Unity adapter (C# package) + sample: `Native`/`Simulation` tested with .NET (`adapters/unity/tests`); `SimcraftWorld` and the importer not yet compiled in Unity

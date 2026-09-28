@@ -277,6 +277,11 @@ impl World {
         n
     }
 
+    /// All in-bounds neighboring cells (8 directions); in fixed order.
+    pub fn neighbors(&self, x: i64, y: i64) -> Vec<(i64, i64)> {
+        self.ring(x, y, 1).collect()
+    }
+
     /// Neighboring (8 directions) empty cells with no solid; in fixed order.
     pub fn free_neighbors(&self, x: i64, y: i64) -> Vec<(i64, i64)> {
         self.ring(x, y, 1).filter(|&(x, y)| !self.blocked(x, y)).collect()

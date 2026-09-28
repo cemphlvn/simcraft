@@ -555,3 +555,42 @@ fn a_log_with_a_restore_still_replays() {
     assert_eq!(r.ticks, 30);
     assert_eq!(fresh.world().hash(), e.world().hash());
 }
+
+// --- colony (stigmergy) ---
+
+const COLONY: &str = include_str!("../../../games/colony/game.ron");
+const COLONY_PANEL: &str = include_str!("../../../games/colony/engine.toml");
+
+#[test]
+fn climb_steps_up_the_gradient_and_stops_at_the_top() {
+    let game = r#"#![enable(implicit_some)]
+    Game(name: "hill",
+        kinds: { "ground": (glyph: '.', solid: true, props: { "h": 0 }), "walker": (glyph: 'w') },
+        layout: (legend: { '0': ("ground", {"h": 0}), '1': ("ground", {"h": 1}), '5': ("ground", {"h": 5}), '9': ("ground", {"h": 9}) },
+                 rows: [ "0159" ]),
+        rules: [ (name: "climb", for: "walker", then: [ Climb("ground", "h") ]) ])"#;
+    let panel = "[run]\nseed = 1\nmax_ticks = 10\n[spawn]\nwalker = 1\n";
+    let mut e = boot(game, panel).expect("valid");
+    let walker = |e: &Engine<Running, Game>| e.world().entities().values().find(|x| x.kind == "walker").map(|x| x.x).unwrap();
+    for _ in 0..6 {
+        e.tick();
+    }
+    assert_eq!(walker(&e), 3, "climbs to the highest cell and stays there");
+}
+
+#[test]
+fn climb_on_a_missing_prop_is_rejected() {
+    let game = COLONY.replace(r#"Climb("ground", "scent")"#, r#"Climb("ground", "sent")"#);
+    let errs = boot(&game, COLONY_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("kind 'ground' has no prop 'sent'")), "{errs:?}");
+}
+
+#[test]
+fn golden_colony_hash() {
+    let mut e = boot(COLONY, COLONY_PANEL).expect("valid");
+    for _ in 0..200 {
+        e.tick();
+    }
+    // Recorded at eval step 007. Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "f74c4cf6b5648afd");
+}

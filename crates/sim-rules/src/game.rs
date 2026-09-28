@@ -196,6 +196,8 @@ pub enum Do {
     Spawn(String),
     MoveToward(String),
     MoveAway(String),
+    /// One step up a gradient: to the neighbouring cell whose `kind` has the highest `prop`.
+    Climb(String, String),
     Wander,
     /// Changes the FSM state (together with its effect: `[Goto("Fire"), Emit("lightning")]`).
     Goto(String),

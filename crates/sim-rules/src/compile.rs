@@ -131,6 +131,7 @@ enum CDo {
     Spawn(String),
     MoveToward(String),
     MoveAway(String),
+    Climb(String, String),
     Wander,
     Goto(String),
     Move(AST, AST),
@@ -186,6 +187,7 @@ impl Compiler<'_> {
             Do::Spawn(k) => CDo::Spawn(k.clone()),
             Do::MoveToward(k) => CDo::MoveToward(k.clone()),
             Do::MoveAway(k) => CDo::MoveAway(k.clone()),
+            Do::Climb(k, prop) => CDo::Climb(k.clone(), prop.clone()),
             Do::Wander => CDo::Wander,
             Do::Goto(s) => CDo::Goto(s.clone()),
             Do::Move(dx, dy) => CDo::Move(self.expr(dx, ctx), self.expr(dy, ctx)),
@@ -1109,6 +1111,11 @@ impl Game {
                 None => {}
             },
             CDo::Wander => out.push(wander(world, subj, salt)),
+            CDo::Climb(k, prop) => {
+                if let Some((dx, dy)) = climb(world, subj, k, prop, salt) {
+                    out.push(Effect::Move { e: subj.id, dx, dy });
+                }
+            }
             CDo::Goto(_) | CDo::Interrupt(_) | CDo::Back => self.change_state(world, who, subj, d, salt, scope, out)?,
             CDo::Move(dx, dy) => {
                 let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
@@ -1188,6 +1195,13 @@ impl Game {
             Do::Spawn(k) | Do::MoveToward(k) | Do::MoveAway(k) if !self.def.kinds.contains_key(k) => {
                 errs.push(format!("'{name}': unknown kind '{k}'"));
             }
+            Do::Climb(k, prop) => match self.def.kinds.get(k) {
+                None => errs.push(format!("'{name}': Climb on unknown kind '{k}'")),
+                Some(kd) if !kd.props.contains_key(prop) => {
+                    errs.push(format!("'{name}': Climb: kind '{k}' has no prop '{prop}'"))
+                }
+                _ => {}
+            },
             Do::Goto(st) | Do::Interrupt(st) => {
                 let verb = if matches!(d, Do::Goto(_)) { "Goto" } else { "Interrupt" };
                 let charts: Vec<&Arc<StateChart>> = subjects.iter().filter_map(|k| self.kind_charts.get(k)).collect();
@@ -1574,6 +1588,29 @@ fn need_texts(d: &Do, out: &mut Vec<String>) {
         Do::On(_, ds) => ds.iter().for_each(|d| need_texts(d, out)),
         _ => {}
     }
+}
+
+/// The neighbouring cell with the highest `prop` on a `kind` entity, if higher than here.
+/// Candidates are visited from a shuffled start, so ties do not always pull the same way.
+fn climb(world: &World, e: &Entity, kind: &str, prop: &str, salt: u64) -> Option<(i64, i64)> {
+    let value = |x: i64, y: i64| {
+        world.at(x, y).iter().map(|id| &world.entities()[id]).find(|x| x.kind == kind).and_then(|x| x.props.get(prop)).copied()
+    };
+    let cells = if world.is_solid(&e.kind) { world.free_neighbors(e.x, e.y) } else { world.neighbors(e.x, e.y) };
+    if cells.is_empty() {
+        return None;
+    }
+    let start = (world.rand(e.id, salt ^ 0x434C_494D) % cells.len() as u64) as usize;
+    let mut best = (value(e.x, e.y).unwrap_or(0), None);
+    for i in 0..cells.len() {
+        let (x, y) = cells[(start + i) % cells.len()];
+        if let Some(v) = value(x, y)
+            && v > best.0
+        {
+            best = (v, Some((x - e.x, y - e.y)));
+        }
+    }
+    best.1
 }
 
 fn wander(world: &World, e: &Entity, salt: u64) -> Effect {

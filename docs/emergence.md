@@ -151,6 +151,26 @@ Unlike games 1–3 this change was **requested** (a state engine with composable
 
 ---
 
+## Game 5: colony (`games/colony`)
+
+An ant colony through the seasons, built from the literature (`docs/research/ant-colony.md`): response thresholds and
+age polyethism for jobs, Gordon's interaction rate for leaving the nest, stigmergy (scent trails that evaporate) for
+finding food, winter dormancy on a store. Nobody plays; the score is how long the colony survives. The first game
+built **eval-driven** (`docs/evals.md`): every design change measured on fixed seeds (`games/colony/EVALS.md`).
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| 5.1 | `Unexpected variant named Climb` (first load) | Searching ants must step to the neighbouring cell with the most scent: a *gradient*, not the nearest entity | `Climb(kind, prop)`: one step to the neighbour whose `kind` has the highest `prop`, if higher than here; ties from a per-entity shuffled start; nothing higher → no move, so a later rule may move instead | `climb_steps_up_the_gradient_and_stops_at_the_top`; `climb_on_a_missing_prop_is_rejected`; trails form in the colony (up to 17 cells) |
+| 5.2 | The ground is solid (one tile per cell), so `free_neighbors` offered an ant no cell to climb to | Non-solid movers see every neighbouring cell | `World::neighbors` (in-bounds ring, game-agnostic) | same tests; golden hashes unchanged |
+| 5.3 | *(observed, not changed)* Everyone needs the season | Globals | **Not added** (as in 3.5). A `sun` entity with a season machine; others ask `near_in("sun", "Winter") < 9999`. It works, but reads awkwardly: the second game to want a global | `games/colony/game.ron` |
+| 5.4 | Colony died on tick 1 after a change (eval step 003) | **Not an engine change.** `starve` read a default prop before `temperament` set it (rules see the start of the tick, as in 2.7) | Game fix: `tolerance` starts at −1. The eval caught it at once | `games/colony/EVALS.md` step 003 → 004 |
+
+**Emergent result:** one-lever probes (`EVALS.md`) show foraging is a positive feedback loop that needs a spark.
+More food or slower eating only buys time; scouting makes every seed find food; recruitment sustains it. No rule
+states "discovery before recruitment".
+
+---
+
 ## Request: adoptable from Unity and Unreal
 
 Not a game. Product direction (architecture.md): hosts display, the core decides, one `game.ron` everywhere.
@@ -167,7 +187,7 @@ Not a game. Product direction (architecture.md): hosts display, the core decides
 
 ## What the engine became
 
-| | Before the games | After four games |
+| | Before the games | After five games |
 |---|---|---|
 | World | entity map, O(n²) `near` | grid + per-kind index, solid occupancy |
 | Rule language | `when`/`then`, 8 actions, `near`/`count`/`roll` | + `around`, `rand`, `Goto`, `Move`, `On`, `Need`, `target`/`it` |

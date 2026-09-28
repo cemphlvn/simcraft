@@ -1,0 +1,206 @@
+#![enable(implicit_some)]
+// Colony. An ant colony through the seasons; nobody plays, you watch it survive (or not).
+// Built on what real colonies do (docs/research/ant-colony.md):
+//   Division of labour  young ants nurse, older ants forage; each ant has its own age threshold,
+//                       and a hungry colony pushes ants out earlier (response thresholds).
+//   Interaction rate    waiting foragers leave when enough loaded foragers pass them at the entrance
+//                       (Gordon's harvester ants); a few scouts go anyway.
+//   Stigmergy           loaded ants mark the ground on the way home, strongest near the food;
+//                       searching ants climb that scent; scent evaporates, so dead trails fade.
+//   Seasons             bushes regrow in summer only; in winter the colony goes dormant and lives
+//                       on what it stored.
+// Ends when the last ant dies. The score is how long the colony lasted.
+Game(
+    name: "colony",
+
+    kinds: {
+        "wall":   (glyph: '#', solid: true),
+        // The season clock. Its state is the season everyone else reads.
+        "sun":    (glyph: 'S', fsm: "season",
+                   glyphs: { "Summer": 'S', "Autumn": 'A', "Winter": 'W' }),
+        // Every free cell has ground; the ground holds the scent.
+        "ground": (glyph: ' ', solid: true, fsm: "ground", props: { "scent": 0 },
+                   glyphs: { "Plain": ' ', "Trail": ':' }),
+        "nest":   (glyph: 'N', solid: true, props: { "food": 0, "born": 0 }),
+        "bush":   (glyph: '*', solid: true, fsm: "bush", props: { "berries": 0 },
+                   glyphs: { "Ripe": '*', "Bare": 'o' }),
+        "ant":    (glyph: 'a', fsm: "ant",
+                   props: { "age": 0, "threshold": -1, "tolerance": -1, "store": 0, "hunger": 0,
+                            "load": 0, "trail": 0, "searched": 0 },
+                   glyphs: { "Nurse": 'n', "Ready": 'r', "Search": 'a', "Carry": 'c', "Dormant": 'z' }),
+    },
+
+    params: {
+        // Calendar (ticks).
+        "summer": 240, "autumn": 120, "winter": 120,
+        // Food.
+        "start_food": 40,
+        "bush_max": 6,            // berries on a full bush
+        "berry_value": 6,         // food one delivered berry is worth (one trip must feed more than the forager eats)
+        "regrow_every": 12,       // one berry per bush this often, summer only
+        "meal_every": 16,         // an active ant eats one food this often
+        "winter_meal_every": 48,  // a dormant ant eats this rarely
+        "starve_at": 40, "starve_spread": 60,  // an ant dies after starve_at + rand(starve_spread) hungry ticks
+        // Brood.
+        "egg_cost": 4, "lay_chance": 6,     // % per nurse per tick, summer only
+        "brood_reserve": 20,      // nurses keep this much food back: brood follows income, not hope
+        "hungry_store": 20,       // below this much food the colony counts as hungry
+        // Division of labour.
+        "forage_age": 60, "forage_spread": 60, // an ant forages from forage_age + rand(forage_spread)
+        "hunger_push": 40,        // a hungry colony sends ants out this much younger
+        // Leaving the nest (interaction rate).
+        "entrance_r": 2, "contacts": 2, "scout_chance": 6,
+        // Searching and stigmergy.
+        "noise": 20,              // % of steps a searcher wanders instead of climbing the scent
+        "patience": 80,           // a searcher gives up and goes back after this long
+        "trail_max": 60, "trail_step": 3,   // scent laid right at the food, and how fast it weakens on the way home
+        "scent_max": 200,
+        "evaporation": 4,         // % of the scent lost per tick
+        "trail_seen": 10,         // scent at or above this shows as a trail
+    },
+
+    layout: (
+        legend: { '#': "wall", ',': "ground", 'N': "nest", '*': "bush", 'a': "ant", 'S': "sun" },
+        rows: [
+            "################################",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,*,,,,,,,,,,,,,,,,,,,,,,,*,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,*,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,*,,,#",
+            "#,,,,,,,,,,,,,aaa,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,aNa,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,aaa,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,*,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,*,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,*,,,,,,,,,,,,,,,,,,,#",
+            "#,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,#",
+            "S###############################"
+        ],
+    ),
+
+    fsms: {
+        "season": (
+            initial: "Summer",
+            transitions: [
+                (from: "Summer", to: "Autumn", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer"),
+                (from: "Autumn", to: "Winter", when: "tick % (p.summer + p.autumn + p.winter) >= p.summer + p.autumn"),
+                (from: "Winter", to: "Summer", when: "tick % (p.summer + p.autumn + p.winter) < p.summer"),
+            ],
+        ),
+
+        "ground": (
+            initial: "Plain",
+            transitions: [
+                (from: "Plain", to: "Trail", when: "me.scent >= p.trail_seen"),
+                (from: "Trail", to: "Plain", when: "me.scent < p.trail_seen"),
+            ],
+        ),
+
+        "bush": (
+            initial: "Ripe",
+            transitions: [
+                (from: "Ripe", to: "Bare", when: "me.berries == 0"),
+                (from: "Bare", to: "Ripe", when: "me.berries > 0"),
+            ],
+        ),
+
+        "ant": (
+            initial: "Active",
+            states: {
+                "Active": (
+                    remember: true,
+                    initial: "Nurse",
+                    rules: [
+                        (name: "grow_older", then: [ Add("age", "1") ]),
+                    ],
+                    states: {
+                        // Young ants stay home and turn food into brood.
+                        "Nurse": (rules: [
+                            (name: "stay_home", then: [ MoveToward("nest") ]),
+                            (name: "raise_brood", target: Nearest("nest"),
+                             when: r#"it.dist <= 1 && it.food >= p.egg_cost + p.brood_reserve && near_in("sun", "Summer") < 9999 && roll < p.lay_chance"#,
+                             then: [ On(It, [ Need("food", "p.egg_cost"), Add("food", "-p.egg_cost"), Add("born", "1") ]),
+                                     Spawn("ant"), Emit("born") ]),
+                        ]),
+                        "Forager": (
+                            initial: "Ready",
+                            states: {
+                                // Waiting at the entrance.
+                                "Ready": (rules: [ (name: "wait_at_entrance", then: [ MoveToward("nest") ]) ]),
+                                // Out looking: climb the scent, sometimes wander.
+                                "Search": (
+                                    enter: [ Set("searched", "0") ],
+                                    rules: [
+                                        (name: "explore", when: "roll < p.noise", then: [ Wander ]),
+                                        (name: "follow_scent", then: [ Climb("ground", "scent") ]),
+                                        // No scent to climb: head outward, like real scouts (a correlated walk away from home).
+                                        (name: "no_scent_here", then: [ MoveAway("nest") ]),
+                                        (name: "search_time", then: [ Add("searched", "1") ]),
+                                        (name: "pick_berry", target: NearestIn("bush", "Ripe"), when: "it.dist <= 1",
+                                         then: [ On(It, [ Need("berries", "1"), Add("berries", "-1") ]),
+                                                 Set("load", "1"), Set("trail", "p.trail_max"), Goto("Carry") ]),
+                                    ],
+                                ),
+                                // Loaded: walk home and mark the way.
+                                "Carry": (rules: [
+                                    (name: "walk_home", then: [ MoveToward("nest") ]),
+                                    (name: "mark_trail", target: Nearest("ground"), when: "it.dist == 0 && me.trail > 0",
+                                     then: [ On(It, [ Set("scent", "min(p.scent_max, it.scent + me.trail)") ]),
+                                             Set("trail", "max(0, me.trail - p.trail_step)") ]),
+                                    (name: "deliver", target: Nearest("nest"), when: "it.dist <= 1",
+                                     then: [ On(It, [ Add("food", "me.load * p.berry_value") ]), Set("load", "0"), Goto("Ready"), Emit("delivered") ]),
+                                ]),
+                            },
+                            transitions: [
+                                // Interaction rate: enough loaded foragers passing by, or a scout's whim.
+                                (from: "Ready", to: "Search",
+                                 when: r#"around("ant", "Carry", p.entrance_r) >= p.contacts || roll < p.scout_chance"#),
+                                (from: "Search", to: "Ready", when: "me.searched >= p.patience"),
+                            ],
+                        ),
+                    },
+                    transitions: [
+                        // Response threshold: each ant's own age, lowered when the colony is hungry.
+                        (from: "Nurse", to: "Forager",
+                         when: "me.threshold >= 0 && me.age >= me.threshold - (if me.store < p.hungry_store { p.hunger_push } else { 0 })"),
+                    ],
+                ),
+                // Winter: cluster in the nest, eat little, wait.
+                "Dormant": (rules: [ (name: "huddle", then: [ MoveToward("nest") ]) ]),
+            },
+            transitions: [
+                (from: "Active",  to: "Dormant", when: r#"near_in("sun", "Winter") < 9999"#),
+                (from: "Dormant", to: "Active",  when: r#"near_in("sun", "Winter") >= 9999"#),
+            ],
+            rules: [
+                (name: "temperament", when: "me.threshold < 0",
+                 then: [ Set("threshold", "p.forage_age + rand(p.forage_spread)"),
+                         Set("tolerance", "p.starve_at + rand(p.starve_spread)") ]),
+                (name: "sense_store", target: Nearest("nest"), then: [ Set("store", "it.food") ]),
+                // Food is shared through the colony (trophallaxis): every ant eats from the store.
+                (name: "eat", target: Nearest("nest"),
+                 when: r#"tick % (if in_state("Dormant") { p.winter_meal_every } else { p.meal_every }) == me.id % p.meal_every"#,
+                 then: [ On(It, [ Need("food", "1"), Add("food", "-1") ]), Set("hunger", "0") ]),
+                (name: "go_hungry", when: "me.store == 0", then: [ Add("hunger", "1") ]),
+                // -1 until temperament has run (rules see the start of the tick).
+                (name: "starve", when: "me.tolerance >= 0 && me.hunger >= me.tolerance", then: [ Emit("starved"), Despawn(Me) ]),
+            ],
+        ),
+    },
+
+    rules: [
+        (name: "regrow", for: "bush",
+         when: r#"near_in("sun", "Summer") < 9999 && tick % p.regrow_every == 0 && me.berries < p.bush_max"#,
+         then: [ Add("berries", "1") ]),
+        (name: "evaporate", for: "ground", when: "me.scent > 0",
+         then: [ Set("scent", "me.scent * (100 - p.evaporation) / 100") ]),
+        (name: "provision", for: "nest", when: "tick == 0", then: [ Set("food", "p.start_food") ]),
+    ],
+
+    end: [ (when: "count.ant == 0", result: "extinct") ],
+)

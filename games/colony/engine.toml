@@ -1,0 +1,12 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (colony)
+#  One year = summer + autumn + winter ticks. Watch how many years the colony lasts.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 12000
+
+[params]
+evaporation = 4
+contacts = 1
