@@ -50,6 +50,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 | `sim-ffi` | `cdylib` + `staticlib`, C header; the agent protocol behind `extern "C"` | No |
+| `sim-render` | Terminal renderer (cell buffer, diff, frame loop), primitives, 3D voxel view, `view.ron`; `simcraft-view` | No |
 
 ## Tick loop
 
@@ -110,7 +111,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 
 **What expressions can see:** `me.<prop>`, `me.x/y/state/kind/id`, `p.<param>`, `near.<kind>` (Chebyshev distance, 9999 if none), `count.<kind>`, `tick`, `roll` (0..99, deterministic per rule and entity).
 
-**World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `rand(n)` → 0..n-1, deterministic.
+**World queries (functions):** `around(kind, r)` / `around(kind, state, r)` count entities within Chebyshev radius `r` (self excluded); `nearest_prop(kind, prop, r, default)` reads a prop of the nearest such entity within `r` (else `default`: what you feel of the nest you sit in); `rand(n)` → 0..n-1, deterministic.
 
 `near.<kind>` is computed only for kinds that some expression mentions as `near.<kind>`.
 
@@ -126,7 +127,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 
 **Seats (panel):** `[agent] seats = {alice = 1, bob = 2}` makes the game multi-player. Requests carry `"as": "<seat>"`; an entity belongs to a seat when its `owner` prop equals the seat's number, and controllable kinds must declare `owner`.
 
-**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, `hidden: bool` (not drawn), and `glyphs: {state: char}` for per-state rendering (the deepest matching state wins).
+**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, `hidden: bool` (not drawn), `glyphs: {state: char}` for per-state rendering (the deepest matching state wins), and `senses: {name: expr}` (see Perception).
 
 ## State machines (`fsms:`)
 
@@ -164,6 +165,82 @@ Words come from tools designers already know (Unity Animator, Unreal StateTree /
 **Validation.** Names may not contain `. | # ^ = ,` or be `*`. Every compound state needs `initial` or `pick`; transitions name existing children; `use` must exist and must not loop (`a → b → a`: use `interrupt` for recursion); a state with `use` cannot also declare `states`/`layers`/`initial`/`pick`/`transitions`; every `state:` selector, glyph key and `Goto`/`Interrupt` target must match a state of its kind (`Goto` needs exactly one). Machine rule names share the switch namespace.
 
 **In the world** the state stays one string (`sim-core` is untouched): the active states, then `#` remembered children, then `^` saved interrupts, e.g. `Life.Awake.Stuck.Refactor.Warmup|Mood.Tired#Life.Awake.Work=Build^Life.Awake=Work.Build.Flow`. A flat machine's state is still just `Roam`, so existing games keep their hashes. Observers (`states` in `observe`/`step`) see only the active part.
+
+## Perception (`senses`)
+
+By default an agent does **not** see external reality. It senses it, through functions its kind defines:
+
+```ron
+"ant": (glyph: 'a', fsm: "ant",
+        senses: {
+            "warmth": r#"if near.nest <= 1 { env.seasons.warmth / 2 + p.nest_warmth } else { env.seasons.warmth }"#,
+        }),
+```
+
+- A kind's `senses` are expressions evaluated once per entity per tick, at the start of the tick. They see
+  everything: `me`, `p`, `tick`, `count`, `env`, `near` and the spatial queries. Their results are `sense.<name>`.
+- Everything else a kind writes (its rules, actions, state machine guards, picks, `enter`/`exit`/`then`) sees `me`,
+  `p`, `sense`, `roll`, `rand`, `arg`, `it`, and the spatial queries (`near`, `around`, `near_in`, targets,
+  `in_state`, `steps_to`), but **not** `env`, `tick` or `count`. Using them there fails at load, with a hint to add
+  a sense. What a kind knows about the world is exactly what its senses say; senses can be local, lagged or noisy.
+- Environments' own rules, `end` and `score` see everything: they are the world and the judge.
+- `perception: Direct` in `game.ron` turns this off (every expression sees everything). The first five games use it;
+  new games get senses.
+
+## 3D worlds and fields (physical environments)
+
+A world has `width × height × depth` voxels; 2D games have depth 1 and behave (and hash) exactly as before.
+
+- **Coordinates:** every entity has `x, y, z` (`z` = 0 is the top level; deeper levels have larger `z`).
+  Distance is Chebyshev in 3D (`max(|dx|, |dy|, |dz|)`); neighbours are the 26 around a voxel (8 at depth 1).
+- **Layout by levels:** `layout: (legend: {...}, cells: {',': {"soil": 1}}, levels: [ [rows of level 0], ... ])`
+  (`rows:` alone is one level). `cells` sets field values at a glyph's voxels without placing an entity.
+- **Fields** are numbers per voxel, owned by the world (hashed, snapshotted, replayed):
+  `fields: { "temp": (init: 50, diffusion: 20, top: "env.seasons.warmth"), "soil": (init: 0) }`.
+  - `diffusion`: % of the difference to the average of the 6 face neighbours moved per tick (integers; heat spreads
+    through soil). `top`: a world-level expression pinned onto level 0 after diffusion, every tick (the air above
+    the ground holds its value at the end of each tick).
+  - Physics runs natively after `apply`, every tick, in voxel order: deterministic, no Rhai per voxel.
+  - Fields are integers: use fine units (e.g. centidegrees, 0..10000) so that slow flows do not round to zero.
+  - `decay`: % of a field's value lost per tick (pheromone evaporation), applied after diffusion.
+  - `terrain: "soil"`: a voxel whose `soil` field is non-zero is solid for every mover (dig by setting it to 0).
+    A step into terrain **slides** along it: it tries (dx, dy, 0), then (0, 0, dz), then (dx, 0, 0), then (0, dy, 0),
+    and takes the first open one. (Only worlds with terrain slide; 2D games have none.)
+- **Rule language:** `me.z`, `it.z`; `Move3(dx, dy, dz)`; `MoveToward` / `MoveAway` / `Wander` / `Climb` work in 3D;
+  `field("temp")` (at me) and `field_at("temp", dx, dy, dz)` in expressions; actions `SetField(name, expr)`,
+  `AddField(name, expr)` at the subject's voxel, `SetFieldAt(name, dx, dy, dz, expr)` at a voxel next to it (dig);
+  `ClimbField(name)` steps to the open neighbour with the most `name`.
+- `around` and `near` count and measure in 3D.
+
+## Renderer (`sim-render`)
+
+A framework for game interfaces, in this workspace, with its own terminal renderer.
+
+- **Native renderer:** a cell buffer (character, foreground, background in 24-bit colour); each frame is diffed
+  against the last and only changed cells are written, inside a synchronized update (no tearing). Terminal I/O via
+  `crossterm` only. The frame loop targets a refresh rate independent of the simulation's tick rate.
+- **Dimensionality is a view, not the world:** the core is as many dimensions as the game needs (depth 1 = 2D); a
+  world view picks a **projection**:
+  - `(dim: "2D", level: 0)`: one level, top-down.
+  - `(dim: "2.5D")`: levels stacked (side by side with `across: true`), e.g. the nest's levels under the surface.
+  - `(dim: "3D", yaw, pitch, zoom, cut)`: voxels and entities ray-cast from an orbit camera, with a cutaway to see inside.
+  - `(dim: "custom", n: 3, x, y, fixed: [(axis, value)])`: world axes to screen x / y, the rest fixed ("slice" any
+    axis: a vertical cross-section is x → screen x, z → screen y, y fixed). Any view may `tint` by a field.
+- **Components** (like a frontend component library): every widget is a component, registered by name, configured
+  by **props**, styled by the **theme**. Built in: `Title`, `World` (a projection), `Env`, `Inspector` (one entity:
+  props, senses, active states), `Series` (sparklines), `Counts`, `Legend`, `Events`, `Help`, `Text`. Your own
+  components: implement `Component` in Rust and register it, or compose existing ones in data (`components:` in a
+  view). Layout: `Rows` / `Cols` with `Fixed`, `Percent` or `Fill` sizes.
+- **Themes** (like CSS tokens and classes): `Theme(colors: {"text": (230, 230, 230), ...}, border: Rounded,
+  classes: {"warning": {"text": (240, 190, 90)}})`. Components ask for tokens, never raw colours; a node's `class`
+  overrides tokens for that subtree. Built in: `dark`, `light`; a game may bring `theme.ron`.
+- **Asset libraries** (like game-dev asset packs): `assets/<pack>.ron` gives each kind its look, separate from its
+  rules: glyph and colour per state, and a voxel colour for 3D. Packs are reusable across games; without one, the
+  game's `glyphs` and a stable colour per kind are used.
+- **Views as data:** `games/<name>/view.ron` names a theme and asset packs, defines composite components, and lays
+  out components with props, the way `game.ron` defines the game:
+  `C(name: "Series", props: {"names": ["nest.food"]}, class: "warning")`. The Rust API is the same in code.
+- **In-process:** the renderer links the engine; no JSON per frame. `simcraft-view games/<name>` runs a game with its view.
 
 ## Environments (`envs/<name>.ron`)
 
@@ -266,7 +343,10 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] Gradients (`Climb`) + game 5 (colony); eval-driven development (`tools/eval.py`, `docs/evals.md`)
 - [x] Environments (`envs/`, `env.<name>`, native implementations with conformance), maths helpers
 - [ ] C API: pass environment files with the game (hosts cannot load games with `environments` through `simcraft_new` yet)
-- [ ] Fields: a number per cell with deposit, evaporation and diffusion built in (replaces entity-per-cell scent)
+- [x] 3D worlds (depth, z, 26-neighbourhood) and fields (per-voxel numbers, native diffusion, decay, terrain)
+- [x] `sim-render`: native terminal renderer, components, themes, asset packs, projections, `view.ron`
+- [x] Colony underground: the nest as a physical environment (game 6, `games/colony3d`)
+- [x] Perception: per-kind `senses`
 - [x] World snapshot / restore
 - [x] `sim-ffi`: versioned C API
 - [ ] Unity adapter (C# package) + sample: `Native`/`Simulation` tested with .NET (`adapters/unity/tests`); `SimcraftWorld` and the importer not yet compiled in Unity

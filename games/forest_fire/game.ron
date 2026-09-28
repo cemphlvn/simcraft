@@ -6,6 +6,8 @@
 // Nothing here is about fire size, yet fires come in every size: the interesting part is emergent.
 Game(
     name: "forest_fire",
+    // Written before senses existed: every expression sees the whole world.
+    perception: Direct,
 
     kinds: {
         "patch": (glyph: '.', solid: true, fsm: "patch",

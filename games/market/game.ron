@@ -6,6 +6,8 @@
 // Score: gold + houses × house_value.
 Game(
     name: "market",
+    // Written before senses existed: every expression sees the whole world.
+    perception: Direct,
 
     kinds: {
         "wall":    (glyph: '#', solid: true),

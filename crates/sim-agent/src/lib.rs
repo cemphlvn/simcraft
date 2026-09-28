@@ -97,7 +97,7 @@ impl Session {
             .kinds
             .iter()
             .map(|(name, k)| {
-                (name, json!({ "glyph": k.glyph.to_string(), "props": k.props, "states": g.states_of(name) }))
+                (name, json!({ "glyph": k.glyph.to_string(), "props": k.props, "states": g.states_of(name), "hidden": k.hidden, "glyphs": k.glyphs }))
             })
             .collect();
         json!({

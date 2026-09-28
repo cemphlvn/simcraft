@@ -10,3 +10,6 @@ adapters/unity/tests/bin/
 adapters/unity/tests/obj/
 # skills/install.sh output (machine-specific symlinks)
 .claude/skills/
+
+# Python caches
+__pycache__/

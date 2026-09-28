@@ -75,9 +75,10 @@ Başka yapay zekâ araçları: onları `skills/<ad>/SKILL.md`'ye (Agent Skills b
 | **Bilgisayar mühendisliği** | [`docs/architecture.md`](docs/architecture.md), sonra [`CONTRIBUTING.tr.md`](CONTRIBUTING.tr.md) | Rust çekirdeği: kural derleyicisi, durum şemaları, determinizm, C API |
 | **Sanat ve tasarım** | [`adapters/unity`](adapters/unity/com.simcraft.core), [`adapters/unreal`](adapters/unreal/Simcraft) | Her kind için prefab ve actor, her durum için bir görünüm (`glyphs`): çekirdek karar verirken oyuncunun gördüğü |
 
-**Şimdiye kadar altı oyun:** `wolf_sheep` (avcı ve av), `forest_fire` (her boyda yangın), `mercy_dungeon` (dövüş ya da bağışla),
+**Şimdiye kadar yedi oyun:** `wolf_sheep` (avcı ve av), `forest_fire` (her boyda yangın), `mercy_dungeon` (dövüş ya da bağışla),
 `market` (takas eden iki oyuncu), `gamedev` (kendi motoru üzerinde oyun geliştiren bir stüdyo), `colony` (karıncalar,
-koku izleri ve kış; [eval odaklı](games/colony/EVALS.md) yapıldı). Motorun bu oyunlardan
+koku izleri ve kış; [eval odaklı](games/colony/EVALS.md) yapıldı), `colony3d` (aynı koloni yeraltında: fiziksel bir
+yuva, alan olarak sıcaklık ve koku). Motorun bu oyunlardan
 adım adım nasıl büyüdüğü: [`docs/emergence.md`](docs/emergence.md).
 
 ## Tur
@@ -153,7 +154,16 @@ cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
 # {"ok":true,"verified_ticks":150,"acts":234,...}
 ```
 
-### Kaydet ve yükle
+### Gör
+
+```bash
+cargo run --release -p sim-render -- games/colony3d     # yüzey, yuva kesiti, 3B; tab bir karıncayı seçer
+```
+
+Arayüz de veridir: `games/colony3d/view.ron` bileşenleri (2B, 2.5B, 3B ya da herhangi bir kesitte dünya görünümleri,
+inceleyici, eğilimler) bir tema ve bir asset paketiyle (`assets/ants.ron`) yerleştirir.
+
+## Kaydet ve yükle
 
 `{"cmd":"snapshot"}` oyunun tamamını döndürür; `{"cmd":"restore",...}` o ana geri götürür ve gelecek bit bit aynıdır.
 

@@ -17,6 +17,12 @@ Raw results: `evals/NNN-*.json`. Re-run the last step: `tools/eval.py games/colo
 | 009 | Berry value fluctuates: per-bush quality (50–150 %) × seasonal ripeness (0 → peak mid-season → 0) | 865 | 78.2 | 72 | **Worse (−50 %).** Food per trip barely moved (6.3), deliveries halved: ripeness starts at 0 each summer, so the colony meets its early famine with its poorest food (a *spring gap*) |
 | 010 | Trails weighted by value (scent = value × `trail_per_value`) | 861.6 | 41.2 | 72 | **Worse again.** Food per trip fell (6.15): no concentration on the best bushes. Low early values mean weak early trails, exactly when the colony needs them. The mechanism is real in ants; here the constraint is timing, not choice |
 | 011 | Refactor: seasons moved to a shared environment (`envs/seasons.ron`, read as `env.seasons.*`) | 861.6 | 41.2 | 72 | **Identical** to step 010 on every metric and seed (`--check`): the engine change and the move changed nothing the game does |
+| 012 | Measure the loop: `loop_closed` (alive after 5 years), `spring_store` (no game change) | 861.6 | 41.2 | 72 | The loop closes in 0 of 5 worlds. Colonies die in late winter or the first 20 days of summer; autumn is the drain (full appetite, falling supply) |
+| 013 | Perception: agents sense the world (`senses`), perfect senses | 861.6 | 41.2 | 72 | **Identical.** Ants, bushes and the nest no longer read `env`/`tick`; the engine refuses direct reads |
+| 014 | Metabolism follows *felt* warmth (nest climate at home, open air outside) | 2400 | 203.6 | 66 | **Loop closed 5 of 5.** The nest has a climate: insulation, solar gain, workers' heat (all from wood-ant research) |
+| 015 | Brood grows with warmth (lay chance × felt warmth) | 2135.2 | 197.8 | 66 | Mixed: stores up (spring 85 → 102), one world lost (4 of 5). Births barely move (5.4 → 5.6): brood is limited by nurses, not warmth |
+| 016 | Ants move with warmth (walking speed ∝ temperature, min 10 %) | 1149.8 | 61.8 | 78 | **Loop 1 of 5.** Slow ants in the cool start of summer break recruitment and trails: scent evaporates per tick while ants crawl |
+| 017 | Fix: no walls. Ants are not solid, so "search outward" walked them into the wall ring (seen in the viewer) | 948.2 | 49 | 78 | Within the noise of 5 seeds (loop still 1 of 5). Correctness, not tuning |
 
 ## Probes after step 004 (one lever each, `--set`, not saved)
 
@@ -44,3 +50,12 @@ harvester ants): hence `berry_value` in step 007.
 `births` stays at ~4 even with plenty of food. Observed in seed 1: nurses 8 → 3 → 0 by tick 120 (age polyethism turns
 every nurse into a forager, and brood was held back early), so the colony can live but cannot grow. Seed 1 also shows
 an early famine: 13 ants at tick 60, 1 ant at tick 120, before foraging pays off; the lone survivor lasts to tick 538.
+
+## Probes around steps 014–016
+
+- **Thatching** (ants at home who feel cold rebuild insulation), probed after 014: *worse* (loop 5 → 4 of 5). In the model
+  warmth only costs (more burn), nothing rewards it. Hence 015/016: warmth must also pay (brood, speed). Left off.
+- After 016: `min_speed` 30 → loop 1/5, 50 → 0/5; `warmth_lag` 0 → 0/5, 120 → 2/5. Non-monotonic: at 5 seeds the
+  differences are within noise now. Next decisions need more seeds.
+- Missing physics: pheromone evaporation should slow in the cold (volatility falls with temperature), so cold ants are
+  slow but their trails last longer. The scent currently ignores temperature.

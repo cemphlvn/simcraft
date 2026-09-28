@@ -1,0 +1,149 @@
+{
+ "step": 14,
+ "change": "metabolism follows felt warmth (nest climate at home, open air outside)",
+ "seeds": {
+  "1": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 57,
+   "deliveries": 223,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 0,
+   "winter_store": 117,
+   "trail_cells": 39,
+   "income": 1310,
+   "food_per_trip": 5.87,
+   "loop_closed": 1,
+   "spring_store": 91
+  },
+  "2": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 63,
+   "deliveries": 218,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 0,
+   "winter_store": 127,
+   "trail_cells": 43,
+   "income": 1393,
+   "food_per_trip": 6.39,
+   "loop_closed": 1,
+   "spring_store": 102
+  },
+  "3": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 72,
+   "deliveries": 164,
+   "peak_ants": 15,
+   "births": 7,
+   "starved": 5,
+   "winter_store": 135,
+   "trail_cells": 43,
+   "income": 979,
+   "food_per_trip": 5.97,
+   "loop_closed": 1,
+   "spring_store": 114
+  },
+  "4": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 51,
+   "deliveries": 184,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 4,
+   "winter_store": 47,
+   "trail_cells": 35,
+   "income": 917,
+   "food_per_trip": 4.98,
+   "loop_closed": 1,
+   "spring_store": 22
+  },
+  "5": {
+   "survived": 2400,
+   "winters": 5,
+   "first_delivery": 53,
+   "deliveries": 229,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 0,
+   "winter_store": 124,
+   "trail_cells": 44,
+   "income": 1243,
+   "food_per_trip": 5.43,
+   "loop_closed": 1,
+   "spring_store": 98
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 2400.0,
+   "min": 2400,
+   "max": 2400
+  },
+  "winters": {
+   "mean": 5.0,
+   "min": 5,
+   "max": 5
+  },
+  "first_delivery": {
+   "mean": 59.2,
+   "min": 51,
+   "max": 72
+  },
+  "deliveries": {
+   "mean": 203.6,
+   "min": 164,
+   "max": 229
+  },
+  "peak_ants": {
+   "mean": 13.4,
+   "min": 13,
+   "max": 15
+  },
+  "births": {
+   "mean": 5.4,
+   "min": 5,
+   "max": 7
+  },
+  "starved": {
+   "mean": 1.8,
+   "min": 0,
+   "max": 5
+  },
+  "winter_store": {
+   "mean": 110.0,
+   "min": 47,
+   "max": 135
+  },
+  "trail_cells": {
+   "mean": 40.8,
+   "min": 35,
+   "max": 44
+  },
+  "income": {
+   "mean": 1168.4,
+   "min": 917,
+   "max": 1393
+  },
+  "food_per_trip": {
+   "mean": 5.73,
+   "min": 4.98,
+   "max": 6.39
+  },
+  "loop_closed": {
+   "mean": 1.0,
+   "min": 1,
+   "max": 1
+  },
+  "spring_store": {
+   "mean": 85.4,
+   "min": 22,
+   "max": 114
+  }
+ },
+ "errors": {}
+}

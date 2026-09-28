@@ -1,0 +1,16 @@
+// The default theme: tokens every component uses. Override any token in a game's theme.ron or with a class.
+Theme(
+    border: Rounded,
+    colors: {
+        "bg": (10, 10, 14), "text": (230, 230, 230), "dim": (110, 110, 120), "accent": (170, 175, 200),
+        "border": (60, 64, 84), "title_bg": (28, 30, 44), "title_text": (235, 235, 245),
+        "bar": (200, 190, 140), "trend_up": (110, 220, 130), "trend_down": (235, 100, 90),
+        "senses": (140, 200, 255), "props": (190, 190, 200),
+        "air": (16, 16, 20), "soil": (120, 86, 54), "soil_glyph": (130, 95, 60),
+        "sky_low": (12, 14, 22), "sky_high": (32, 40, 72),
+    },
+    classes: {
+        "warning": { "text": (240, 190, 90), "border": (120, 90, 40) },
+        "calm": { "text": (150, 200, 180), "border": (40, 80, 70) },
+    },
+)

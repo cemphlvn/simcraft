@@ -1,49 +1,45 @@
 #![enable(implicit_some)]
-// Colony. An ant colony through the seasons; nobody plays, you watch it survive (or not).
-// Built on what real colonies do (docs/research/ant-colony.md):
-//   Division of labour  young ants nurse, older ants forage; each ant has its own age threshold,
-//                       and a hungry colony pushes ants out earlier (response thresholds).
-//   Interaction rate    waiting foragers leave when enough loaded foragers pass them at the entrance
-//                       (Gordon's harvester ants); a few scouts go anyway.
-//   Stigmergy           loaded ants mark the ground on the way home, strongest near the food;
-//                       searching ants climb that scent; scent evaporates, so dead trails fade.
-//   Seasons             bushes regrow in summer only; in winter the colony goes dormant and lives
-//                       on what it stored.
-// The edge of the world is the boundary (no walls: ants are not solid and would walk into them).
-// Ends when the last ant dies. The score is how long the colony lasted.
+// Colony 3D. The colony rebuilt for simcraft's 3D worlds and renderer (the 2D original: games/colony).
+// The nest is a physical place: a shaft into the soil, a granary at level 3, a deep chamber at level 5.
+//   Temperature is a field. The air pins the surface; heat diffuses slowly through the soil, so deep soil lags
+//   the seasons (cool in summer, mild in winter). Ants add body heat. Each ant feels the temperature where it is.
+//   Scent is a field that evaporates. Foragers lay it on the way home; searchers climb it.
+//   In winter ants go down and climb the warmth gradient: where they cluster is found, not scripted.
+// Research: docs/research/ant-colony.md. Ends when the last ant dies.
 Game(
-    name: "colony",
+    name: "colony3d",
     environments: ["seasons"],
 
+    fields: {
+        "soil":  (init: 0),
+        // Centidegrees (0..10000): integer diffusion needs fine units, or small flows round to nothing.
+        "temp":  (init: 5000, diffusion: 20, top: "env.seasons.warmth * 100"),
+        "scent": (init: 0, decay: 4),
+    },
+    terrain: "soil",
+
     kinds: {
-        // Every free cell has ground; the ground holds the scent.
-        "ground": (glyph: ' ', solid: true, fsm: "ground", props: { "scent": 0 },
-                   glyphs: { "Plain": ' ', "Trail": ':' }),
-        // The nest has a climate: outside warmth leaks in through its insulation, the mound collects sun,
-        // ants at home add body heat. Its temperature is what ants feel at home.
-        "nest":   (glyph: 'N', solid: true, fsm: "nest",
-                   props: { "food": 0, "born": 0, "income": 0, "temp": 50, "insulation": 40 },
-                   senses: { "first_tick": "tick == 0", "clock": "tick", "outside": "env.seasons.warmth",
-                             "summer": r#"env.seasons.state == "Summer""#, "crowd": r#"around("ant", 1)"# }),
+        "entrance": (glyph: 'O'),
+        "nest":   (glyph: 'N', fsm: "nest", props: { "food": 0, "born": 0, "income": 0 },
+                   senses: { "first_tick": "tick == 0" }),
         "bush":   (glyph: '*', solid: true, fsm: "bush", props: { "berries": 0, "quality": -1, "value": 1 },
                    glyphs: { "Ripe": '*', "Bare": 'o' },
-                   // A plant senses its season and the land's ripeness.
                    senses: { "clock": "tick", "summer": r#"env.seasons.state == "Summer""#,
                              "ripeness": "env.seasons.ripeness" }),
         "ant":    (glyph: 'a', fsm: "ant",
                    props: { "age": 0, "threshold": -1, "tolerance": -1, "store": 0, "hunger": 0, "appetite": 0,
                             "load": 0, "trail": 0, "searched": 0 },
                    glyphs: { "Nurse": 'n', "Ready": 'r', "Search": 'a', "Carry": 'c', "Dormant": 'z' },
-                   // What an ant knows of the world (docs/research/ant-colony.md, "How ants sense the seasons").
-                   // Warmth is felt locally with the antennae; at the nest it is buffered towards nest_temp.
+                   // What an ant knows: the temperature of the voxel it stands in, and its clock.
                    senses: { "clock": "tick", "summer": r#"env.seasons.state == "Summer""#,
                              "winter": r#"env.seasons.state == "Winter""#,
-                             "warmth": r#"if near.nest <= 1 { nearest_prop("nest", "temp", 1, 0) } else { env.seasons.warmth }"#,
-                             // Walking speed rises with temperature: a cold ant moves on fewer ticks.
-                             "moving": r#"p.cold_moves == 0 || rand(100) < max(p.min_speed, if near.nest <= 1 { nearest_prop("nest", "temp", 1, 0) } else { env.seasons.warmth })"# }),
+                             "warmth": r#"field("temp") / 100"#,
+                             "moving": r#"p.cold_moves == 0 || rand(100) < max(p.min_speed, field("temp") / 100)"# }),
     },
-
     params: {
+        "body_heat": 20,          // centidegrees an ant adds to its voxel per tick underground (agents shape their climate)
+        "noise": 20,              // % of steps a searcher wanders instead of climbing the scent
+        "scent_max": 200,
         // Food.
         "start_food": 40,
         "bush_max": 6,            // berries on a full bush
@@ -53,13 +49,6 @@ Game(
         "meal_every": 16,         // an active ant eats one food this often (in full warmth, if cold_metabolism)
         "cold_metabolism": 1,     // 1 = active ants burn food in proportion to the warmth they feel (Q10: ectotherms)
         "cold_floor": 10,         // ...but never below this % of the summer rate
-        // Nest climate (Formica mounds: insulation, solar gain, workers' metabolic heat).
-        "core_temp": 50,          // warmth of the deep soil the insulation holds the nest towards
-        "solar": 20,              // % of the outside warmth the mound collects as extra heat
-        "ant_heat": 3, "heat_cap": 30,  // warmth each ant at home adds, and the most they can add
-        "nest_inertia": 6,        // the nest moves 1/nest_inertia of the way to its target each tick
-        "weather_every": 20,      // insulation lost: 1 per this many ticks in summer, twice as fast otherwise
-        "build_below": 60, "thatch_chance": 0, "thatch": 2,  // an ant at home feeling colder than build_below adds thatch (% per tick; 0 = never)
         "dormant_below": 0,       // > 0 = go dormant whenever warmth is below this, not only in winter
         "winter_meal_every": 48,  // a dormant ant eats this rarely
         "starve_at": 40, "starve_spread": 60,  // an ant dies after starve_at + rand(starve_spread) hungry ticks
@@ -75,60 +64,133 @@ Game(
         // Leaving the nest (interaction rate).
         "entrance_r": 2, "contacts": 2, "scout_chance": 6,
         // Searching and stigmergy.
-        "noise": 20,              // % of steps a searcher wanders instead of climbing the scent
         "patience": 80,           // a searcher gives up and goes back after this long
         "trail_per_value": 10, "trail_step": 3, // scent laid at the food per unit of berry value, and how fast it weakens on the way home
-        "scent_max": 200,
-        "evaporation": 4,         // % of the scent lost per tick
-        "trail_seen": 10,         // scent at or above this shows as a trail
     },
 
     layout: (
-        legend: { ',': "ground", 'N': "nest", '*': "bush", 'a': "ant", 'S': "seasons" },
-        rows: [
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,*,,,,,,,,,,,,,,,,,,,,,,,*,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,*,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,*,,,,",
-            ",,,,,,,,,,,,,,aaa,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,aNa,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,aaa,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,*,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,*,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,*,,,,,,,,,,,,,,,,,,,,",
-            ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
-            "S,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,",
+        legend: { 'N': "nest", '*': "bush", 'a': "ant", 'E': "entrance" },
+        cells: { 'x': { "soil": 1 } },
+        levels: [
+            [ // level 0  surface
+                "................................",
+                "................................",
+                "...*.......................*....",
+                "................................",
+                "................................",
+                ".........*......................",
+                "...........................*....",
+                "................................",
+                "................................",
+                "................E...............",
+                "................................",
+                "....*...........................",
+                ".........................*......",
+                "................................",
+                "................................",
+                "...........*....................",
+                "................................",
+                "................................" ],
+            [ // level 1
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ],
+            [ // level 2
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ],
+            [ // level 3  granary
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxx.........xxxxxxxxxxx",
+                "xxxxxxxxxxxx.aaa.aaa.xxxxxxxxxxx",
+                "xxxxxxxxxxxx....N....xxxxxxxxxxx",
+                "xxxxxxxxxxxx..a...a..xxxxxxxxxxx",
+                "xxxxxxxxxxxx.........xxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ],
+            [ // level 4
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ],
+            [ // level 5  deep chamber
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxx.......xxxxxxxxxxxx",
+                "xxxxxxxxxxxxx.......xxxxxxxxxxxx",
+                "xxxxxxxxxxxxx.......xxxxxxxxxxxx",
+                "xxxxxxxxxxxxx.......xxxxxxxxxxxx",
+                "xxxxxxxxxxxxx.......xxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ]
         ],
     ),
 
     fsms: {
-        // The nest's own machine: its climate and weathering.
-        "nest": (
-            initial: "Open",
-            transitions: [],
-            states: { "Open": () },
-            rules: [
-                (name: "climate", then: [ Set("temp",
-                    "me.temp + (clamp(sense.outside * (100 - me.insulation) / 100 + p.core_temp * me.insulation / 100 + pct(sense.outside, p.solar) + min(p.heat_cap, sense.crowd * p.ant_heat), 0, 100) - me.temp) / p.nest_inertia") ]),
-                (name: "weathering",
-                 when: "me.insulation > 0 && sense.clock % (if sense.summer { p.weather_every } else { p.weather_every / 2 }) == 0",
-                 then: [ Add("insulation", "-1") ]),
-            ],
-        ),
-
-        "ground": (
-            initial: "Plain",
-            transitions: [
-                (from: "Plain", to: "Trail", when: "me.scent >= p.trail_seen"),
-                (from: "Trail", to: "Plain", when: "me.scent < p.trail_seen"),
-            ],
-        ),
+        "nest": ( initial: "Open", states: { "Open": () }, transitions: [] ),
 
         "bush": (
             initial: "Ripe",
@@ -160,13 +222,13 @@ Game(
                             initial: "Ready",
                             states: {
                                 // Waiting at the entrance.
-                                "Ready": (rules: [ (name: "wait_at_entrance", when: "sense.moving", then: [ MoveToward("nest") ]) ]),
+                                "Ready": (rules: [ (name: "wait_at_entrance", when: "sense.moving", then: [ MoveToward("entrance") ]) ]),
                                 // Out looking: climb the scent, sometimes wander.
                                 "Search": (
                                     enter: [ Set("searched", "0") ],
                                     rules: [
                                         (name: "explore", when: "sense.moving && roll < p.noise", then: [ Wander ]),
-                                        (name: "follow_scent", when: "sense.moving", then: [ Climb("ground", "scent") ]),
+                                        (name: "follow_scent", when: "sense.moving", then: [ ClimbField("scent") ]),
                                         // No scent to climb: head outward, like real scouts (a correlated walk away from home).
                                         (name: "no_scent_here", when: "sense.moving", then: [ MoveAway("nest") ]),
                                         (name: "search_time", then: [ Add("searched", "1") ]),
@@ -179,8 +241,8 @@ Game(
                                 // Loaded: walk home and mark the way.
                                 "Carry": (rules: [
                                     (name: "walk_home", when: "sense.moving", then: [ MoveToward("nest") ]),
-                                    (name: "mark_trail", target: Nearest("ground"), when: "it.dist == 0 && me.trail > 0",
-                                     then: [ On(It, [ Set("scent", "min(p.scent_max, it.scent + me.trail)") ]),
+                                    (name: "mark_trail", when: "me.z == 0 && me.trail > 0",
+                                     then: [ SetField("scent", r#"min(p.scent_max, field("scent") + me.trail)"#),
                                              Set("trail", "max(0, me.trail - p.trail_step)") ]),
                                     (name: "deliver", target: Nearest("nest"), when: "it.dist <= 1",
                                      then: [ On(It, [ Add("food", "me.load"), Add("income", "me.load") ]),
@@ -202,7 +264,11 @@ Game(
                     ],
                 ),
                 // Winter: cluster in the nest, eat little, wait.
-                "Dormant": (rules: [ (name: "huddle", when: "sense.moving", then: [ MoveToward("nest") ]) ]),
+                // Winter: go home, then follow the warmth down through the soil.
+                "Dormant": (rules: [
+                    (name: "go_home", when: "sense.moving && me.z == 0", then: [ MoveToward("nest") ]),
+                    (name: "seek_warmth", when: "sense.moving && me.z > 0", then: [ ClimbField("temp") ]),
+                ]),
             },
             transitions: [
                 (from: "Active",  to: "Dormant",
@@ -229,10 +295,8 @@ Game(
                  when: r#"p.cold_metabolism == 1 && !in_state("Dormant") && me.appetite >= 100 * p.meal_every"#,
                  then: [ On(It, [ Need("food", "1"), Add("food", "-1") ]), Set("hunger", "0"),
                          Add("appetite", "-100 * p.meal_every") ]),
-                // Ants at home who feel cold rebuild the mound's thatch: agents shape their own climate.
-                (name: "thatch", target: Nearest("nest"),
-                 when: r#"!in_state("Dormant") && it.dist <= 1 && sense.warmth < p.build_below && roll < p.thatch_chance"#,
-                 then: [ On(It, [ Set("insulation", "min(100, it.insulation + p.thatch)") ]) ]),
+                // Body heat: ants underground warm the soil around them (it diffuses on).
+                (name: "body_heat", when: "me.z > 0", then: [ AddField("temp", "p.body_heat") ]),
             ],
         ),
     },
@@ -248,8 +312,6 @@ Game(
         // so on average about berry_value, from 1 up to ~3×.
         (name: "ripen", for: "bush",
          then: [ Set("value", "max(1, 2 * p.berry_value * max(0, me.quality) * sense.ripeness / 10000)") ]),
-        (name: "evaporate", for: "ground", when: "me.scent > 0",
-         then: [ Set("scent", "me.scent * (100 - p.evaporation) / 100") ]),
         (name: "provision", for: "nest", when: "sense.first_tick", then: [ Set("food", "p.start_food") ]),
     ],
 

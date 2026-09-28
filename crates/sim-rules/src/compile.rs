@@ -13,7 +13,7 @@ use sim_core::{Effect, Entity, EntityId, Group, Rules, World, splitmix64};
 use sim_state::{Chart, Memory, NoOracle, NodeId, Oracle, Outcome, PickKind, PickSpec, Spec, TransitionSpec};
 
 use crate::config::EngineConfig;
-use crate::game::{Do, EnvDef, GameDef, PickDef, RuleDef, StateDef, Target};
+use crate::game::{Do, EnvDef, GameDef, Perception, PickDef, RuleDef, StateDef, Target};
 use crate::env::NativeEnv;
 
 /// Compiled state chart: conditions index into `exprs`, action blocks into `blocks`.
@@ -25,6 +25,9 @@ pub const FAR: i64 = 9_999;
 /// Keeps FSM transition salts from colliding with rule salts.
 const FSM_SALT: u64 = 1 << 32;
 
+/// Senses draw their own randomness.
+const SENSE_SALT: u64 = 1 << 33;
+
 /// A core takes this many entities as one chunk; small worlds pay no parallel overhead.
 const CHUNK: usize = 64;
 
@@ -34,7 +37,7 @@ const CHUNK: usize = 64;
 struct QueryCtx {
     world: Option<Arc<World>>,
     me: EntityId,
-    pos: (i64, i64),
+    pos: (i64, i64, i64),
     salt: u64,
     calls: u64,
     /// `me`'s kind and state text (for `in_state`, `steps_to`).
@@ -48,6 +51,26 @@ impl QueryCtx {
         match state {
             None => w.around(self.pos, self.me, kind, None, r),
             Some(sel) => w.around_where(self.pos, self.me, kind, r, |e| sim_state::in_label(&e.state, sel)),
+        }
+    }
+
+    /// A field's value at my voxel offset by (dx, dy, dz); 0 outside the world.
+    fn field(&self, name: &str, dx: i64, dy: i64, dz: i64) -> Result<i64, String> {
+        let Some(w) = &self.world else { return Ok(0) };
+        if w.field_values(name).is_none() {
+            return Err(format!("no field '{name}' (declare it in `fields`)"));
+        }
+        let (x, y, z) = self.pos;
+        Ok(w.field(name, x + dx, y + dy, z + dz).unwrap_or(0))
+    }
+
+    /// A prop of the nearest `kind` within `r`; `default` if there is none that close.
+    fn nearest_prop(&self, kind: &str, prop: &str, r: i64, default: i64) -> i64 {
+        let Some(w) = &self.world else { return default };
+        let Some(me) = w.get(self.me) else { return default };
+        match w.nearest(me, kind) {
+            Some((e, d)) if d <= r => e.props.get(prop).copied().unwrap_or(default),
+            _ => default,
         }
     }
 
@@ -97,6 +120,12 @@ pub struct Game {
     blocks: Vec<Vec<CDo>>,
     /// Environment kinds (hidden singletons), in `environments` order.
     envs: Vec<String>,
+    /// `perception: Senses`: kinds see external reality only through their senses.
+    strict: bool,
+    /// Fields pinned onto level 0 every tick: (field, world-level expression).
+    field_tops: Vec<(String, AST)>,
+    /// Kind → its senses (name, expression).
+    senses: BTreeMap<String, Vec<(String, AST)>>,
     /// Environments whose own machine and rules are replaced by native code.
     natives: BTreeMap<String, Arc<dyn NativeEnv>>,
     /// Kind → state text at birth.
@@ -140,6 +169,11 @@ enum CDo {
     Wander,
     Goto(String),
     Move(AST, AST),
+    Move3(AST, AST, AST),
+    SetField(String, AST),
+    AddField(String, AST),
+    SetFieldAt(String, AST, AST, AST, AST),
+    ClimbField(String),
     On(Target, Vec<CDo>),
     Need(String, AST),
     Interrupt(String),
@@ -152,6 +186,9 @@ impl CDo {
         match self {
             CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
             CDo::Move(dx, dy) => out.extend([dx, dy]),
+            CDo::Move3(dx, dy, dz) => out.extend([dx, dy, dz]),
+            CDo::SetField(_, a) | CDo::AddField(_, a) => out.push(a),
+            CDo::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx, dy, dz, v]),
             CDo::On(_, ds) => ds.iter().for_each(|d| d.int_exprs(out)),
             _ => {}
         }
@@ -196,6 +233,13 @@ impl Compiler<'_> {
             Do::Wander => CDo::Wander,
             Do::Goto(s) => CDo::Goto(s.clone()),
             Do::Move(dx, dy) => CDo::Move(self.expr(dx, ctx), self.expr(dy, ctx)),
+            Do::Move3(dx, dy, dz) => CDo::Move3(self.expr(dx, ctx), self.expr(dy, ctx), self.expr(dz, ctx)),
+            Do::SetField(f, e) => CDo::SetField(f.clone(), self.expr(e, ctx)),
+            Do::AddField(f, e) => CDo::AddField(f.clone(), self.expr(e, ctx)),
+            Do::SetFieldAt(f, dx, dy, dz, v) => {
+                CDo::SetFieldAt(f.clone(), self.expr(dx, ctx), self.expr(dy, ctx), self.expr(dz, ctx), self.expr(v, ctx))
+            }
+            Do::ClimbField(f) => CDo::ClimbField(f.clone()),
             Do::On(t, ds) => CDo::On(t.clone(), ds.iter().map(|d| self.doo(d, ctx)).collect()),
             Do::Need(p, e) => CDo::Need(p.clone(), self.expr(e, ctx)),
             Do::Interrupt(s) => CDo::Interrupt(s.clone()),
@@ -318,6 +362,12 @@ impl Compiler<'_> {
     }
 }
 
+/// A state tree without its rules (they are checked as rules).
+fn strip_rules(d: &mut StateDef) {
+    d.rules.clear();
+    d.states.values_mut().chain(d.layers.values_mut()).for_each(strip_rules);
+}
+
 /// All expression sources in a state tree.
 fn state_sources<'a>(d: &'a StateDef, out: &mut Vec<&'a str>) {
     for t in &d.transitions {
@@ -347,11 +397,39 @@ fn map_str(m: &Map, key: &str) -> String {
     m.get(key).and_then(|d| d.clone().into_string().ok()).unwrap_or_default()
 }
 
+/// Names in an expression that read the world directly (`env`, `tick`, `count`), outside string literals.
+fn direct_reads(src: &str) -> Vec<&'static str> {
+    let mut found = Vec::new();
+    let chars: Vec<char> = src.chars().collect();
+    let (mut i, mut in_str) = (0, false);
+    while i < chars.len() {
+        let ch = chars[i];
+        let after_ident = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_' || chars[i - 1] == '.');
+        if ch == '"' {
+            in_str = !in_str;
+        } else if !in_str && (ch.is_alphabetic() || ch == '_') && !after_ident {
+            let word: String = chars[i..].iter().take_while(|c| c.is_alphanumeric() || **c == '_').collect();
+            for name in ["env", "tick", "count"] {
+                if word == name && !found.contains(&name) {
+                    found.push(name);
+                }
+            }
+            i += word.chars().count();
+            continue;
+        }
+        i += 1;
+    }
+    found
+}
+
 /// All expression sources in a `Do` tree (for near analysis).
 fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
     match d {
         Do::Set(_, e) | Do::Add(_, e) | Do::Need(_, e) => out.push(e),
         Do::Move(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
+        Do::Move3(dx, dy, dz) => out.extend([dx.as_str(), dy.as_str(), dz.as_str()]),
+        Do::SetField(_, e) | Do::AddField(_, e) => out.push(e),
+        Do::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx.as_str(), dy.as_str(), dz.as_str(), v.as_str()]),
         Do::On(_, ds) => ds.iter().for_each(|d| do_sources(d, out)),
         _ => {}
     }
@@ -390,6 +468,7 @@ fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
     m.insert("state".into(), Dynamic::from(sim_state::active_part(&e.state).to_string()));
     m.insert("x".into(), Dynamic::from(e.x));
     m.insert("y".into(), Dynamic::from(e.y));
+    m.insert("z".into(), Dynamic::from(e.z));
     for (k, v) in &e.props {
         m.insert(k.as_str().into(), Dynamic::from(*v));
     }
@@ -464,6 +543,15 @@ impl Game {
             if len <= 0 || x < 0 || x > len { 0 } else { peak - (x * 2 * peak / len - peak).abs() }
         });
         rhai.register_fn("near_in", |kind: &str, sel: &str| CTX.with(|c| c.borrow().near_in(kind, sel)));
+        rhai.register_fn("field", |name: &str| -> Result<i64, Box<rhai::EvalAltResult>> {
+            CTX.with(|c| c.borrow().field(name, 0, 0, 0)).map_err(Into::into)
+        });
+        rhai.register_fn("field_at", |name: &str, dx: i64, dy: i64, dz: i64| -> Result<i64, Box<rhai::EvalAltResult>> {
+            CTX.with(|c| c.borrow().field(name, dx, dy, dz)).map_err(Into::into)
+        });
+        rhai.register_fn("nearest_prop", |kind: &str, prop: &str, r: i64, default: i64| {
+            CTX.with(|c| c.borrow().nearest_prop(kind, prop, r, default))
+        });
         rhai.register_fn("in_state", |sel: &str| CTX.with(|c| sim_state::in_label(&c.borrow().state, sel)));
         rhai.register_fn("in_state", |m: Map, sel: &str| sim_state::in_label(&map_str(&m, "state"), sel));
         rhai.register_fn("depth_in", |sel: &str| CTX.with(|c| sim_state::depth_in_label(&c.borrow().state, sel)));
@@ -498,6 +586,20 @@ impl Game {
             .map(|e| CompiledEnd { when: cc.expr(&e.when, &format!("end '{}'", e.result)), result: e.result.clone() })
             .collect();
         let score = def.score.as_deref().map(|s| cc.expr(s, "score"));
+        let field_tops: Vec<(String, AST)> = def
+            .fields
+            .iter()
+            .filter_map(|(n, f)| Some((n.clone(), cc.expr(f.top.as_ref()?, &format!("field '{n}' top")))))
+            .collect();
+        let senses: BTreeMap<String, Vec<(String, AST)>> = def
+            .kinds
+            .iter()
+            .filter(|(_, k)| !k.senses.is_empty())
+            .map(|(kind, k)| {
+                let compiled = k.senses.iter().map(|(n, src)| (n.clone(), cc.expr(src, &format!("kind '{kind}' sense '{n}'")))).collect();
+                (kind.clone(), compiled)
+            })
+            .collect();
         let mut errors = cc.errors;
 
         let mut charts = BTreeMap::new();
@@ -564,10 +666,12 @@ impl Game {
             r.then.iter().for_each(|d| do_sources(d, &mut sources));
         }
         sources.extend(def.end.iter().map(|e| e.when.as_str()));
+        sources.extend(def.kinds.values().flat_map(|k| k.senses.values().map(String::as_str)));
         sources.extend(def.score.as_deref());
         let near_kinds = near_refs(sources.into_iter());
 
         let envs = def.env_kinds.clone();
+        let strict = def.perception == Perception::Senses;
         Game {
             def,
             cfg,
@@ -583,6 +687,9 @@ impl Game {
             near_kinds,
             kind_charts,
             envs,
+            strict,
+            field_tops,
+            senses,
             natives: BTreeMap::new(),
             machine_rules: mach.rules.into_iter().map(|(_, _, r)| r).collect(),
             exprs: mach.exprs,
@@ -595,46 +702,59 @@ impl Game {
     /// then `[spawn]`. Solid kinds are placed one by one into shuffled empty cells.
     fn initial_world(&self) -> (World, Vec<String>) {
         let mut errs = Vec::new();
-        let (w, h) = match (&self.def.layout, &self.cfg.world) {
+        let (w, h, d) = match (&self.def.layout, &self.cfg.world) {
             (Some(l), Some(wc)) => {
-                if l.size() != (wc.width, wc.height) {
+                if l.size3() != (wc.width, wc.height, wc.depth) {
+                    let (lw, lh, ld) = l.size3();
                     errs.push(format!(
-                        "engine.toml [world] {}x{} does not match game.ron layout {}x{}",
-                        wc.width,
-                        wc.height,
-                        l.size().0,
-                        l.size().1
+                        "engine.toml [world] {}x{}x{} does not match game.ron layout {lw}x{lh}x{ld}",
+                        wc.width, wc.height, wc.depth
                     ));
                 }
-                l.size()
+                l.size3()
             }
-            (Some(l), None) => l.size(),
-            (None, Some(wc)) => (wc.width, wc.height),
+            (Some(l), None) => l.size3(),
+            (None, Some(wc)) => (wc.width, wc.height, wc.depth),
             (None, None) => {
                 errs.push("engine.toml: [world] is required when game.ron has no layout".into());
-                (1, 1)
+                (1, 1, 1)
             }
         };
-        let mut world = World::new(self.cfg.run.seed, w, h);
+        let mut world = World::new3(self.cfg.run.seed, w, h, d);
         world.set_solid(self.def.kinds.iter().filter(|(_, k)| k.solid).map(|(n, _)| n.clone()).collect());
+        for (name, f) in &self.def.fields {
+            world.add_field(name, f.init);
+        }
+        world.set_terrain(self.def.terrain.clone());
 
         if let Some(l) = &self.def.layout {
-            for (y, row) in l.rows.iter().enumerate() {
-                for (x, ch) in row.chars().enumerate() {
-                    if ch == '.' || ch == ' ' {
-                        continue;
+            if !l.rows.is_empty() && !l.levels.is_empty() {
+                errs.push("layout: use `rows` (one level) or `levels` (3D), not both".into());
+            }
+            for (z, level) in l.all_levels().into_iter().enumerate() {
+                for (y, row) in level.iter().enumerate() {
+                    for (x, ch) in row.chars().enumerate() {
+                        let (x, y, z) = (x as i64, y as i64, z as i64);
+                        if let Some(values) = l.cells.get(&ch) {
+                            for (name, v) in values {
+                                world.set_field(name, x, y, z, *v);
+                            }
+                        }
+                        if ch == '.' || ch == ' ' || (l.cells.contains_key(&ch) && !l.legend.contains_key(&ch)) {
+                            continue;
+                        }
+                        let Some(entry) = l.legend.get(&ch) else {
+                            errs.push(format!("layout level {z}, row {y}, column {x}: '{ch}' is not in the legend or cells"));
+                            continue;
+                        };
+                        let kind = entry.kind();
+                        if !self.def.kinds.contains_key(kind) {
+                            continue; // check_refs reports it
+                        }
+                        let (state, mut props) = self.template(kind);
+                        props.extend(entry.props().into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
+                        world.spawn3(kind, &state, x, y, z, props);
                     }
-                    let Some(entry) = l.legend.get(&ch) else {
-                        errs.push(format!("layout row {y}, column {x}: '{ch}' is not in the legend"));
-                        continue;
-                    };
-                    let kind = entry.kind();
-                    if !self.def.kinds.contains_key(kind) {
-                        continue; // check_refs reports it
-                    }
-                    let (state, mut props) = self.template(kind);
-                    props.extend(entry.props().into_iter().flatten().map(|(k, v)| (k.clone(), *v)));
-                    world.spawn(kind, &state, x as i64, y as i64, props);
                 }
             }
         }
@@ -666,8 +786,10 @@ impl Game {
             for _ in 0..*n {
                 let x = splitmix64(world.seed.wrapping_add(2 * c)) % world.width as u64;
                 let y = splitmix64(world.seed.wrapping_add(2 * c + 1)) % world.height as u64;
+                // A level only in 3D, from its own stream: 2D worlds draw exactly as before.
+                let z = if world.depth > 1 { splitmix64(world.seed ^ 0x5A5A_0000 ^ c) % world.depth as u64 } else { 0 };
                 let (state, props) = self.template(kind);
-                world.spawn(kind, &state, x as i64, y as i64, props);
+                world.spawn3(kind, &state, x as i64, y as i64, z as i64, props);
                 c += 1;
             }
         }
@@ -675,7 +797,7 @@ impl Game {
     }
 
     fn place_solid(&self, world: &mut World, kind: &str, n: u32) -> u32 {
-        let mut cells: Vec<i64> = (0..world.width * world.height).collect();
+        let mut cells: Vec<i64> = (0..world.width * world.height * world.depth).collect();
         let salt = splitmix64(kind.bytes().fold(world.seed, |h, b| splitmix64(h ^ b as u64)));
         for i in (1..cells.len()).rev() {
             let j = (splitmix64(salt ^ i as u64) % (i as u64 + 1)) as usize;
@@ -687,7 +809,8 @@ impl Game {
                 break;
             }
             let (state, props) = self.template(kind);
-            if world.spawn(kind, &state, cell % world.width, cell / world.width, props).is_some() {
+            let (x, y, z) = (cell % world.width, (cell / world.width) % world.height, cell / (world.width * world.height));
+            if world.spawn3(kind, &state, x, y, z, props).is_some() {
                 placed += 1;
             }
         }
@@ -739,6 +862,21 @@ impl Game {
         }
         self.natives.insert(name.to_string(), native);
         Ok(())
+    }
+
+    /// What an entity senses right now (for inspectors): sense name → value as text.
+    pub fn senses_of(&self, world: &World, e: &Entity) -> Vec<(String, String)> {
+        if !self.senses.contains_key(&e.kind) {
+            return Vec::new();
+        }
+        let counts = self.counts(world);
+        self.bind_world(Some(world));
+        let mut full = self.tick_scope(world, &counts);
+        let (map, errs) = self.sense_map(&mut full, world, e);
+        self.bind_world(None);
+        let mut out: Vec<(String, String)> = map.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        out.extend(errs.into_iter().map(|m| ("error".to_string(), m)));
+        out
     }
 
     /// Whether a kind is drawn (environments are not).
@@ -793,7 +931,7 @@ impl Game {
 
         let counts = self.counts(world);
         self.bind_world(Some(world));
-        let mut scope = self.base_scope(world, e, &counts);
+        let mut scope = self.entity_scope(world, e, &counts);
         let arg: Map = args.iter().map(|(k, v)| (k.as_str().into(), Dynamic::from(*v))).collect();
         scope.push_constant("arg", arg);
         let out = self.eval_rule(world, e, rule, &mut scope);
@@ -892,6 +1030,61 @@ impl Game {
         scope
     }
 
+    /// Does this kind see the world only through its senses?
+    fn agent_view(&self, kind: &str) -> bool {
+        self.strict && !self.envs.iter().any(|e| e == kind)
+    }
+
+    /// What an agent's own expressions start from: its params, nothing external.
+    fn agent_scope(&self) -> Scope<'static> {
+        let mut scope = Scope::new();
+        scope.push_constant("p", self.p_map.clone());
+        scope
+    }
+
+    /// The entity's senses, evaluated in the full world. Errors are returned, the rest still counts.
+    fn sense_map(&self, full: &mut Scope<'static>, world: &World, e: &Entity) -> (Map, Vec<String>) {
+        let mut out = Map::new();
+        let mut errs = Vec::new();
+        let Some(senses) = self.senses.get(&e.kind) else { return (out, errs) };
+        let len = full.len();
+        self.push_entity(full, world, e);
+        self.bind(e, SENSE_SALT);
+        for (name, ast) in senses {
+            match self.rhai.eval_ast_with_scope::<Dynamic>(full, ast) {
+                Ok(v) => {
+                    out.insert(name.as_str().into(), v);
+                }
+                Err(m) => errs.push(format!("sense '{name}': {m}")),
+            }
+        }
+        full.rewind(len);
+        (out, errs)
+    }
+
+    /// The scope an entity's own expressions see: the full world, or (perception: Senses) me + sense.
+    fn entity_scope(&self, world: &World, e: &Entity, counts: &Map) -> Scope<'static> {
+        if !self.agent_view(&e.kind) {
+            return self.base_scope(world, e, counts);
+        }
+        let mut full = self.tick_scope(world, counts);
+        let (sense, _) = self.sense_map(&mut full, world, e);
+        let mut scope = self.agent_scope();
+        self.push_entity(&mut scope, world, e);
+        scope.push_constant("sense", sense);
+        scope
+    }
+
+    /// A load error about reading the world directly gets a pointer to senses.
+    fn hint(&self, m: String) -> String {
+        let direct = ["Variable not found: env", "Variable not found: tick", "Variable not found: count"];
+        if self.strict && direct.iter().any(|d| m.contains(d)) {
+            format!("{m} (agents perceive the world through their kind's `senses`; see Perception in docs/architecture.md)")
+        } else {
+            m
+        }
+    }
+
     /// World seen by `end` expressions: p, tick, count.
     fn world_scope(&self, world: &World) -> Scope<'static> {
         self.tick_scope(world, &self.counts(world))
@@ -901,7 +1094,7 @@ impl Game {
     fn bind(&self, e: &Entity, salt: u64) {
         CTX.with(|c| {
             let mut c = c.borrow_mut();
-            (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y), salt, 0);
+            (c.me, c.pos, c.salt, c.calls) = (e.id, (e.x, e.y, e.z), salt, 0);
             if c.state != e.state {
                 c.state.clone_from(&e.state);
             }
@@ -926,10 +1119,25 @@ impl Game {
     }
 
     /// All of an entity's groups this tick: FSM transition first, then rules (in order).
-    fn eval_entity(&self, world: &World, e: &Entity, scope: &mut Scope<'static>) -> Vec<Group> {
+    fn eval_entity(&self, world: &World, e: &Entity, scopes: &mut Scopes) -> Vec<Group> {
+        if !self.agent_view(&e.kind) {
+            let scope = &mut scopes.full;
+            let len = scope.len();
+            self.push_entity(scope, world, e);
+            let out = self.eval_entity_in(world, e, scope);
+            scope.rewind(len);
+            return out;
+        }
+        let (sense, errs) = self.sense_map(&mut scopes.full, world, e);
+        let scope = &mut scopes.agent;
         let len = scope.len();
         self.push_entity(scope, world, e);
-        let out = self.eval_entity_in(world, e, scope);
+        scope.push_constant("sense", sense);
+        let mut out: Vec<Group> = errs
+            .into_iter()
+            .map(|m| Group { source: "sense".into(), actor: Some(e.id), effects: vec![Effect::Emit { e: e.id, name: format!("error: {m}") }] })
+            .collect();
+        out.extend(self.eval_entity_in(world, e, scope));
         scope.rewind(len);
         out
     }
@@ -1193,28 +1401,50 @@ impl Game {
             },
             CDo::Spawn(k) => {
                 let (state, props) = self.template(k);
-                out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x, y: subj.y, props });
+                out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x, y: subj.y, z: subj.z, props });
             }
             CDo::MoveToward(k) => {
                 if let Some((t, _)) = world.nearest(subj, k) {
-                    out.push(Effect::Move { e: subj.id, dx: t.x - subj.x, dy: t.y - subj.y });
+                    out.push(Effect::Move { e: subj.id, dx: t.x - subj.x, dy: t.y - subj.y, dz: t.z - subj.z });
                 }
             }
             CDo::MoveAway(k) => match world.nearest(subj, k) {
                 Some((_, 0)) => out.push(wander(world, subj, salt)),
-                Some((t, _)) => out.push(Effect::Move { e: subj.id, dx: subj.x - t.x, dy: subj.y - t.y }),
+                Some((t, _)) => out.push(Effect::Move { e: subj.id, dx: subj.x - t.x, dy: subj.y - t.y, dz: subj.z - t.z }),
                 None => {}
             },
             CDo::Wander => out.push(wander(world, subj, salt)),
             CDo::Climb(k, prop) => {
-                if let Some((dx, dy)) = climb(world, subj, k, prop, salt) {
-                    out.push(Effect::Move { e: subj.id, dx, dy });
+                if let Some((dx, dy, dz)) = climb(world, subj, k, prop, salt) {
+                    out.push(Effect::Move { e: subj.id, dx, dy, dz });
                 }
             }
             CDo::Goto(_) | CDo::Interrupt(_) | CDo::Back => self.change_state(world, who, subj, d, salt, scope, out)?,
             CDo::Move(dx, dy) => {
                 let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
-                out.push(Effect::Move { e: subj.id, dx, dy });
+                out.push(Effect::Move { e: subj.id, dx, dy, dz: 0 });
+            }
+            CDo::Move3(dx, dy, dz) => {
+                let (dx, dy, dz) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?, self.eval_int(scope, dz)?);
+                out.push(Effect::Move { e: subj.id, dx, dy, dz });
+            }
+            CDo::SetField(name, ast) => {
+                let v = self.eval_int(scope, ast)?;
+                out.push(Effect::FieldSet { name: name.clone(), x: subj.x, y: subj.y, z: subj.z, v });
+            }
+            CDo::AddField(name, ast) => {
+                let d = self.eval_int(scope, ast)?;
+                out.push(Effect::FieldAdd { name: name.clone(), x: subj.x, y: subj.y, z: subj.z, d });
+            }
+            CDo::SetFieldAt(name, dx, dy, dz, v) => {
+                let (dx, dy, dz) = (self.eval_int(scope, dx)?.signum(), self.eval_int(scope, dy)?.signum(), self.eval_int(scope, dz)?.signum());
+                let v = self.eval_int(scope, v)?;
+                out.push(Effect::FieldSet { name: name.clone(), x: subj.x + dx, y: subj.y + dy, z: subj.z + dz, v });
+            }
+            CDo::ClimbField(name) => {
+                if let Some((dx, dy, dz)) = climb_field(world, subj, name, salt) {
+                    out.push(Effect::Move { e: subj.id, dx, dy, dz });
+                }
             }
             CDo::Need(prop, ast) => {
                 let min = self.eval_int(scope, ast)?;
@@ -1313,6 +1543,11 @@ impl Game {
                     }
                 }
             }
+            Do::SetField(f, _) | Do::AddField(f, _) | Do::SetFieldAt(f, ..) | Do::ClimbField(f)
+                if !self.def.fields.contains_key(f) =>
+            {
+                errs.push(format!("'{name}': no field '{f}' (declare it in `fields`)"));
+            }
             Do::Back if !subjects.iter().any(|k| self.kind_charts.contains_key(k)) => {
                 errs.push(format!("'{name}': Back on a kind without fsm"));
             }
@@ -1381,6 +1616,18 @@ impl Game {
                 .collect();
             self.check_machine(m, "", d, &kinds, errs);
         }
+        if let Some(t) = &self.def.terrain
+            && !self.def.fields.contains_key(t)
+        {
+            errs.push(format!("terrain '{t}' is not a declared field"));
+        }
+        if let Some(l) = &self.def.layout {
+            for (ch, values) in &l.cells {
+                for f in values.keys().filter(|f| !self.def.fields.contains_key(*f)) {
+                    errs.push(format!("layout cells '{ch}': no field '{f}'"));
+                }
+            }
+        }
         if let Some(l) = &self.def.layout {
             for (ch, entry) in &l.legend {
                 let Some(kind) = self.def.kinds.get(entry.kind()) else {
@@ -1396,6 +1643,38 @@ impl Game {
             for k in &self.cfg.agent.controllable {
                 if self.def.kinds.get(k).is_some_and(|d| !d.props.contains_key("owner")) {
                     errs.push(format!("engine.toml [agent] seats: controllable kind '{k}' needs an 'owner' prop"));
+                }
+            }
+        }
+
+        // Perception: a kind's own expressions may not read the world directly (the dry run can miss
+        // a read behind `&&`, so the sources are scanned too).
+        if self.strict {
+            let agents: Vec<&String> = self.def.kinds.keys().filter(|k| self.agent_view(k)).collect();
+            let mut report = |what: String, srcs: Vec<&str>| {
+                let mut names: Vec<&str> = srcs.iter().flat_map(|s| direct_reads(s)).collect();
+                names.sort_unstable();
+                names.dedup();
+                if !names.is_empty() {
+                    errs.push(self.hint(format!("{what} reads {} directly: Variable not found: {}", names.join(", "), names[0])));
+                }
+            };
+            let defs = self.def.rules.iter().chain(&self.def.actions).chain(&self.machine_rules);
+            for (r, def) in self.rules.iter().zip(defs) {
+                if agents.iter().any(|k| Self::applies(r, k)) {
+                    let mut srcs: Vec<&str> = def.when.iter().chain(&def.script).map(String::as_str).collect();
+                    def.then.iter().for_each(|d| do_sources(d, &mut srcs));
+                    report(format!("rule '{}'", r.name), srcs);
+                }
+            }
+            for (m, d) in &self.def.fsms {
+                let used = agents.iter().any(|k| self.kind_charts.get(*k).is_some_and(|c| !c.with_origin(m, "").is_empty()));
+                if used {
+                    let mut srcs = Vec::new();
+                    let mut without_rules = d.clone();
+                    strip_rules(&mut without_rules);
+                    state_sources(&without_rules, &mut srcs);
+                    report(format!("fsm '{m}'"), srcs);
                 }
             }
         }
@@ -1463,11 +1742,17 @@ impl Game {
         self.bind_world(Some(world));
         let synthetic = |kind: &str| {
             let (state, props) = self.template(kind);
-            Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, props }
+            Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, z: 0, props }
         };
         for kind in self.def.kinds.keys() {
             let e = synthetic(kind);
-            let base = self.base_scope(world, &e, &counts);
+            let mut full = self.base_scope(world, &e, &counts);
+            for (name, ast) in self.senses.get(kind).into_iter().flatten() {
+                if let Err(m) = self.rhai.eval_ast_with_scope::<Dynamic>(&mut full, ast) {
+                    errs.push(format!("kind '{kind}' sense '{name}': {m}"));
+                }
+            }
+            let base = self.entity_scope(world, &e, &counts);
             self.bind(&e, 0);
 
             if let Some(c) = self.kind_charts.get(kind) {
@@ -1475,7 +1760,7 @@ impl Game {
                 scope.push_constant("roll", 0_i64);
                 for n in &c.nodes {
                     let at = if n.path.is_empty() { "root".to_string() } else { format!("'{}'", n.path) };
-                    let mut fail = |m: String| errs.push(format!("fsm state {at} on '{kind}': {m}"));
+                    let mut fail = |m: String| errs.push(format!("fsm state {at} on '{kind}': {}", self.hint(m)));
                     for t in &n.transitions {
                         if let Err(m) = self.eval_bool(&mut scope, &self.exprs[t.when]) {
                             fail(m);
@@ -1514,7 +1799,7 @@ impl Game {
                     let arg: Map = r.args.iter().map(|a| (a.as_str().into(), Dynamic::from(0_i64))).collect();
                     scope.push_constant("arg", arg);
                 }
-                let mut fail = |m: String| errs.push(format!("'{}' on '{kind}': {m}", r.name));
+                let mut fail = |m: String| errs.push(format!("'{}' on '{kind}': {}", r.name, self.hint(m)));
                 if let Some(w) = &r.when
                     && let Err(m) = self.eval_bool(&mut scope, w)
                 {
@@ -1542,6 +1827,11 @@ impl Game {
             }
         }
         let mut scope = self.world_scope(world);
+        for (name, ast) in &self.field_tops {
+            if let Err(m) = self.eval_int(&mut scope, ast) {
+                errs.push(format!("field '{name}' top: {m}"));
+            }
+        }
         for end in &self.ends {
             if let Err(m) = self.eval_bool(&mut scope, &end.when) {
                 errs.push(format!("end '{}': {m}", end.result));
@@ -1577,8 +1867,8 @@ impl Rules for Game {
         let snap = Arc::new(world.clone());
         let entities: Vec<&Entity> = world.entities().values().collect();
         // Each worker builds its own scope once: no shared, locked values.
-        let init = || self.tick_scope(world, &counts);
-        let per = |scope: &mut Scope<'static>, e: &&Entity| {
+        let init = || Scopes { full: self.tick_scope(world, &counts), agent: self.agent_scope() };
+        let per = |scope: &mut Scopes, e: &&Entity| {
             self.bind_snapshot(Some(&snap));
             self.eval_entity(world, e, scope)
         };
@@ -1592,6 +1882,59 @@ impl Rules for Game {
             }
         };
         groups.into_iter().flatten().collect()
+    }
+
+    /// Fields: diffuse through the 6 face neighbours, then pin level 0 to each `top` expression.
+    /// Integers, voxel order, native: deterministic and fast.
+    fn physics(&self, world: &mut World) {
+        let mut tops = Vec::new();
+        if self.def.fields.values().any(|f| f.top.is_some()) {
+            let mut scope = self.world_scope(world);
+            for (name, ast) in &self.field_tops {
+                if let Ok(v) = self.eval_int(&mut scope, ast) {
+                    tops.push((name.clone(), v));
+                }
+            }
+        }
+        for (name, f) in self.def.fields.iter().filter(|(_, f)| f.diffusion > 0) {
+            let Some(old) = world.field_values(name) else { continue };
+            let (w, h, d) = (world.width, world.height, world.depth);
+            let at = |x: i64, y: i64, z: i64| old[((z * h + y) * w + x) as usize];
+            let mut new = old.to_vec();
+            for z in 0..d {
+                for y in 0..h {
+                    for x in 0..w {
+                        let here = at(x, y, z);
+                        let (mut sum, mut k) = (0, 0);
+                        for (dx, dy, dz) in [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)] {
+                            let (nx, ny, nz) = (x + dx, y + dy, z + dz);
+                            if (0..w).contains(&nx) && (0..h).contains(&ny) && (0..d).contains(&nz) {
+                                sum += at(nx, ny, nz);
+                                k += 1;
+                            }
+                        }
+                        if k > 0 {
+                            new[((z * h + y) * w + x) as usize] = here + (sum - k * here) * f.diffusion / (100 * k);
+                        }
+                    }
+                }
+            }
+            world.replace_field(name, new);
+        }
+        for (name, f) in self.def.fields.iter().filter(|(_, f)| f.decay > 0) {
+            if let Some(old) = world.field_values(name) {
+                let new = old.iter().map(|v| v * (100 - f.decay) / 100).collect();
+                world.replace_field(name, new);
+            }
+        }
+        // Boundary last: level 0 holds its pinned value at the end of every tick.
+        for (name, v) in tops {
+            for y in 0..world.height {
+                for x in 0..world.width {
+                    world.set_field(&name, x, y, 0, v);
+                }
+            }
+        }
     }
 
     /// Restored world: every entity is a known kind, its state valid in that kind's chart.
@@ -1629,6 +1972,12 @@ impl Rules for Game {
         }
         None
     }
+}
+
+/// One worker's scopes: the full world (senses, environments) and an agent's own view.
+struct Scopes {
+    full: Scope<'static>,
+    agent: Scope<'static>,
 }
 
 /// Evaluates chart conditions in Rhai; `me` is that entity.
@@ -1687,22 +2036,44 @@ fn need_texts(d: &Do, out: &mut Vec<String>) {
 
 /// The neighbouring cell with the highest `prop` on a `kind` entity, if higher than here.
 /// Candidates are visited from a shuffled start, so ties do not always pull the same way.
-fn climb(world: &World, e: &Entity, kind: &str, prop: &str, salt: u64) -> Option<(i64, i64)> {
-    let value = |x: i64, y: i64| {
-        world.at(x, y).iter().map(|id| &world.entities()[id]).find(|x| x.kind == kind).and_then(|x| x.props.get(prop)).copied()
+fn climb(world: &World, e: &Entity, kind: &str, prop: &str, salt: u64) -> Option<(i64, i64, i64)> {
+    let value = |x: i64, y: i64, z: i64| {
+        world.at3(x, y, z).iter().map(|id| &world.entities()[id]).find(|x| x.kind == kind).and_then(|x| x.props.get(prop)).copied()
     };
-    let cells = if world.is_solid(&e.kind) { world.free_neighbors(e.x, e.y) } else { world.neighbors(e.x, e.y) };
+    let here = value(e.x, e.y, e.z).unwrap_or(0);
+    uphill(world, e, salt, here, value)
+}
+
+/// The open neighbouring voxel with the most of a field, if more than here.
+fn climb_field(world: &World, e: &Entity, name: &str, salt: u64) -> Option<(i64, i64, i64)> {
+    let here = world.field(name, e.x, e.y, e.z).unwrap_or(0);
+    uphill(world, e, salt, here, |x, y, z| world.field(name, x, y, z))
+}
+
+/// One step towards the highest `value` among the neighbours a mover could enter; shuffled start breaks ties.
+fn uphill(
+    world: &World,
+    e: &Entity,
+    salt: u64,
+    here: i64,
+    value: impl Fn(i64, i64, i64) -> Option<i64>,
+) -> Option<(i64, i64, i64)> {
+    let cells: Vec<(i64, i64, i64)> = if world.is_solid(&e.kind) {
+        world.free_neighbors(e.x, e.y, e.z)
+    } else {
+        world.neighbors(e.x, e.y, e.z).into_iter().filter(|&(x, y, z)| !world.is_terrain(x, y, z)).collect()
+    };
     if cells.is_empty() {
         return None;
     }
     let start = (world.rand(e.id, salt ^ 0x434C_494D) % cells.len() as u64) as usize;
-    let mut best = (value(e.x, e.y).unwrap_or(0), None);
+    let mut best = (here, None);
     for i in 0..cells.len() {
-        let (x, y) = cells[(start + i) % cells.len()];
-        if let Some(v) = value(x, y)
+        let (x, y, z) = cells[(start + i) % cells.len()];
+        if let Some(v) = value(x, y, z)
             && v > best.0
         {
-            best = (v, Some((x - e.x, y - e.y)));
+            best = (v, Some((x - e.x, y - e.y, z - e.z)));
         }
     }
     best.1
@@ -1710,7 +2081,9 @@ fn climb(world: &World, e: &Entity, kind: &str, prop: &str, salt: u64) -> Option
 
 fn wander(world: &World, e: &Entity, salt: u64) -> Effect {
     let r = world.rand(e.id, salt ^ 0x5741_4E44);
-    Effect::Move { e: e.id, dx: (r % 3) as i64 - 1, dy: ((r / 3) % 3) as i64 - 1 }
+    // In 3D the same draw also picks a level step; at depth 1 dx and dy are exactly as before.
+    let dz = if world.depth > 1 { ((r / 9) % 3) as i64 - 1 } else { 0 };
+    Effect::Move { e: e.id, dx: (r % 3) as i64 - 1, dy: ((r / 3) % 3) as i64 - 1, dz }
 }
 
 /// Script output: maps like `#{op: "add", prop: "hunger", value: -1}`.
@@ -1724,7 +2097,7 @@ fn effect_from_map(e: &Entity, item: Dynamic) -> Result<Effect, String> {
         "set" => Effect::Set { e: e.id, prop: s("prop")?, v: i("value")? },
         "add" => Effect::Add { e: e.id, prop: s("prop")?, d: i("value")? },
         "emit" => Effect::Emit { e: e.id, name: s("name")? },
-        "move" => Effect::Move { e: e.id, dx: i("dx")?, dy: i("dy")? },
+        "move" => Effect::Move { e: e.id, dx: i("dx")?, dy: i("dy")?, dz: i("dz").unwrap_or(0) },
         "despawn" => Effect::Despawn { e: e.id },
         op => return Err(format!("unknown op '{op}' (set|add|emit|move|despawn)")),
     })

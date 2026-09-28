@@ -37,9 +37,6 @@ goal = "info"
 expr = "at(p['summer'] + p['autumn'], 'sum.nest.food')"
 goal = "max"              # food in the nest as the first winter starts
 
-[metrics.trail_cells]
-expr = "peak('state.ground.Trail')"
-goal = "info"             # did stigmergy form trails at all
 
 [metrics.income]
 expr = "last('sum.nest.income')"
@@ -56,3 +53,4 @@ goal = "max"              # the seasonal loop circulates: alive after five years
 [metrics.spring_store]
 expr = "at(p['summer'] + p['autumn'] + p['winter'], 'sum.nest.food') if end_tick > p['summer'] + p['autumn'] + p['winter'] else 0"
 goal = "max"              # food left when the first winter ends
+

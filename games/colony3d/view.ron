@@ -1,0 +1,32 @@
+#![enable(implicit_some)]
+// Colony 3D: the surface from above, the nest as a cross-section through the shaft, the whole hill in 3D.
+View(
+    theme: "dark",
+    assets: ["ants"],
+    components: {
+        "Sidebar": Rows([
+            (Fixed(5),  C(name: "Env")),
+            (Fill,      C(name: "Inspector")),
+            (Fixed(6),  C(name: "Series", props: (names: ["nest.food", "count.ant", "nest.born"]))),
+            (Fixed(6),  C(name: "Counts")),
+        ]),
+    },
+    layout: Rows([
+        (Fixed(1), C(name: "Title")),
+        (Fill, Cols([
+            (Percent(60), Rows([
+                // Surface, tinted by the scent field: trails glow.
+                (Percent(55), C(name: "World", props: (projection: (dim: "2D", level: 0, tint: "scent")))),
+                (Fill, Cols([
+                    // Cross-section through the shaft (x across, depth down), tinted by temperature.
+                    (Percent(50), C(name: "World", props: (projection: (dim: "custom", n: 3, x: 0, y: 2, fixed: [(1, 9)], tint: "temp")))),
+                    (Fill, C(name: "World", props: (projection: (dim: "3D", yaw: 30, pitch: 28, cut: 9)))),
+                ])),
+            ])),
+            (Fill, C(name: "Sidebar")),
+        ])),
+        (Fixed(1), C(name: "Legend")),
+        (Fixed(5), C(name: "Events", class: "calm")),
+        (Fixed(1), C(name: "Help")),
+    ]),
+)

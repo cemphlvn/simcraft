@@ -1,0 +1,25 @@
+#![enable(implicit_some)]
+// How the colony is shown: a theme, an asset pack, and components laid out with props.
+View(
+    theme: "dark",
+    assets: ["ants"],
+    components: {
+        // A composite component: the right-hand column, reusable in other views.
+        "Sidebar": Rows([
+            (Fixed(5),  C(name: "Env")),
+            (Fill,      C(name: "Inspector")),
+            (Fixed(7),  C(name: "Series", props: (names: ["nest.food", "nest.temp", "nest.insulation", "count.ant"]))),
+            (Fixed(7),  C(name: "Counts")),
+        ]),
+    },
+    layout: Rows([
+        (Fixed(1), C(name: "Title")),
+        (Fill, Cols([
+            (Percent(62), C(name: "World", props: (projection: (dim: "2D", level: 0)))),
+            (Fill, C(name: "Sidebar")),
+        ])),
+        (Fixed(1), C(name: "Legend")),
+        (Fixed(6), C(name: "Events", class: "calm")),
+        (Fixed(1), C(name: "Help")),
+    ]),
+)

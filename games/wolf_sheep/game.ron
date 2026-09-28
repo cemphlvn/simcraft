@@ -7,6 +7,8 @@
 //   count.<kind>  tick  roll (0..99, a deterministic die per rule)
 Game(
     name: "wolf_sheep",
+    // Written before senses existed: every expression sees the whole world.
+    perception: Direct,
 
     kinds: {
         "sheep": (glyph: 's', props: { "hunger": 0 }, fsm: "sheep"),

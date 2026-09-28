@@ -1,0 +1,139 @@
+{
+ "step": 0,
+ "change": "baseline: the colony rebuilt in 3D (physical soil, scent field)",
+ "seeds": {
+  "1": {
+   "survived": 627,
+   "winters": 1,
+   "first_delivery": 74,
+   "deliveries": 24,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 16,
+   "income": 178,
+   "food_per_trip": 7.42,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "2": {
+   "survived": 689,
+   "winters": 1,
+   "first_delivery": 99,
+   "deliveries": 21,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 25,
+   "income": 141,
+   "food_per_trip": 6.71,
+   "loop_closed": 0,
+   "spring_store": 8
+  },
+  "3": {
+   "survived": 456,
+   "winters": 1,
+   "first_delivery": 87,
+   "deliveries": 20,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 2,
+   "income": 150,
+   "food_per_trip": 7.5,
+   "loop_closed": 0,
+   "spring_store": 0
+  },
+  "4": {
+   "survived": 905,
+   "winters": 2,
+   "first_delivery": 102,
+   "deliveries": 41,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 72,
+   "income": 305,
+   "food_per_trip": 7.44,
+   "loop_closed": 0,
+   "spring_store": 50
+  },
+  "5": {
+   "survived": 423,
+   "winters": 1,
+   "first_delivery": 109,
+   "deliveries": 11,
+   "peak_ants": 13,
+   "births": 5,
+   "starved": 13,
+   "winter_store": 0,
+   "income": 92,
+   "food_per_trip": 8.36,
+   "loop_closed": 0,
+   "spring_store": 0
+  }
+ },
+ "metrics": {
+  "survived": {
+   "mean": 620.0,
+   "min": 423,
+   "max": 905
+  },
+  "winters": {
+   "mean": 1.2,
+   "min": 1,
+   "max": 2
+  },
+  "first_delivery": {
+   "mean": 94.2,
+   "min": 74,
+   "max": 109
+  },
+  "deliveries": {
+   "mean": 23.4,
+   "min": 11,
+   "max": 41
+  },
+  "peak_ants": {
+   "mean": 13.0,
+   "min": 13,
+   "max": 13
+  },
+  "births": {
+   "mean": 5.0,
+   "min": 5,
+   "max": 5
+  },
+  "starved": {
+   "mean": 13.0,
+   "min": 13,
+   "max": 13
+  },
+  "winter_store": {
+   "mean": 23.0,
+   "min": 0,
+   "max": 72
+  },
+  "income": {
+   "mean": 173.2,
+   "min": 92,
+   "max": 305
+  },
+  "food_per_trip": {
+   "mean": 7.49,
+   "min": 6.71,
+   "max": 8.36
+  },
+  "loop_closed": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "spring_store": {
+   "mean": 11.6,
+   "min": 0,
+   "max": 50
+  }
+ },
+ "errors": {}
+}

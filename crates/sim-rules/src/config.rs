@@ -55,6 +55,12 @@ pub struct RunCfg {
 pub struct WorldCfg {
     pub width: i64,
     pub height: i64,
+    #[serde(default = "one")]
+    pub depth: i64,
+}
+
+fn one() -> i64 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]

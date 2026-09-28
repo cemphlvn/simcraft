@@ -1,0 +1,23 @@
+#![enable(implicit_some)]
+// Asset pack: how ants, their food and their nest look. Reusable by any game with these kinds.
+// A state selector works like in rules ("Carry", "Active.Nurse"); the most specific match wins.
+Assets(
+    kinds: {
+        "ant": (
+            glyph: 'a', color: (225, 120, 70), voxel: (200, 90, 50),
+            states: {
+                "Nurse":   (glyph: 'n', color: (245, 200, 140)),
+                "Ready":   (glyph: 'r', color: (210, 150, 90)),
+                "Search":  (glyph: 'a', color: (235, 110, 60)),
+                "Carry":   (glyph: 'c', color: (255, 215, 80), voxel: (255, 200, 60)),
+                "Dormant": (glyph: 'z', color: (120, 140, 210), voxel: (90, 110, 190)),
+            },
+        ),
+        "bush": (
+            glyph: '*', color: (90, 190, 90),
+            states: { "Ripe": (glyph: '*', color: (220, 60, 110)), "Bare": (glyph: 'o', color: (90, 130, 80)) },
+        ),
+        "nest": (glyph: 'N', color: (200, 160, 110), voxel: (150, 110, 70)),
+        "ground": (glyph: ' ', states: { "Trail": (glyph: '·', color: (140, 200, 150)) }),
+    },
+)

@@ -10,6 +10,8 @@
 // Score: fame from shipped games.
 Game(
     name: "gamedev",
+    // Written before senses existed: every expression sees the whole world.
+    perception: Direct,
 
     kinds: {
         "wall":    (glyph: '#', solid: true),

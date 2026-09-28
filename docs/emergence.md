@@ -174,6 +174,21 @@ states "discovery before recruitment".
 
 ---
 
+## Game 6: colony 3D (`games/colony3d`)
+
+The colony rebuilt for a physical world and the simcraft renderer: the nest is a place underground, temperature and
+scent are fields. Also the first game built on perception (`senses`) from the start.
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| 6.1 | The nest was one cell with a scripted climate | A physical environment: soil, tunnels, heat that moves | **3D worlds** (depth, `z`, 26-neighbourhood, level-0 wrappers keep 2D identical) and **fields** (per-voxel integers, native diffusion, `top` pinned by an expression, `terrain`) | `a_3d_world_has_levels_terrain_and_digging`, `heat_diffuses_down_through_the_levels`; all 2D golden hashes unchanged |
+| 6.2 | Soil temperature never moved (all levels 50 while the air went 0 → 99) | Slow flows must not round to zero | **Not an engine change.** Integer diffusion truncates; the game stores centidegrees (0..10000). Documented as a rule for fields | deep chamber lags the seasons by ~¼ year |
+| 6.3 | 559 ground entities carried the scent; they had to evaporate by rule | Pheromone as a field that evaporates | Field `decay` (% per tick, after diffusion) | scent trails in the surface view |
+| 6.4 | Ants heading to the nest stopped dead against the soil ceiling | Movers follow tunnels | A step into terrain **slides** (dx,dy,0) → (0,0,dz) → (dx,0,0) → (0,dy,0); only worlds with terrain | ants go down the shaft and up again |
+| 6.5 | Nothing could show the nest's inside | Interfaces as reusable components | `sim-render`: diffing terminal renderer, projections 2D / 2.5D / 3D / custom, components with props, themes, asset packs, `view.ron` | `simcraft-view games/colony3d`; frame in ~1.4 ms |
+
+---
+
 ## Request: adoptable from Unity and Unreal
 
 Not a game. Product direction (architecture.md): hosts display, the core decides, one `game.ron` everywhere.

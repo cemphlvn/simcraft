@@ -7,6 +7,8 @@
 // Win: no ghosts left, however they left. Lose: the hero falls.
 Game(
     name: "mercy_dungeon",
+    // Written before senses existed: every expression sees the whole world.
+    perception: Direct,
 
     kinds: {
         "wall":  (glyph: '#', solid: true),

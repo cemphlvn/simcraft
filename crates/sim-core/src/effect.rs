@@ -10,8 +10,25 @@ pub enum Effect {
     Set { e: EntityId, prop: String, v: i64 },
     Add { e: EntityId, prop: String, d: i64 },
     SetState { e: EntityId, state: String },
-    Move { e: EntityId, dx: i64, dy: i64 },
-    Spawn { kind: String, state: String, x: i64, y: i64, props: BTreeMap<String, i64> },
+    Move {
+        e: EntityId,
+        dx: i64,
+        dy: i64,
+        #[serde(default)]
+        dz: i64,
+    },
+    Spawn {
+        kind: String,
+        state: String,
+        x: i64,
+        y: i64,
+        #[serde(default)]
+        z: i64,
+        props: BTreeMap<String, i64>,
+    },
+    /// A field value at a voxel (no entity involved).
+    FieldSet { name: String, x: i64, y: i64, z: i64, v: i64 },
+    FieldAdd { name: String, x: i64, y: i64, z: i64, d: i64 },
     Despawn { e: EntityId },
     Emit { e: EntityId, name: String },
     /// Before the group applies: prop >= min must hold (on live state). Otherwise the group is dropped.
@@ -28,7 +45,7 @@ impl Effect {
             | Effect::Despawn { e }
             | Effect::Emit { e, .. }
             | Effect::Need { e, .. } => Some(*e),
-            Effect::Spawn { .. } => None,
+            Effect::Spawn { .. } | Effect::FieldSet { .. } | Effect::FieldAdd { .. } => None,
         }
     }
 }
@@ -92,14 +109,20 @@ pub fn apply(world: &mut World, groups: Vec<Group>) -> Vec<Event> {
                     }
                 }
                 Effect::SetState { e, state } => world.set_state(e, state),
-                Effect::Move { e, dx, dy } => {
+                Effect::Move { e, dx, dy, dz } => {
                     if moved.insert(e) {
-                        world.move_by(e, dx, dy);
+                        world.move3(e, dx, dy, dz);
                     }
                 }
-                Effect::Spawn { kind, state, x, y, props } => {
+                Effect::FieldSet { name, x, y, z, v } => world.set_field(&name, x, y, z, v),
+                Effect::FieldAdd { name, x, y, z, d } => {
+                    if let Some(v) = world.field(&name, x, y, z) {
+                        world.set_field(&name, x, y, z, v + d);
+                    }
+                }
+                Effect::Spawn { kind, state, x, y, z, props } => {
                     let parent = g.actor.unwrap_or(0);
-                    if world.spawn(&kind, &state, x, y, props).is_none() {
+                    if world.spawn3(&kind, &state, x, y, z, props).is_none() {
                         // a solid kind could not spawn into an occupied cell
                         events.push(Event { tick: world.tick, source: g.source.clone(), entity: parent, name: "blocked".into() });
                     }

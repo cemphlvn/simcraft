@@ -7,10 +7,13 @@ Environment(
     params: {
         // Calendar (ticks). A year is summer + autumn + winter.
         "summer": 240, "autumn": 120, "winter": 120,
+        "warmth_lag": 60,    // warmth peaks this long after mid-summer... and is lowest mid-winter
+        "ripe_floor": 0,     // ripeness never below this while the land grows (early flowers); 0 = off
     },
 
     // Ripeness 0..100: rises from the start of summer to a peak, falls to 0 by the end of autumn, 0 in winter.
-    props: { "ripeness": 0 },
+    // Warmth 0..100: temperature through the year, lowest mid-winter, highest late summer.
+    props: { "ripeness": 0, "warmth": 0 },
 
     fsm: "season",
     fsms: {
@@ -26,6 +29,8 @@ Environment(
 
     rules: [
         (name: "ripening",
-         then: [ Set("ripeness", "triangle(tick % (p.summer + p.autumn + p.winter), p.summer + p.autumn, 100)") ]),
+         then: [ Set("ripeness", "max(if tick % (p.summer + p.autumn + p.winter) < p.summer + p.autumn { p.ripe_floor } else { 0 }, triangle(tick % (p.summer + p.autumn + p.winter), p.summer + p.autumn, 100))") ]),
+        (name: "weather",
+         then: [ Set("warmth", "triangle((tick + p.warmth_lag) % (p.summer + p.autumn + p.winter), p.summer + p.autumn + p.winter, 100)") ]),
     ],
 )

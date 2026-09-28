@@ -27,6 +27,15 @@ pub struct GameDef {
     /// Score expression for each controllable entity; summed per seat.
     #[serde(default)]
     pub score: Option<String>,
+    /// `Senses` (default): kinds see external reality only through their `senses`. `Direct`: everything sees everything.
+    #[serde(default)]
+    pub perception: Perception,
+    /// Numbers per voxel (temperature, soil, scent...): the world's physical layer.
+    #[serde(default)]
+    pub fields: BTreeMap<String, FieldDef>,
+    /// A field that makes voxels solid where it is non-zero (soil, rock).
+    #[serde(default)]
+    pub terrain: Option<String>,
     /// Environments this game uses (`envs/<name>.ron`); merged in at load.
     #[serde(default)]
     pub environments: Vec<String>,
@@ -36,6 +45,30 @@ pub struct GameDef {
     /// Filled by the merge: the environment kinds, in `environments` order.
     #[serde(skip)]
     pub env_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum Perception {
+    #[default]
+    Senses,
+    Direct,
+}
+
+/// A field: its starting value and its physics.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldDef {
+    #[serde(default)]
+    pub init: i64,
+    /// % of the difference to the 6 face neighbours' average moved per tick (0 = none).
+    #[serde(default)]
+    pub diffusion: i64,
+    /// % of the value lost per tick, after diffusion (evaporation).
+    #[serde(default)]
+    pub decay: i64,
+    /// World-level expression pinned onto level 0 every tick (e.g. the air temperature).
+    #[serde(default)]
+    pub top: Option<String>,
 }
 
 /// An environment: the world's own state machine, written like a game and shared between games.
@@ -79,6 +112,7 @@ impl GameDef {
                     solid: false,
                     hidden: true,
                     glyphs: BTreeMap::new(),
+                    senses: BTreeMap::new(),
                 },
             );
             for (k, v) in &env.params {
@@ -107,8 +141,17 @@ impl GameDef {
 #[serde(deny_unknown_fields)]
 pub struct Layout {
     /// glyph → kind or (kind, {prop: value}). '.' and ' ' are empty cells.
+    #[serde(default)]
     pub legend: BTreeMap<char, Legend>,
+    /// glyph → field values set at that voxel (no entity): `',': {"soil": 1}`.
+    #[serde(default)]
+    pub cells: BTreeMap<char, BTreeMap<String, i64>>,
+    /// One level (2D).
+    #[serde(default)]
     pub rows: Vec<String>,
+    /// Several levels, top first (3D). Use either `rows` or `levels`.
+    #[serde(default)]
+    pub levels: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -134,9 +177,22 @@ impl Legend {
 }
 
 impl Layout {
+    /// The levels, top first (`rows` is one level).
+    pub fn all_levels(&self) -> Vec<&Vec<String>> {
+        if self.levels.is_empty() { vec![&self.rows] } else { self.levels.iter().collect() }
+    }
+
     pub fn size(&self) -> (i64, i64) {
-        let w = self.rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
-        (w as i64, self.rows.len() as i64)
+        let (w, h, _) = self.size3();
+        (w, h)
+    }
+
+    /// (width, height, depth)
+    pub fn size3(&self) -> (i64, i64, i64) {
+        let levels = self.all_levels();
+        let w = levels.iter().flat_map(|l| l.iter()).map(|r| r.chars().count()).max().unwrap_or(0);
+        let h = levels.iter().map(|l| l.len()).max().unwrap_or(0);
+        (w as i64, h as i64, levels.len() as i64)
     }
 }
 
@@ -165,6 +221,9 @@ pub struct KindDef {
     /// Glyph per state (else `glyph`).
     #[serde(default)]
     pub glyphs: BTreeMap<String, char>,
+    /// What this kind perceives: name → expression over the world. Seen as `sense.<name>`.
+    #[serde(default)]
+    pub senses: BTreeMap<String, String>,
 }
 
 /// A machine or a state inside one. A flat machine is just `(initial, transitions)`;
@@ -280,6 +339,15 @@ pub enum Do {
     Goto(String),
     /// One step; dx, dy are expressions (e.g. `Move("arg.dx", "arg.dy")`).
     Move(String, String),
+    /// One step in 3D: dx, dy, dz are expressions.
+    Move3(String, String, String),
+    /// Field value at the subject's voxel: `SetField("soil", "0")` digs.
+    SetField(String, String),
+    AddField(String, String),
+    /// Field value at a voxel next to the subject: (field, dx, dy, dz, value). Digging: `SetFieldAt("soil", "0", "0", "1", "0")`.
+    SetFieldAt(String, String, String, String, String),
+    /// One step to the open neighbouring voxel with the most of a field.
+    ClimbField(String),
     /// Applies the inner actions to another entity: `On(It, [Add("hp", "-3")])`.
     On(Target, Vec<Do>),
     /// prop must be >= expr. Checked at request time and at apply time (on live state);

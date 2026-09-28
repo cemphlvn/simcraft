@@ -29,6 +29,8 @@ pub trait Rules {
     fn outcome(&self, _world: &World) -> Option<String> {
         None
     }
+    /// Physics after the tick's effects are applied (fields: diffusion, pinned levels). Default: none.
+    fn physics(&self, _world: &mut World) {}
     /// Does a restored world fit these rules (known kinds, valid states)?
     fn check_world(&self, _world: &World) -> Result<(), Vec<String>> {
         Ok(())
@@ -146,6 +148,7 @@ impl<R: Rules> Engine<Running, R> {
         let mut groups = std::mem::take(&mut self.pending);
         groups.extend(self.rules.eval(&self.world)); // 1) read
         let events = apply(&mut self.world, groups); // 2) write
+        self.rules.physics(&mut self.world); // 3) the world's own physics
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
         let (tick, hash) = (self.world.tick, self.world.hash());

@@ -591,8 +591,8 @@ fn golden_colony_hash() {
     for _ in 0..200 {
         e.tick();
     }
-    // Recorded at eval step 011 (seasons as an environment; behaviour identical to 010). Change only on purpose, together with the game (and its EVALS.md).
-    assert_eq!(format!("{:016x}", e.world().hash()), "72aaa5caea6bc031");
+    // Recorded at eval step 017. Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "1a081f5acc21b60a");
 }
 
 // --- environments ---
@@ -620,9 +620,13 @@ impl sim_rules::NativeEnv for NativeSeasons {
         state: &str,
     ) -> (std::collections::BTreeMap<String, i64>, String) {
         let (summer, autumn, winter) = (p["summer"], p["autumn"], p["winter"]);
-        let t = tick as i64 % (summer + autumn + winter);
+        let year = summer + autumn + winter;
+        let t = tick as i64 % year;
         let grow = summer + autumn;
-        let ripeness = if t > grow { 0 } else { 100 - (t * 200 / grow - 100).abs() };
+        let triangle = |x: i64, len: i64| if x < 0 || x > len { 0 } else { 100 - (x * 200 / len - 100).abs() };
+        let floor = if t < grow { p["ripe_floor"] } else { 0 };
+        let ripeness = floor.max(triangle(t, grow));
+        let warmth = triangle((tick as i64 + p["warmth_lag"]) % year, year);
         // Transitions see the start of the tick, exactly like the .ron machine.
         let next = match state {
             "Summer" if t >= summer => "Autumn",
@@ -632,16 +636,26 @@ impl sim_rules::NativeEnv for NativeSeasons {
         };
         let mut out = props.clone();
         out.insert("ripeness".into(), ripeness);
+        out.insert("warmth".into(), warmth);
         (out, next.to_string())
     }
 }
 
+/// A calendar: the seasons environment and one kind that senses it. No end, so conformance runs every tick.
+const CALENDAR: &str = r#"#![enable(implicit_some)]
+Game(name: "calendar", environments: ["seasons"],
+  kinds: { "watcher": (glyph: 'w', props: { "felt": 0 }, senses: { "warmth": "env.seasons.warmth" }) },
+  rules: [ (name: "feel", for: "watcher", then: [ Set("felt", "sense.warmth") ]) ])"#;
+const CALENDAR_PANEL: &str = "[run]\nseed = 1\nmax_ticks = 5000\n[world]\nwidth = 2\nheight = 1\n[spawn]\nwatcher = 1\n";
+
 #[test]
 fn a_native_environment_matches_its_ron_reference() {
-    let ticks = sim_rules::conformance(COLONY, COLONY_PANEL, &colony_envs(), "seasons", Arc::new(NativeSeasons), 1500)
+    let envs = colony_envs();
+    let ticks = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &envs, "seasons", Arc::new(NativeSeasons), 1500)
         .expect("bit-identical");
-    // Seed 1's colony dies at tick 1460: three full years of seasons compared, to the end of the game.
-    assert!(ticks >= 3 * 480, "{ticks}");
+    assert_eq!(ticks, 1500, "three years and more, every tick compared");
+    // And inside a real game, up to its end.
+    sim_rules::conformance(COLONY, COLONY_PANEL, &envs, "seasons", Arc::new(NativeSeasons), 1500).expect("bit-identical");
 }
 
 #[test]
@@ -659,7 +673,7 @@ fn a_wrong_native_environment_is_caught() {
             NativeSeasons.step(tick.saturating_sub(1), p, props, state)
         }
     }
-    let err = sim_rules::conformance(COLONY, COLONY_PANEL, &colony_envs(), "seasons", Arc::new(Late), 1500)
+    let err = sim_rules::conformance(CALENDAR, CALENDAR_PANEL, &colony_envs(), "seasons", Arc::new(Late), 1500)
         .expect_err("must diverge");
     assert!(err.contains("tick"), "{err}");
 }
@@ -686,7 +700,7 @@ fn an_environment_is_one_hidden_entity() {
     assert_eq!(seasons.len(), 1);
     assert!(e.rules().is_hidden("seasons") && !e.rules().is_hidden("ant"));
     // Unplaced by the layout: it appears once, at (0, 0).
-    let game = COLONY.replace(r#"'S': "seasons""#, r#"'S': "wall""#);
+    let game = COLONY.replace(r#"'S': "seasons""#, r#"'S': "ground""#);
     let e = boot_colony(&game, &colony_envs()).expect("valid");
     let s: Vec<_> = e.world().of_kind("seasons").map(|x| (x.x, x.y)).collect();
     assert_eq!(s, vec![(0, 0)]);
@@ -703,4 +717,90 @@ fn maths_helpers_are_integer_curves() {
     e.tick();
     let p = &e.world().of_kind("probe").next().unwrap().props;
     assert_eq!((p["a"], p["b"], p["c"], p["d"], p["e"]), (50, 100, 15, 0, 100));
+}
+
+// --- 3D worlds and fields ---
+
+/// Three levels: air, soil, soil. A digger digs straight down; heat from the air spreads into the soil.
+const DIG: &str = r##"#![enable(implicit_some)]
+Game(name: "dig", perception: Direct,
+  fields: { "soil": (init: 0), "temp": (init: 10, diffusion: 30, top: "100") },
+  terrain: "soil",
+  kinds: { "digger": (glyph: 'd') },
+  layout: (legend: { 'd': "digger" }, cells: { 'x': { "soil": 1 } },
+           levels: [ [ "d.." ], [ "xxx" ], [ "xxx" ] ]),
+  rules: [
+    (name: "dig", for: "digger", when: r#"field_at("soil", 0, 0, 1) != 0"#, then: [ SetFieldAt("soil", "0", "0", "1", "0") ]),
+    (name: "down", for: "digger", then: [ Move3("0", "0", "1") ]),
+  ])"##;
+const DIG_PANEL: &str = "[run]\nseed = 1\nmax_ticks = 100\n";
+
+#[test]
+fn a_3d_world_has_levels_terrain_and_digging() {
+    let mut e = boot(DIG, DIG_PANEL).expect("valid");
+    assert_eq!(e.world().depth, 3);
+    let digger = |e: &Engine<Running, Game>| e.world().of_kind("digger").next().map(|d| (d.x, d.y, d.z)).unwrap();
+    assert_eq!(digger(&e), (0, 0, 0));
+    assert!(e.world().is_terrain(0, 0, 1), "soil below");
+    // Evaluated on the start of the tick, applied in order: the dig lands first, so the move finds an open voxel.
+    e.tick();
+    assert!(!e.world().is_terrain(0, 0, 1) && e.world().is_terrain(1, 0, 1), "one voxel dug, its neighbour not");
+    assert_eq!(digger(&e), (0, 0, 1), "dug and moved into the hole in one tick");
+    for _ in 0..4 {
+        e.tick();
+    }
+    assert_eq!(digger(&e), (0, 0, 2), "and on down to the bottom level");
+}
+
+#[test]
+fn heat_diffuses_down_through_the_levels() {
+    let mut e = boot(DIG, DIG_PANEL).expect("valid");
+    for _ in 0..20 {
+        e.tick();
+    }
+    let t = |z| e.world().field("temp", 2, 0, z).unwrap();
+    assert_eq!(t(0), 100, "the top level is pinned to the air");
+    assert!(t(0) > t(1) && t(1) > t(2) && t(2) > 10, "warmth spreads downwards: {} {} {}", t(0), t(1), t(2));
+}
+
+#[test]
+fn a_3d_world_is_deterministic_and_snapshots() {
+    let run = || {
+        let mut e = boot(DIG, DIG_PANEL).expect("valid");
+        (0..30).map(|_| e.tick().hash).collect::<Vec<_>>()
+    };
+    assert_eq!(run(), run());
+    let mut a = boot(DIG, DIG_PANEL).expect("valid");
+    for _ in 0..5 {
+        a.tick();
+    }
+    let json = serde_json::to_string(&a.snapshot()).expect("serializes");
+    let future: Vec<u64> = (0..20).map(|_| a.tick().hash).collect();
+    let mut b = boot(DIG, DIG_PANEL).expect("valid");
+    b.restore(serde_json::from_str(&json).expect("parses")).expect("restores");
+    assert_eq!(future, (0..20).map(|_| b.tick().hash).collect::<Vec<_>>(), "fields, levels and z survive a save");
+}
+
+#[test]
+fn field_mistakes_are_reported() {
+    let errs = boot(&DIG.replace(r#"SetFieldAt("soil""#, r#"SetFieldAt("soill""#), DIG_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("no field 'soill'")), "{errs:?}");
+    let errs = boot(&DIG.replace(r#"terrain: "soil""#, r#"terrain: "rock""#), DIG_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("terrain 'rock' is not a declared field")), "{errs:?}");
+    let errs = boot(&DIG.replace(r#"field_at("soil""#, r#"field_at("sol""#), DIG_PANEL).err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("no field 'sol'")), "{errs:?}");
+}
+
+// --- colony 3D ---
+
+#[test]
+fn golden_colony3d_hash() {
+    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/colony3d")), None)
+        .expect("loads");
+    let mut e = Engine::<Loaded, _>::new(world, g).validate().expect("valid").start();
+    for _ in 0..200 {
+        e.tick();
+    }
+    // Recorded at colony3d eval step 000. Change only on purpose, together with the game (and its EVALS.md).
+    assert_eq!(format!("{:016x}", e.world().hash()), "b001a456bb60dbd8");
 }
