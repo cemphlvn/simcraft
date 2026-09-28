@@ -3,6 +3,8 @@ name = "sim-render"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+# `cargo run -p sim-render -- <game>` opens the viewer; the pixelate tool needs `--bin simcraft-pixelate`.
+default-run = "simcraft-view"
 
 [[bin]]
 name = "simcraft-view"
