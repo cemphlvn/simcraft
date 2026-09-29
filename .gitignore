@@ -20,3 +20,7 @@ assets/src/*.png
 # Compiled eval metrics (tools/build_evalmetrics.sh)
 tools/*.so
 tools/build/
+
+# Generated 3D sources (large; regenerate or fetch by job id: assets/src/README.md)
+assets/src/**/*.glb
+assets/src/**/*.png

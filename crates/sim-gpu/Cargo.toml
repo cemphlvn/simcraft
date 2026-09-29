@@ -18,6 +18,7 @@ sim-render = { path = "../sim-render" }
 serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
+gltf.workspace = true
 ron.workspace = true
 wgpu = "29"
 winit = "0.30"

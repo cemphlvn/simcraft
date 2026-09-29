@@ -18,7 +18,7 @@ use sim_rules::Game;
 use crate::gpu::{Mesh, Vert3};
 use crate::math::V3;
 use crate::stage::{BLOB, Quad, WHITE, Wrap};
-use crate::track::Frame;
+use crate::track::{Frame, Press};
 use crate::walker::{Input, WalkFeel, Walker, ray};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -48,6 +48,15 @@ pub struct Roam {
     pub feel: WalkFeel,
     #[serde(default)]
     pub keys: Keys,
+    /// Where the view was loaded from (models are found relative to it).
+    #[serde(skip)]
+    pub dir: std::path::PathBuf,
+    /// Images for model texture overrides (from the asset packs), ready for the GPU.
+    #[serde(skip)]
+    pub images: BTreeMap<String, crate::model::Texture>,
+    /// The models its kinds use, by file, loaded (`load_roam`).
+    #[serde(skip)]
+    pub models: BTreeMap<String, std::sync::Arc<crate::model::Model>>,
 }
 
 fn d_far() -> f32 {
@@ -96,7 +105,9 @@ fn white() -> (u8, u8, u8) {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Body {
+    #[serde(default = "pale")]
     pub color: (u8, u8, u8),
+    #[serde(default = "pale")]
     pub head: (u8, u8, u8),
     /// Body length (voxels).
     #[serde(default = "d_size")]
@@ -104,10 +115,65 @@ pub struct Body {
     /// A prop that, when non-zero, puts a ball in its mandibles; or a state it shows a ball in.
     #[serde(default)]
     pub carries_in: Option<String>,
+    /// A model (glTF) instead of the built-in body: its clips follow the game's states (see `ModelSpec`).
+    #[serde(default)]
+    pub model: Option<ModelSpec>,
 }
 
 fn d_size() -> f32 {
     0.8
+}
+
+fn pale() -> (u8, u8, u8) {
+    (230, 220, 200)
+}
+
+/// How a model plays a kind: the contract between a modelling tool's file and the game.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSpec {
+    /// The `.glb` (relative to the game's folder, else an `assets/` folder above it). glTF conventions: +Y up,
+    /// +Z forward, feet at y = 0.
+    pub file: String,
+    /// Lighter versions, from a distance (voxels) on: `[(8.0, "termite_lod1.glb"), ...]`.
+    #[serde(default)]
+    pub lods: Vec<(f32, String)>,
+    /// Body length in voxels along +Z (the model is scaled to it).
+    #[serde(default = "d_size")]
+    pub length: f32,
+    /// The game's states → clips: the first entry whose state selector the entity is in (`*` = any).
+    #[serde(default)]
+    pub clips: Vec<(String, String)>,
+    /// The clip when it did not move this tick (e.g. `idle`).
+    #[serde(default)]
+    pub still: Option<String>,
+    /// Clip playback rate (1 = as authored).
+    #[serde(default = "one")]
+    pub rate: f32,
+    /// The socket node where a carried ball sits (`carries_in` says when).
+    #[serde(default)]
+    pub carry: Option<String>,
+    /// Material name → an image from the asset packs (e.g. a Higgsfield texture) as its base colour.
+    #[serde(default)]
+    pub textures: BTreeMap<String, String>,
+}
+
+impl ModelSpec {
+    /// The clip for an entity in `state`, moving or not.
+    pub fn clip_for(&self, state: &str, moving: bool) -> String {
+        if !moving && let Some(s) = &self.still {
+            return s.clone();
+        }
+        self.clips
+            .iter()
+            .find(|(sel, _)| sel == "*" || sim_state::in_label(state, sel))
+            .map_or_else(|| "rest".to_string(), |(_, c)| c.clone())
+    }
+
+    /// Every file it uses (the model and its lighter versions).
+    pub fn files(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.file).chain(self.lods.iter().map(|(_, f)| f))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -299,7 +365,9 @@ fn ellipsoid_at(out: &mut Vec<Vert3>, c: V3, axes: [V3; 3], radii: [f32; 3], col
             for k in [0usize, 1, 2, 0, 2, 3] {
                 let (p, n) = q[k];
                 let l = 0.45 + 0.55 * n.dot(sun).max(0.0);
-                out.push(Vert3 { pos: [p.0, p.1, p.2], uv: [0.5, 0.5], color: [color[0] * l, color[1] * l, color[2] * l, 1.0], fog: 0.0 });
+                let (ii, jj) = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)][k];
+                let uv = [ii as f32 / seg as f32, jj as f32 / rings as f32];
+                out.push(Vert3 { pos: [p.0, p.1, p.2], uv, color: [color[0] * l, color[1] * l, color[2] * l, 1.0], fog: 0.0 });
             }
         }
     }
@@ -385,6 +453,19 @@ pub fn cling_point(w: &World, x: f32, y: f32, z: f32) -> (V3, V3) {
     (centre - V3(0.0, 0.5, 0.0), V3(0.0, 1.0, 0.0))
 }
 
+/// What a frame (and the ticks before it) did: timings (noise) and exact counts (not noise). Reset by the caller.
+#[derive(Clone, Debug, Default, serde::Serialize, Deserialize)]
+pub struct FrameStats {
+    pub ticks: u32,
+    pub ticks_ms: f64,
+    pub build_ms: f64,
+    pub terrain_rebuilt: bool,
+    pub terrain_ms: f64,
+    pub terrain_verts: usize,
+    pub bodies: usize,
+    pub verts: usize,
+}
+
 /// Everything the roam view keeps between frames.
 pub struct RoamPlay {
     pub engine: sim_core::Engine<sim_core::Running, Game>,
@@ -395,6 +476,13 @@ pub struct RoamPlay {
     pub smell_on: bool,
     /// What the keys and the mouse ask right now (the window fills it; `look` is used up each frame).
     pub input: Input,
+    /// Every action queued so far, in queue order (the order `apply` sees): with the game's seed and panel, the
+    /// whole run. A spike report carries it, so the state at any frame can be rebuilt and checked by its hash.
+    pub log: Vec<Press>,
+    /// Replaying a log: its presses (queued at their ticks) and how far it got; input is ignored.
+    pub script: Option<(Vec<Press>, usize)>,
+    /// What the last frame and ticks did (timings and exact counts), for the spike watch.
+    pub stats: FrameStats,
     /// A camera that is not yours (an overview for shots); None = your eyes.
     pub overview: Option<crate::math::Eye>,
     /// Terrain meshes and the field they were built from.
@@ -403,6 +491,9 @@ pub struct RoamPlay {
     terrain_version: u64,
     /// Crawlers' headings (last move) and gait phases.
     gait: BTreeMap<u64, (V3, f32)>,
+    /// Each entity's clip time, and when (view time) it last moved.
+    clock: BTreeMap<u64, f32>,
+    moved_at: BTreeMap<u64, f32>,
     /// The last refused action and when (the target flashes red).
     pub refused: Option<(String, f32)>,
     /// Actions queued for the next tick (crawl is added each tick).
@@ -430,10 +521,15 @@ impl RoamPlay {
             time: 0.0,
             smell_on: false,
             input: Input::default(),
+            log: Vec::new(),
+            script: None,
+            stats: FrameStats::default(),
             overview: None,
             terrain: (Vec::new(), Vec::new()),
             terrain_version: 0,
             gait: BTreeMap::new(),
+            clock: BTreeMap::new(),
+            moved_at: BTreeMap::new(),
             refused: None,
             ground_top,
         }
@@ -456,23 +552,55 @@ impl RoamPlay {
 
     /// Runs `n` ticks; before each, the game's you steps toward where your body is (one voxel at most).
     pub fn step(&mut self, n: u32) {
+        let t = std::time::Instant::now();
+        let mut ran = 0;
         for _ in 0..n {
             if self.engine.outcome().is_some() || self.world().tick >= self.engine.rules().cfg.run.max_ticks {
-                return;
+                break;
             }
-            if let Some(e) = self.you() {
+            ran += 1;
+            if self.script.is_some() {
+                self.queue_script();
+            } else if let Some(e) = self.you() {
                 let (fx, fy, fz) = self.feet_voxel();
                 let d = [(fx - e.x).signum(), (fy - e.y).signum(), (fz - e.z).signum()];
                 if d != [0, 0, 0] {
                     let args: BTreeMap<String, i64> = [("dx", d[0]), ("dy", d[1]), ("dz", d[2])].map(|(k, v)| (k.to_string(), v)).into();
-                    if let Ok(g) = self.engine.rules().act(self.world(), None, e.id, &self.roam.actions.crawl, &args) {
-                        self.engine.queue(g);
-                    }
+                    let crawl = self.roam.actions.crawl.clone();
+                    // Refused while you are in the air (nothing to cling to): the game catches up when you land.
+                    let _ = self.act(&crawl, args);
                 }
             }
             self.tween.remember(self.engine.world());
             self.engine.tick();
         }
+        self.stats.ticks += ran;
+        self.stats.ticks_ms += t.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    /// Queues an action of yours if the game takes it (and logs it); the refusal otherwise.
+    fn act(&mut self, action: &str, args: BTreeMap<String, i64>) -> Result<(), String> {
+        let Some(id) = self.you().map(|e| e.id) else { return Err("you are not in the world".into()) };
+        let g = self.engine.rules().act(self.world(), None, id, action, &args)?;
+        self.engine.queue(g);
+        self.log.push(Press { tick: self.world().tick, action: action.to_string(), args });
+        Ok(())
+    }
+
+    /// Replay: queue the presses logged at this tick, in their order. A press the game refuses now means the
+    /// replay has left the recorded run (a different game or engine): said at once, not discovered later.
+    fn queue_script(&mut self) {
+        let tick = self.world().tick;
+        let Some((presses, at)) = self.script.take() else { return };
+        let mut at = at;
+        while at < presses.len() && presses[at].tick <= tick {
+            let p = presses[at].clone();
+            if let Err(why) = self.act(&p.action, p.args.clone()) {
+                self.refused = Some((format!("replay diverged at tick {tick}: {} refused: {why}", p.action), self.time));
+            }
+            at += 1;
+        }
+        self.script = Some((presses, at));
     }
 
     /// The body moves (every frame, not every tick).
@@ -499,25 +627,43 @@ impl RoamPlay {
             self.refused = Some(("nothing within reach".into(), self.time));
             return;
         };
+        if self.script.is_some() {
+            return;
+        }
         let Some(e) = self.you() else { return };
-        let (to, action) = if dig { (hit, &self.roam.actions.dig) } else { (before, &self.roam.actions.drop) };
+        let (to, action) = if dig { (hit, self.roam.actions.dig.clone()) } else { (before, self.roam.actions.drop.clone()) };
         let args: BTreeMap<String, i64> =
             [("dx", to.0 - e.x), ("dy", to.1 - e.y), ("dz", to.2 - e.z)].map(|(k, v)| (k.to_string(), v)).into();
-        match self.engine.rules().act(self.world(), None, e.id, action, &args) {
-            Ok(g) => self.engine.queue(g),
-            Err(why) => self.refused = Some((format!("{action}: {why}"), self.time)),
+        if let Err(why) = self.act(&action, args) {
+            self.refused = Some((format!("{action}: {why}"), self.time));
         }
     }
 
     pub fn frame(&mut self, w: f32, h: f32, dt: f32) -> Frame {
+        let started = std::time::Instant::now();
+        let fr = self.build_frame(w, h, dt);
+        self.stats.build_ms = started.elapsed().as_secs_f64() * 1000.0;
+        // Everything drawn: this frame's meshes, the terrain the GPU keeps, and every model instance's triangles.
+        let models: usize =
+            fr.models.iter().map(|d| d.instances.len() * self.roam.models.get(&d.model).map_or(0, |m| m.triangles() * 3)).sum();
+        self.stats.verts = fr.meshes.iter().chain(&self.terrain.1).map(|m| m.verts.len()).sum::<usize>() + models;
+        fr
+    }
+
+    fn build_frame(&mut self, w: f32, h: f32, dt: f32) -> Frame {
         self.time += dt;
         let eye = self.overview.unwrap_or_else(|| self.walker.eye());
         let world = self.engine.world();
         let fog = rgb(self.roam.fog);
         // Terrain: rebuilt only when it changed.
         let tf = self.engine.rules().def.terrain.clone().unwrap_or_default();
+        self.stats.terrain_rebuilt = false;
         if world.field_values(&tf).is_some_and(|v| v != self.terrain.0.as_slice()) {
+            let t = std::time::Instant::now();
             let meshes = terrain_meshes(world, &tf, &self.roam.materials);
+            self.stats.terrain_ms = t.elapsed().as_secs_f64() * 1000.0;
+            self.stats.terrain_rebuilt = true;
+            self.stats.terrain_verts = meshes.iter().map(|m| m.verts.len()).sum();
             self.terrain = (world.field_values(&tf).map(<[i64]>::to_vec).unwrap_or_default(), meshes);
             self.terrain_version += 1;
         }
@@ -544,6 +690,18 @@ impl RoamPlay {
                     }
                 }
             }
+            // And on to the horizon: four large quads past the tiles (fully in the fog there).
+            let (r0, r1) = (reach as f32, self.roam.far * 20.0);
+            let (w0, h0) = (world.width as f32, world.height as f32);
+            for (x0, z0, x1, z1) in
+                [(-r1, -r1, w0 + r1, -r0), (-r1, h0 + r0, w0 + r1, h0 + r1), (-r1, -r0, -r0, h0 + r0), (w0 + r0, -r0, w0 + r1, h0 + r0)]
+            {
+                let q = [V3(x0, y, z0), V3(x1, y, z0), V3(x1, y, z1), V3(x0, y, z1)];
+                for k in [0usize, 1, 2, 0, 2, 3] {
+                    let p = q[k];
+                    v.push(Vert3 { pos: [p.0, p.1, p.2], uv: [p.0 * m.scale, p.2 * m.scale], color: c, fog: 1.0 });
+                }
+            }
             meshes.push(Mesh { image: m.image.clone(), wrap: Wrap::Repeat, verts: v });
         }
 
@@ -553,10 +711,68 @@ impl RoamPlay {
             let t = rgb(m.tint);
             [t[0] * 0.7, t[1] * 0.7, t[2] * 0.7]
         });
-        // Gaits first (they remember), then every body on all cores.
+        // Gaits first (they remember), then every body on all cores. Kinds with a model become instances.
         let mut jobs = Vec::new();
+        let mut models: BTreeMap<String, crate::skin::ModelDraw> = BTreeMap::new();
+        let mut balls: Vec<(V3, V3, f32)> = Vec::new();
+        let (look_dir, far_away) = (eye.basis().2, self.roam.far);
         for e in world.entities().values() {
             let Some(body) = self.roam.kinds.get(&e.kind) else { continue };
+            if let Some(spec) = &body.model {
+                let prev = self.tween.prev.get(&e.id).copied().unwrap_or((e.x, e.y, e.z));
+                let moved = V3((e.x - prev.0) as f32, (prev.2 - e.z) as f32, (e.y - prev.1) as f32);
+                let g = self.gait.entry(e.id).or_insert((V3(0.0, 0.0, 1.0), (e.id % 7) as f32));
+                if moved.dot(moved) > 0.0 {
+                    g.0 = moved.norm();
+                    self.moved_at.insert(e.id, self.time);
+                }
+                // Walking = moved in the last half second (a crawler steps a few times a second, not every tick).
+                let moving = self.moved_at.get(&e.id).is_some_and(|t| self.time - t < 0.5);
+                let heading = g.0;
+                // Every entity has its own clock (offset by id, so a crowd does not step in lockstep).
+                let t = self.clock.entry(e.id).or_insert((e.id % 97) as f32 * 0.137);
+                *t += dt * spec.rate;
+                let time = *t;
+                let (x, y, z) = self.tween.at(e.id, (e.x, e.y, e.z));
+                let (feet, up) = cling_point(world, x, y, z);
+                let to = feet - eye.pos;
+                let dist = to.dot(to).sqrt();
+                if dist > far_away || (dist > 1.5 && to.dot(look_dir) < -0.2 * dist) {
+                    continue;
+                }
+                let file = spec.lods.iter().rev().find(|(from, _)| dist >= *from).map_or(&spec.file, |(_, f)| f);
+                let Some(model) = self.roam.models.get(file) else { continue };
+                let frames = crate::skin::Frames::of(model);
+                let clip = spec.clip_for(&e.state, moving);
+                let ([a, b], blend) = frames.at(&clip, time);
+                // The model's axes on the surface: +Z along the heading, +Y along the surface normal, +X to its
+                // left (glTF is right-handed, this view left-handed: +X to the left keeps it unmirrored).
+                let fwd = (heading - up.scale(heading.dot(up))).norm();
+                let fwd = if fwd.dot(fwd) > 0.5 { fwd } else { up.cross(V3(1.0, 0.0, 0.0)).norm() };
+                let left = fwd.cross(up).norm();
+                let s = spec.length / (model.max[2] - model.min[2]).max(1e-6);
+                let (mx, my, mz) = (left.scale(s), up.scale(s), fwd.scale(s));
+                let m = [[mx.0, my.0, mz.0, feet.0], [mx.1, my.1, mz.1, feet.1], [mx.2, my.2, mz.2, feet.2]];
+                models
+                    .entry(file.clone())
+                    .or_insert_with(|| crate::skin::ModelDraw { model: file.clone(), instances: Vec::new() })
+                    .instances
+                    .push(crate::skin::Instance { m, frames: [a, b, 0, 0], params: [blend, 0.0, 0.0, 0.0], tint: [1.0; 4] });
+                let carrying =
+                    body.carries_in.as_deref().is_some_and(|c| e.props.get(c).is_some_and(|v| *v != 0) || sim_state::in_label(&e.state, c));
+                if carrying && let Some(socket) = spec.carry.as_ref().and_then(|n| model.nodes.get(n)) {
+                    // Where the socket is in this frame of the clip, then in the world.
+                    let (i, j, k) = frames.frame_numbers(&clip, time);
+                    let c = model.clips.get(&clip).or_else(|| model.clips.get("rest"));
+                    if let Some(c) = c {
+                        let (p0, p1) = (c.frames[i][*socket][3], c.frames[j.min(c.frames.len() - 1)][*socket][3]);
+                        let p = [p0[0] + (p1[0] - p0[0]) * k, p0[1] + (p1[1] - p0[1]) * k, p0[2] + (p1[2] - p0[2]) * k];
+                        let world_p = feet + mx.scale(p[0]) + my.scale(p[1]) + mz.scale(p[2]);
+                        balls.push((world_p, up, spec.length * 0.075));
+                    }
+                }
+                continue;
+            }
             let prev = self.tween.prev.get(&e.id).copied().unwrap_or((e.x, e.y, e.z));
             let moved = V3((e.x - prev.0) as f32, (prev.2 - e.z) as f32, (e.y - prev.1) as f32);
             let g = self.gait.entry(e.id).or_insert((V3(0.0, 0.0, 1.0), (e.id % 7) as f32));
@@ -587,7 +803,18 @@ impl RoamPlay {
                 Some(v)
             })
             .collect();
+        self.stats.bodies = parts.len() + models.values().map(|d| d.instances.len()).sum::<usize>();
         bodies.extend(parts.into_iter().flatten());
+        // Carried balls, in the built mud's own texture.
+        let mut carried = Vec::new();
+        for (at, up, r) in balls {
+            let side = up.cross(V3(1.0, 0.0, 0.0)).norm();
+            ellipsoid(&mut carried, at, [side, up, up.cross(side)], [r; 3], [0.95, 0.9, 0.85]);
+        }
+        if let Some(m) = self.roam.materials.get(&2) {
+            meshes.push(Mesh { image: m.image.clone(), wrap: Wrap::Repeat, verts: carried });
+        }
+        let models: Vec<crate::skin::ModelDraw> = models.into_values().collect();
         meshes.push(Mesh { image: WHITE.into(), wrap: Wrap::Clamp, verts: bodies });
 
         // What you hold, low in front of your eyes, swaying with your step; your mandibles either side.
@@ -675,12 +902,48 @@ impl RoamPlay {
         // In front: a small crosshair.
         let cross = if refused_now { [1.0, 0.35, 0.3, 0.9] } else { [1.0, 1.0, 1.0, 0.75] };
         let front = vec![plain_c(BLOB, w / 2.0 - 4.0, h / 2.0 - 4.0, 8.0, 8.0, cross)];
-        Frame { back, eye, fog, meshes, front }
+        Frame { back, eye, fog, meshes, models, front }
+    }
+
+    /// Forgets the built terrain: the next frame rebuilds and re-uploads it (what a dig or a drop causes).
+    pub fn forget_terrain(&mut self) {
+        self.terrain.0.clear();
     }
 
     /// The terrain meshes and their version (bumped at each rebuild), for `Gpu::keep`.
     pub fn terrain(&self) -> (u64, &[Mesh]) {
         (self.terrain_version, &self.terrain.1)
+    }
+
+    /// Draws a frame: the terrain kept on the GPU (uploaded only when it changed), fog by distance from the eye.
+    pub fn render(&self, gpu: &mut crate::gpu::Gpu, target: &wgpu::TextureView, w: u32, h: u32, fr: &Frame) {
+        let world = self.world3(gpu, fr, w, h);
+        gpu.render(target, w, h, &fr.back, Some(world), &fr.front);
+    }
+
+    /// The 3D part of a frame, for `Gpu::render` or `Gpu::shot_scene`.
+    pub fn world3<'a>(&self, gpu: &mut crate::gpu::Gpu, fr: &'a Frame, w: u32, h: u32) -> crate::gpu::World3<'a> {
+        const TERRAIN: &[u32] = &[0];
+        gpu.keep(0, self.terrain_version, &self.terrain.1);
+        // Models go to the GPU the first time they are drawn (with their texture overrides).
+        for d in &fr.models {
+            if gpu.skin.as_ref().is_some_and(|s| s.has(&d.model)) {
+                continue;
+            }
+            if let Some(m) = self.roam.models.get(&d.model) {
+                let spec = self.roam.kinds.values().filter_map(|b| b.model.as_ref()).find(|s| s.files().any(|f| *f == d.model));
+                let overrides: BTreeMap<String, crate::model::Texture> = spec
+                    .map(|s| s.textures.iter().filter_map(|(mat, img)| Some((mat.clone(), self.roam.images.get(img)?.clone()))).collect())
+                    .unwrap_or_default();
+                gpu.upload_model(&d.model, m, &overrides);
+            }
+        }
+        let mut world = crate::gpu::World3::new(fr.eye.view_proj(w as f32, h as f32), fr.fog, &fr.meshes);
+        world.eye = [fr.eye.pos.0, fr.eye.pos.1, fr.eye.pos.2];
+        world.fog_range = self.fog_range();
+        world.kept = TERRAIN;
+        world.models = &fr.models;
+        world
     }
 
     /// Fog by distance: starts at, and fully fogged this much farther (for `World3::fog_range`).
@@ -744,6 +1007,18 @@ fn face_quad(a: [i64; 3], n: [i64; 3], c: [f32; 4]) -> Vec<Vert3> {
     let q = [corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)];
     let pm = [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]];
     [0usize, 1, 2, 0, 2, 3].iter().map(|&j| Vert3 { pos: q[j], uv: [0.5, 0.5], color: pm, fog: 0.0 }).collect()
+}
+
+/// A close look at a crawler of `kind` on flat ground (for `--shot --closeup`): the camera a body length away at
+/// its height, looking at it from the front-left, as a macro lens would.
+pub fn close_up(p: &mut RoamPlay, kind: &str) {
+    let w = p.world();
+    let pick =
+        w.of_kind(kind).find(|e| w.is_terrain(e.x, e.y, e.z + 1) && !w.is_terrain(e.x + 1, e.y, e.z) && !w.is_terrain(e.x, e.y + 1, e.z));
+    let Some(e) = pick else { return };
+    let (feet, _) = cling_point(w, e.x as f32, e.y as f32, e.z as f32);
+    let target = feet + V3(0.0, 0.18, 0.0);
+    p.overview = Some(crate::math::Eye { pos: target + V3(-0.75, 0.35, -0.95), target, roll: 0.0, fov: 38.0, near: 0.02, far: 200.0 });
 }
 
 /// A quick look for tests and `--shot`: stand a few voxels from the tallest built column, facing it.

@@ -20,6 +20,7 @@ toml = "1"
 # sync: rules are evaluated on multiple cores
 rhai = { version = "1.26", features = ["no_float", "only_i64", "sync"] }
 rayon = "1.12"
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "image_jpeg_rayon"] }
 
 # Lean debug builds: our code keeps line numbers (readable panics and backtraces), dependencies carry no debug
 # info at all. A debug test build is several times smaller and links faster; step into a dependency with a

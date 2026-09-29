@@ -83,3 +83,29 @@ First-person desert highway for `games/lanes`. Higgsfield `nano_banana_pro`; obj
 | `car_rear` | the same car from behind (hood as reference) | 52491bb4-3101-43e5-bad2-76f78242d183 |
 | `cactus`, `rock`, `post` | roadside scenery | 00545f81…, 45e8647d…, 063572f0… |
 | `btn_*` | chrome-rimmed midnight-blue badges: arrows, flame (dash), brake, jump, tap; `btn_pos1..4`: four lane stripes, one lit (the jump badge as reference) | 7aee37e7…, 3031f285…, aae2514c…, 218cfbc0…, 1b052772…, a3ba137d…, 434c2384…, 3aac2707…, f985158b…, 2f96debb… |
+
+## Termite model and mound textures (2026-09-29, `games/mound`)
+
+Realistic worker termite, from a photograph-like reference to a rigged, animated game model:
+
+1. Reference: Higgsfield `gpt_image_2_5`, two variants (jobs `88cec517-0c01-4a52-8373-18de17b0cc12`,
+   `7b2b6322-d9ad-423b-8a8d-2f1a68f8f778`): "Photorealistic macro studio photograph of a single worker termite
+   (Macrotermes), scientific specimen, three-quarter top view from front-left, ... all six legs spread outward and
+   fully separated from the body, ... plain pure white seamless background". `termite/ref_a.png` was used (legs
+   clearest).
+2. Mesh: image-to-3D on ref A, two models compared: Tripo H3.1 (`tripo_h3_1_image_to_3d`, detailed geometry and
+   texture, PBR, 60k faces; job `a7c4bdc6-11af-4d5f-a5bf-868302282288`) → 58k triangles, colour + ORM + normal maps
+   at 4096², crisp segments and hairs; Meshy 7 ultra (`meshy_v7_image_to_3d`; job
+   `abceb5e6-4018-4848-81a7-62d786a54791`) → 62k triangles, softer. Tripo kept (`termite/tripo.glb`, not in git).
+   Higgsfield's auto-rigging is humanoid-only, so the rig is ours:
+3. Rig, clips, levels of detail: `Blender -b --factory-startup --python tools/blender/rig_insect.py --
+   assets/src/termite/tripo.glb assets/models termite` → `assets/models/termite.glb` (12k triangles),
+   `_lod1` (3k), `_lod2` (800); 22 bones, the `carry` socket, clips `walk`, `carry`, `dig`, `idle`; textures 1024².
+   Check with `simcraft-model assets/models/termite.glb --game games/mound --kind termite`.
+
+Textures (`assets/mound/`, pack `assets/mound.ron`): Higgsfield `gpt_image_2_5`, then `tools/tileable.py` (1024²):
+- `laterite.png` (job `becc10e3-d722-4272-b01a-4ae8ea0cefd2`): "Seamless tileable texture, straight top-down
+  orthographic macro photograph of dry red-orange laterite savanna soil at insect scale: fine sand grains, tiny
+  rounded quartz pebbles and dust, ...".
+- `mud.png` (job `01a34889-d9a5-48b7-ac26-620b7aa8d37d`): "... a termite mound wall built from packed moist clay
+  pellets: rounded mud balls pressed together, dark red-brown laterite with a faint wet sheen ...".

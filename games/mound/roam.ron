@@ -3,18 +3,29 @@
 // walking into a wall climbs it. Left click drops the ball you carry where you look; right click digs one.
 // Hold f to smell: the cement pheromone glows where fresh mud is.
 Roam(
-    assets: ["nature_hd"],
+    assets: ["nature_hd", "mound"],
     you: "you",
     actions: (crawl: "crawl", dig: "dig", drop: "drop", reach: 2.5, carrying: "carrying"),
     materials: {
-        1: (image: "soil", scale: 1.0, tint: (196, 150, 112)),     // earth
-        2: (image: "soil", scale: 1.0, tint: (150, 92, 60)),       // mud balls: wetter, redder
+        1: (image: "laterite", scale: 0.35),     // earth: dry red laterite, macro-photographed
+        2: (image: "mud", scale: 0.3),           // mud balls: packed moist clay pellets
     },
     sky: "sky",
     fog: (214, 196, 170),
     far: 45.0,
     kinds: {
-        "termite": (color: (238, 226, 200), head: (176, 112, 52), size: 0.8, carries_in: "Carrying"),
+        // A worker termite modelled from a photograph (Higgsfield: image → textured PBR mesh), rigged and animated in
+        // Blender (tools/blender/rig_insect.py). Its clips follow the game's machine: carrying mud → `carry`,
+        // otherwise `walk`; standing still → `idle`.
+        "termite": (carries_in: "Carrying", model: (
+            file: "models/termite.glb",
+            lods: [(4.0, "models/termite_lod1.glb"), (10.0, "models/termite_lod2.glb")],   // measured: --stress, 960 termites
+            length: 0.8,
+            clips: [("Carrying", "carry"), ("*", "walk")],
+            still: "idle",
+            rate: 1.6,
+            carry: "carry",
+        )),
     },
     smell: (field: "cement", color: (190, 255, 120), full: 50000, radius: 8),
     feel: (

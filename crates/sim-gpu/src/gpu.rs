@@ -129,11 +129,14 @@ pub struct World3<'a> {
     pub eye: [f32; 3],
     pub fog_range: [f32; 2],
     pub kept: &'a [u32],
+    /// Skinned, instanced models (`Gpu::upload_model`), lit by `light`.
+    pub models: &'a [crate::skin::ModelDraw],
+    pub light: crate::skin::Light,
 }
 
 impl<'a> World3<'a> {
     pub fn new(view_proj: [[f32; 4]; 4], fog: [f32; 3], meshes: &'a [Mesh]) -> World3<'a> {
-        World3 { view_proj, fog, meshes, eye: [0.0; 3], fog_range: [0.0; 2], kept: &[] }
+        World3 { view_proj, fog, meshes, eye: [0.0; 3], fog_range: [0.0; 2], kept: &[], models: &[], light: crate::skin::Light::default() }
     }
 }
 
@@ -175,6 +178,8 @@ pub struct Gpu {
     verts: wgpu::Buffer,
     vcapacity: usize,
     kept: BTreeMap<u32, Kept>,
+    /// Models (made on the first upload).
+    pub skin: Option<crate::skin::Skin>,
     depth: Option<(u32, u32, wgpu::TextureView)>,
     /// Texture sizes (for the composer's aspect ratios).
     pub sizes: BTreeMap<String, (u32, u32)>,
@@ -297,11 +302,16 @@ impl Gpu {
             })
             .await
             .map_err(|e| format!("no GPU adapter: {e}"))?;
+        // WebGL2-safe limits, plus storage buffers where the GPU has them (skinned models need one: their palettes).
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+        let have = adapter.limits();
+        limits.max_storage_buffers_per_shader_stage = have.max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = have.max_storage_buffer_binding_size;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("simcraft"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                required_limits: limits,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
@@ -502,6 +512,7 @@ impl Gpu {
             verts,
             vcapacity: 4096,
             kept: BTreeMap::new(),
+            skin: None,
             depth: None,
             sizes: BTreeMap::new(),
         };
@@ -668,6 +679,9 @@ impl Gpu {
             self.queue.write_buffer(&self.verts, 0, bytemuck::cast_slice(&verts));
         }
         let fog = linear([world.fog[0], world.fog[1], world.fog[2], 1.0]);
+        if let (Some(skin), false) = (self.skin.as_mut(), world.models.is_empty()) {
+            skin.prepare(&self.device, &self.queue, world.view_proj, fog, world.eye, world.fog_range, world.light, world.models);
+        }
         let mut g: Vec<f32> = world.view_proj.iter().flatten().copied().collect();
         g.extend_from_slice(&fog);
         g.extend_from_slice(&[world.eye[0], world.eye[1], world.eye[2], 0.0, world.fog_range[0], world.fog_range[1], 0.0, 0.0]);
@@ -699,6 +713,11 @@ impl Gpu {
                 pass.set_bind_group(1, self.bind(image, *wrap), &[]);
                 pass.draw(*at..*at + *n, 0..1);
             }
+        }
+        if let (Some(skin), false) = (self.skin.as_ref(), world.models.is_empty()) {
+            skin.draw(&mut pass, world.models);
+            pass.set_pipeline(&self.pipeline3);
+            pass.set_bind_group(0, &self.globals3_bg, &[]);
         }
         pass.set_vertex_buffer(0, self.verts.slice(..));
         let mut at = 0u32;
@@ -739,6 +758,20 @@ impl Gpu {
             })
             .collect();
         self.kept.insert(slot, Kept { version, buf, draws });
+    }
+
+    /// Uploads a model for `World3::models` (textures of named materials may be replaced by `overrides`).
+    /// Without storage buffers (WebGL2) there are no skinned models: the call is ignored (`models_supported`).
+    pub fn upload_model(&mut self, name: &str, model: &crate::model::Model, overrides: &BTreeMap<String, crate::model::Texture>) {
+        if !self.models_supported() {
+            return;
+        }
+        let skin = self.skin.get_or_insert_with(|| crate::skin::Skin::new(&self.device, &self.queue, self.format));
+        skin.upload(&self.device, &self.queue, name, model, overrides);
+    }
+
+    pub fn models_supported(&self) -> bool {
+        self.device.limits().max_storage_buffers_per_shader_stage > 0
     }
 
     /// Renders offscreen and reads the picture back (screenshots, evals).

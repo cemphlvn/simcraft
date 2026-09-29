@@ -353,6 +353,8 @@ pub struct Frame {
     pub eye: Eye,
     pub fog: [f32; 3],
     pub meshes: Vec<Mesh>,
+    /// Skinned, instanced models (roam views).
+    pub models: Vec<crate::skin::ModelDraw>,
     pub front: Vec<Quad>,
 }
 
@@ -858,7 +860,7 @@ impl TrackComposer<'_> {
             front.push(quad2(WHITE, x - 3.0, y - 3.0, bw + 6.0, bh + 6.0, [0.0, 0.0, 0.0, 0.45]));
             front.push(quad2(WHITE, x, y, bw * frac, bh, [c[0], c[1], c[2], pulse]));
         }
-        Frame { back, eye, fog: fogc, meshes, front }
+        Frame { back, eye, fog: fogc, meshes, models: Vec::new(), front }
     }
 }
 

@@ -650,10 +650,54 @@ invisible field (the pheromone).
   GPU from the distance to the eye; bodies behind you or lost in the fog are not built, far ones are coarse and
   legless; bodies, the terrain mesher and the colour conversion run on all cores. `simcraft-play <game> --bench N`
   reports where a frame goes and the worst frame after warm-up.
+- **Frame drops, found and rebuilt** (`sim_gpu::perf`). Every frame records its phases (ticks, body, terrain
+  rebuild, frame build, draw and present, the window's own work) and exact counts (ticks run, vertices, bodies,
+  whether the terrain was rebuilt). In the window, a frame over `--budget` (ms, default 20) writes a spike report to
+  `runs/spikes/`: the tick, the world's hash, the camera, the phases, and the log of every action since the start;
+  the percentiles and the spikes print when the window closes.
+  - `--repro FILE`: the same game, panel and seed, the log replayed tick by tick, the hash checked (a different
+    state is refused, not profiled); the frame rendered again cold, warm, and with the terrain rebuilt on a warm
+    GPU; the ticks before it timed again.
+  - `--sweep N`: the scripted player for N frames, twice, headless. A spike on the same frame with the same hash in
+    both runs is the game's or the engine's (reports written); one seen once came from outside (OS, driver).
+  - `--stress N`: each load the view has, pushed through four levels, N frames each: every drawn kind (×1, ×4, ×8,
+    ×16 its spawn count), the terrain (10–100% of columns built), the shown field (5–100% of the air). The table
+    gives tick and frame percentiles, vertices and the worst phase, and where p95 first breaks the budget.
 - **Measured:** `simcraft-play <game> --feel` runs the real controller through a scripted walk, turn, hop and climb
   and prints the feel metrics (`games/<name>/FEEL.md`); `--shot` after `--ticks` stands you facing the tallest
   thing built (`--camera wide`: from above). `simcraft-check` checks the view against the game (your kind is
   controllable, the three actions take `dx`, `dy`, `dz`, drawn kinds, the smell field, the carried prop).
+
+## Models: from modelling tools to the game (`sim_gpu::model`, `sim_gpu::skin`)
+
+A kind can be drawn with a model made in the best tools and bound to the game's own state machine. The format
+between tools is glTF 2.0 (`.glb`): Blender, Unity, Unreal and Higgsfield's image-to-3D generators all write it.
+Research and choices: `docs/research/animation.md`.
+
+- **Pipeline (the termite):** a reference image (Higgsfield) → a textured PBR mesh (Higgsfield image-to-3D: Tripo,
+  Meshy) → rigged and animated headless in Blender (`tools/blender/rig_insect.py`: anatomy read from the geometry,
+  bones with the contract's names, a `carry` socket, clips `walk`/`carry`/`dig`/`idle`, weights by distance to the
+  bones, three levels of detail) → `assets/models/*.glb`. Higgsfield rigs humanoids only; insects are rigged by us.
+  `tools/blender/inspect.py` renders any `.glb` from three sides and its clips frame by frame.
+- **Import:** `Model::load` reads meshes, PBR materials (base colour, normal, metal-roughness, occlusion), skins,
+  node hierarchy and clips (translation, rotation, scale; linear, step, cubic), and samples every clip once at
+  30 fps into palettes (a matrix per node and per skin joint). Conventions are glTF's: +Y up, +Z forward, feet at
+  y = 0.
+- **Drawing crowds:** each model is uploaded once (mesh, mipmapped textures, all palettes in one storage buffer);
+  each character is one 96-byte instance (transform, two frames and their blend, tint). The vertex shader skins;
+  the fragment shader lights with the PBR maps (normal maps from screen-space derivatives, GGX specular, sky and
+  ground ambient, wrap lighting and a transmitted back-light for thin bodies). One instanced draw per model part.
+  Needs storage buffers (Metal, Vulkan, DX12); without them (WebGL2) models are skipped.
+- **The contract** (`roam.ron`, per kind):
+  `model: (file, lods: [(from_distance, file)], length, clips: [(state_selector, clip)], still, rate, carry, textures)`.
+  The game's state picks the clip (first match; `*` = any), `still` plays when it has not moved for half a second,
+  every entity has its own clock, the `carry` socket holds a carried ball (`carries_in`: a state or a prop),
+  `textures` re-skins a material with an image from the asset packs (e.g. a Higgsfield texture).
+- **Checked:** `simcraft-check` refuses a clip state the kind's machine does not have, a clip or socket a file (at any
+  level of detail) does not have, a material to re-skin that does not exist. `simcraft-model FILE --game G --kind K`
+  prints what the engine sees, warns about convention mistakes (forward axis, feet, units) and writes the contract.
+- **Measured** (`--stress`, 1280x720): 960 model termites (12k/3k/800 triangles at 0–4/4–10/10+ voxels), p95
+  9.6 ms, worst 11.7 ms, 2.9M vertices a frame; the distances were chosen by probing 7/18, 4/10 and 3/7.
 
 ## First person: tracks (`games/<name>/track.ron`, `sim-gpu`)
 
@@ -815,7 +859,10 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [x] First person: `track.ron`, 3D camera and fog, views, built-in camera effects, tunable position switch (game 8, `games/lanes`)
 - [x] First person in a voxel world: `roam.ron`, WASD and mouse, crawlers (`cling`), exact reach (`SetFieldAt`), the
   `field` request and structure evals (game 9, `games/mound`)
-- [ ] Mound next: termite-scale art (laterite mud, grass stalks), replays of your runs, the view tilting on walls, a queen
+- [x] Models: glTF import, instanced GPU skinning with PBR, the state-machine contract, `simcraft-model`, a rigged
+  photoreal termite (Higgsfield → Blender), macro laterite and mud textures
+- [ ] Mound next: an organic terrain surface (surface nets instead of cubes), sun shadows and a macro lens, grass
+  stalks, procedural feet on walls (same bones), replays of your runs, a queen
 - [x] Checking: `rustfmt.toml`, `simcraft-check`, the edit hook; `MoveBy` and the `clamped` warning
 - [x] Tracks: replays (`R`, `N`, `--replay`), lives meter, gone animations, hurt effect
 - [ ] Track next: a feel eval for switches (arrival time, overshoot, bank), text for scores, sound

@@ -4,7 +4,10 @@
 pub mod fx;
 pub mod gpu;
 pub mod math;
+pub mod model;
+pub mod perf;
 pub mod roam;
+pub mod skin;
 pub mod stage;
 pub mod track;
 pub mod walker;
@@ -110,9 +113,29 @@ pub fn load_roam(dir: &Path) -> Result<(roam::Roam, Assets), String> {
         a.load_images(p.parent().unwrap_or_else(|| Path::new(".")))?;
         assets = assets.merged(a);
     }
-    let names = roam.materials.values().map(|m| &m.image).chain(roam.sky.iter());
+    let mut roam = roam;
+    let specs: Vec<roam::ModelSpec> = roam.kinds.values().filter_map(|b| b.model.clone()).collect();
+    let texture_names = specs.iter().flat_map(|s| s.textures.values());
+    let names = roam.materials.values().map(|m| &m.image).chain(roam.sky.iter()).chain(texture_names);
     if let Some(n) = names.into_iter().find(|n| !assets.loaded.contains_key(*n)) {
         return Err(format!("roam: no image '{n}' in its asset packs"));
     }
+    // Models, loaded once: a missing or broken file is said now, not in the middle of a game.
+    for file in specs.iter().flat_map(|s| s.files()) {
+        let path = std::iter::once(dir.join(file))
+            .chain(dir.ancestors().map(|a| a.join("assets").join(file)))
+            .find(|p| p.exists())
+            .ok_or_else(|| format!("roam: model '{file}' not found (next to the game or in an assets/ folder above it)"))?;
+        let model = model::Model::load(&path)?;
+        roam.models.insert(file.clone(), std::sync::Arc::new(model));
+    }
+    for s in &specs {
+        for name in s.textures.values() {
+            let img = &assets.loaded[name];
+            let rgba = img.px.iter().flat_map(|p| *p).collect();
+            roam.images.insert(name.clone(), model::Texture { w: img.w as u32, h: img.h as u32, rgba });
+        }
+    }
+    roam.dir = dir.to_path_buf();
     Ok((roam, assets))
 }

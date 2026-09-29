@@ -1,0 +1,9 @@
+#![enable(implicit_some)]
+// Mound pack: macro textures at termite scale. Higgsfield `gpt_image_2_5`, made tileable with tools/tileable.py
+// (prompts and job ids: assets/src/README.md).
+Assets(
+    images: {
+        "laterite": "mound/laterite.png",
+        "mud": "mound/mud.png",
+    },
+)

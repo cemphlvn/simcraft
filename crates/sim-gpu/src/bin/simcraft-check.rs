@@ -94,6 +94,35 @@ fn check_roam(roam: &sim_gpu::roam::Roam, engine: &Engine<Running, Game>, r: &mu
     for k in roam.kinds.keys().filter(|k| !game.def.kinds.contains_key(*k)) {
         r.error(format!("roam.ron: draws kind '{k}', which the game does not have"));
     }
+    // Models: the contract between the modelling tool's file and the game, checked both ways.
+    for (kind, body) in &roam.kinds {
+        let Some(spec) = &body.model else { continue };
+        let states = game.states_of(kind);
+        for (sel, _) in spec.clips.iter().filter(|(sel, _)| sel != "*") {
+            if !states.iter().any(|s| sim_state::in_label(s, sel)) {
+                r.error(format!("roam.ron: kind '{kind}' plays a clip in state '{sel}', which its machine does not have ({states:?})"));
+            }
+        }
+        if let Some(c) = &body.carries_in
+            && !states.iter().any(|s| sim_state::in_label(s, c))
+            && !game.def.kinds.get(kind).is_some_and(|k| k.props.contains_key(c))
+        {
+            r.error(format!("roam.ron: kind '{kind}' carries in '{c}', which is neither its state nor its prop"));
+        }
+        let wanted: Vec<&String> = spec.clips.iter().map(|(_, c)| c).chain(spec.still.iter()).collect();
+        for file in spec.files() {
+            let Some(m) = roam.models.get(file) else { continue };
+            for clip in wanted.iter().filter(|c| !m.clips.contains_key(c.as_str())) {
+                r.error(format!("roam.ron: {file} has no clip '{clip}' (it has {:?})", m.clips.keys().collect::<Vec<_>>()));
+            }
+            if let Some(socket) = spec.carry.as_ref().filter(|s| !m.nodes.contains_key(*s)) {
+                r.error(format!("roam.ron: {file} has no socket node '{socket}'"));
+            }
+            for mat in spec.textures.keys().filter(|t| !m.materials.iter().any(|x| &x.name == *t)) {
+                r.error(format!("roam.ron: {file} has no material '{mat}' to re-skin"));
+            }
+        }
+    }
     if let Some(s) = &roam.smell
         && !game.def.fields.contains_key(&s.field)
     {

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::math::{Eye, V3};
 
 /// How moving feels. Every number is the designer's (`roam.ron` → `feel`).
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WalkFeel {
     /// Eye height above the feet (voxels).
@@ -86,7 +86,8 @@ pub struct Input {
     pub look: (f32, f32),
 }
 
-#[derive(Clone, Debug)]
+/// The whole body and camera state (serialisable: a spike report carries it, so the frame can be rebuilt exactly).
+#[derive(Clone, Debug, serde::Serialize, Deserialize)]
 pub struct Walker {
     pub feel: WalkFeel,
     /// Feet (centre of the body's base).

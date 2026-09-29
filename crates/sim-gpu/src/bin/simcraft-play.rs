@@ -383,6 +383,15 @@ struct Args {
     view: usize,
     replay: Option<PathBuf>,
     feel: bool,
+    /// Roam shots: close to a crawler instead of facing the work.
+    closeup: bool,
+    /// Frame drops: the window's budget (ms), a headless sweep (frames), a stress run (frames per level), a spike
+    /// report to rebuild and profile (and how many times).
+    budget: f64,
+    sweep: u64,
+    stress: u64,
+    repro: Option<PathBuf>,
+    times: u32,
 }
 
 fn args() -> Args {
@@ -403,6 +412,12 @@ fn args() -> Args {
         view: 0,
         replay: None,
         feel: false,
+        closeup: false,
+        budget: 20.0,
+        sweep: 0,
+        stress: 0,
+        repro: None,
+        times: 30,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -414,6 +429,12 @@ fn args() -> Args {
             "--ticks" => a.ticks = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--replay" => a.replay = it.next().map(PathBuf::from),
             "--feel" => a.feel = true,
+            "--closeup" => a.closeup = true,
+            "--budget" => a.budget = it.next().and_then(|s| s.parse().ok()).unwrap_or(20.0),
+            "--sweep" => a.sweep = it.next().and_then(|s| s.parse().ok()).unwrap_or(1200),
+            "--stress" => a.stress = it.next().and_then(|s| s.parse().ok()).unwrap_or(300),
+            "--repro" => a.repro = it.next().map(PathBuf::from),
+            "--times" => a.times = it.next().and_then(|s| s.parse().ok()).unwrap_or(30),
             "--view" => a.view = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--record" => a.record = it.next().and_then(|s| s.parse().ok()).unwrap_or(60),
             "--panel" => a.panel = it.next().map(PathBuf::from),
@@ -445,7 +466,7 @@ fn main() {
         let engine = boot(&a.dir, a.seed, &panel)?;
         if a.dir.join("roam.ron").exists() && a.stage.is_none() {
             let (roam, assets) = load_roam(&a.dir)?;
-            return run_roam(engine, roam, assets, &a);
+            return run_roam(engine, roam, assets, &a, &panel);
         }
         if a.dir.join("track.ron").exists() && a.stage.is_none() {
             let (track, assets) = load_track(&a.dir)?;
@@ -505,6 +526,7 @@ fn main() {
             script: None,
             saved: false,
             grabbed: false,
+            watch: None,
         };
         el.run_app(&mut app).map_err(|e| e.to_string())
     };
@@ -582,12 +604,22 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
         script,
         saved: false,
         grabbed: false,
+        watch: None,
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
 /// First person in a voxel world: how moving feels (numbers), a screenshot, or a window.
-fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args) -> Result<(), String> {
+fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args, panel: &Path) -> Result<(), String> {
+    if let Some(file) = &a.repro {
+        return repro_roam(engine, roam, &assets, a, file);
+    }
+    if a.sweep > 0 {
+        return sweep_roam(&roam, &assets, a, panel);
+    }
+    if a.stress > 0 {
+        return stress_roam(&roam, &assets, a, panel);
+    }
     if a.feel {
         let report = feel_probe(roam.feel);
         println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
@@ -608,6 +640,9 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         play.step(a.ticks);
         play.tween.alpha = 1.0;
         face_the_work(&mut play, 2);
+        if a.closeup {
+            sim_gpu::roam::close_up(&mut play, "termite");
+        }
         play.smell_on = a.press.iter().any(|p| p == "f");
         // Settle the body on the ground before the picture.
         for _ in 0..30 {
@@ -615,7 +650,7 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         }
         let (w, h) = a.size;
         let fr = play.frame(w as f32, h as f32, 1.0 / 60.0);
-        let world = roam_world(&mut gpu, &play, &fr, w, h);
+        let world = play.world3(&mut gpu, &fr, w, h);
         gpu.shot_scene(w, h, &fr.back, Some(world), &fr.front).save(out)?;
         let tris: usize = fr.meshes.iter().chain(play.terrain().1).map(|m| m.verts.len() / 3).sum();
         eprintln!("wrote {} ({w}x{h}) at tick {}, {tris} triangles — {}", out.display(), play.world().tick, play.title());
@@ -637,20 +672,170 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         script: None,
         saved: false,
         grabbed: false,
+        watch: Some((
+            sim_gpu::perf::Watch::new(a.budget, Some(PathBuf::from("runs/spikes"))),
+            0,
+            Instant::now(),
+            (a.dir.clone(), panel.to_path_buf(), a.seed),
+        )),
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
-/// A roam frame's 3D part: the terrain kept on the GPU (uploaded only when it changed), fog by distance from the eye.
-fn roam_world<'a>(gpu: &mut Gpu, p: &RoamPlay, fr: &'a sim_gpu::track::Frame, w: u32, h: u32) -> World3<'a> {
-    const TERRAIN: &[u32] = &[0];
-    let (version, meshes) = p.terrain();
-    gpu.keep(0, version, meshes);
-    let mut world = World3::new(fr.eye.view_proj(w as f32, h as f32), fr.fog, &fr.meshes);
-    world.eye = [fr.eye.pos.0, fr.eye.pos.1, fr.eye.pos.2];
-    world.fog_range = p.fog_range();
-    world.kept = TERRAIN;
-    world
+fn headless_gpu(assets: &Assets) -> Result<Gpu, String> {
+    let instance = wgpu::Instance::default();
+    let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
+    upload_all(&mut gpu, assets);
+    Ok(gpu)
+}
+
+/// A spike report, rebuilt: the same state (checked by its hash), the same camera; the frame rendered `a.times`
+/// times, first cold (terrain not built yet, as after a rebuild) then warm, and the ticks before it timed again.
+fn repro_roam(engine: Engine<Running, Game>, roam: Roam, assets: &Assets, a: &Args, file: &Path) -> Result<(), String> {
+    use sim_gpu::perf::{Spike, replay};
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let spike: Spike = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    eprintln!("spike: frame {} at tick {}, {:.2} ms: {}", spike.record.frame, spike.record.tick, spike.record.work_ms, spike.cause);
+    let mut play = replay(&spike, engine, roam)?;
+    eprintln!("state rebuilt: tick {}, hash {} (the same)", play.world().tick, spike.hash);
+    let mut gpu = headless_gpu(assets)?;
+    let (w, h) = a.size;
+    let target = sim_gpu::perf::offscreen(&gpu, w, h);
+    let mut runs = Vec::new();
+    for i in 0..a.times.max(2) {
+        play.stats = Default::default();
+        let t = Instant::now();
+        let fr = play.frame(w as f32, h as f32, 0.0);
+        let build = t.elapsed().as_secs_f64() * 1000.0;
+        let t = Instant::now();
+        play.render(&mut gpu, &target, w, h, &fr);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let draw = t.elapsed().as_secs_f64() * 1000.0;
+        if i == 0 {
+            eprintln!(
+                "cold (terrain built now): build {build:.2} ms (terrain {:.2} ms, {} vertices), draw {draw:.2} ms",
+                play.stats.terrain_ms, play.stats.terrain_verts
+            );
+        } else {
+            runs.push((build, draw, play.stats.verts, play.stats.bodies));
+        }
+    }
+    let med = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let (b, d) = (med(runs.iter().map(|r| r.0).collect()), med(runs.iter().map(|r| r.1).collect()));
+    eprintln!("warm, median of {}: build {b:.2} ms, draw {d:.2} ms, {} vertices, {} bodies", runs.len(), runs[0].2, runs[0].3);
+    // What every dig or drop costs once the GPU is warm: the terrain rebuilt and uploaded again.
+    let mut rebuilt = Vec::new();
+    for _ in 0..a.times.max(2) {
+        play.forget_terrain();
+        let t = Instant::now();
+        let fr = play.frame(w as f32, h as f32, 0.0);
+        let build = t.elapsed().as_secs_f64() * 1000.0;
+        let t = Instant::now();
+        play.render(&mut gpu, &target, w, h, &fr);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        rebuilt.push((build, t.elapsed().as_secs_f64() * 1000.0));
+    }
+    let (rb, rd) = (med(rebuilt.iter().map(|r| r.0).collect()), med(rebuilt.iter().map(|r| r.1).collect()));
+    eprintln!("terrain rebuilt with the GPU warm, median: build {rb:.2} ms, draw {rd:.2} ms (the cost of a dig or a drop)");
+    // The ticks that frame ran, timed again from the state before them.
+    if spike.record.stats.ticks > 0 {
+        let back = sim_gpu::perf::Spike {
+            record: sim_gpu::perf::FrameRecord { tick: spike.record.tick - spike.record.stats.ticks as u64, ..spike.record.clone() },
+            ..spike.clone()
+        };
+        let engine = boot(&spike.game, spike.seed, &spike.panel)?;
+        let (roam, _) = load_roam(&spike.game)?;
+        let mut before = sim_gpu::perf::replay_to(&back, engine, roam)?;
+        let t = Instant::now();
+        before.step(spike.record.stats.ticks);
+        eprintln!("its {} tick(s) again: {:.2} ms", spike.record.stats.ticks, t.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok(())
+}
+
+/// The scripted player, twice, headless: spikes on the same frame with the same hash in both runs are the game's
+/// or the engine's (reports written for them); the others came from outside.
+fn sweep_roam(roam: &Roam, assets: &Assets, a: &Args, panel: &Path) -> Result<(), String> {
+    use sim_gpu::perf::{Watch, compare_runs, run_frames};
+    let mut gpu = headless_gpu(assets)?;
+    let mut watches = Vec::new();
+    for run in 0..2 {
+        let mut play = RoamPlay::new(boot(&a.dir, a.seed, panel)?, roam.clone());
+        play.step(a.ticks);
+        // The first run writes reports (runs/spikes/), so a spike can be rebuilt with --repro.
+        let mut watch = Watch::new(a.budget, (run == 0).then(|| PathBuf::from("runs/spikes")));
+        run_frames(&mut gpu, &mut play, a.sweep, a.size, &mut watch, None, (&a.dir, panel, a.seed));
+        eprintln!("run {}: {}", run + 1, watch.summary());
+        watches.push(watch);
+    }
+    let (both, once) = compare_runs(&watches[0], &watches[1]);
+    eprintln!("\nin both runs, same frame and hash ({}): the game's or the engine's", both.len());
+    for s in &both {
+        eprintln!("  frame {:5} tick {:5} hash {:016x}: {}", s.frame, s.tick, s.hash, s.cause);
+    }
+    eprintln!("in one run only ({}): from outside (OS, driver)", once.len());
+    Ok(())
+}
+
+/// Every load pushed through its levels (each drawn kind, the terrain, the shown field), `a.stress` frames each:
+/// where a load breaks the budget, and which phase breaks it.
+fn stress_roam(roam: &Roam, assets: &Assets, a: &Args, panel: &Path) -> Result<(), String> {
+    use sim_gpu::perf::{Watch, loads, run_frames};
+    let text = std::fs::read_to_string(panel).map_err(|e| format!("{}: {e}", panel.display()))?;
+    let base = |kind: &str| {
+        text.lines().find_map(|l| l.trim().strip_prefix(&format!("{kind} =")).and_then(|v| v.trim().parse::<u32>().ok())).unwrap_or(10)
+    };
+    let mut gpu = headless_gpu(assets)?;
+    println!(
+        "{:34} {:>9} {:>9} {:>9} {:>9} {:>8} {:>6}  worst phase",
+        "load", "tick p50", "work p50", "work p95", "work max", "verts", "over"
+    );
+    for levels in loads(roam, base) {
+        let mut broke = false;
+        for load in levels {
+            let started = Game::load_panel(&a.dir, &load.panel(&text)).and_then(|(mut world, game)| {
+                let terrain = game.def.terrain.clone().unwrap_or_default();
+                load.world(&mut world, &terrain, a.seed.unwrap_or(1));
+                Ok(Engine::<Loaded, _>::new(world, game).validate().map_err(|e| e.join("; "))?.start())
+            });
+            let engine = match started {
+                Ok(e) => e,
+                Err(e) => {
+                    println!("{:34} does not fit: {e}", load.describe());
+                    continue;
+                }
+            };
+            let mut play = RoamPlay::new(engine, roam.clone());
+            let mut watch = Watch::new(a.budget, None);
+            let smell = matches!(load, sim_gpu::perf::Load::Field(..)).then_some(true);
+            run_frames(&mut gpu, &mut play, a.stress, a.size, &mut watch, smell, (&a.dir, panel, a.seed));
+            let pct = |mut v: Vec<f64>, p: f64| {
+                v.sort_by(f64::total_cmp);
+                v[((v.len() - 1) as f64 * p).round() as usize]
+            };
+            let r = &watch.records;
+            let worst = r.iter().skip(30).max_by(|x, y| x.work_ms.total_cmp(&y.work_ms)).map(|x| x.cause()).unwrap_or_default();
+            let ticked: Vec<f64> = r.iter().filter(|x| x.stats.ticks > 0).map(|x| x.stats.ticks_ms / x.stats.ticks as f64).collect();
+            println!(
+                "{:34} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>8} {:>6}  {worst}",
+                load.describe(),
+                if ticked.is_empty() { 0.0 } else { pct(ticked, 0.5) },
+                pct(r.iter().map(|x| x.work_ms).collect(), 0.5),
+                pct(r.iter().map(|x| x.work_ms).collect(), 0.95),
+                pct(r.iter().skip(30).map(|x| x.work_ms).collect(), 1.0),
+                r.iter().map(|x| x.stats.verts).max().unwrap_or(0),
+                watch.spikes.len(),
+            );
+            if !broke && pct(r.iter().map(|x| x.work_ms).collect(), 0.95) > a.budget {
+                println!("  ^ p95 over the {:.1} ms budget from here", a.budget);
+                broke = true;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Roam: `a.bench` frames offscreen at 60 fps, walking a circle while the colony builds (after `--ticks` of warm-up):
@@ -695,7 +880,7 @@ fn bench_roam(engine: Engine<Running, Game>, roam: Roam, assets: &Assets, a: &Ar
         compose += t.elapsed().as_secs_f64();
         tris = tris.max(fr.meshes.iter().chain(play.terrain().1).map(|m| m.verts.len() / 3).sum());
         let t = Instant::now();
-        let world = roam_world(&mut gpu, &play, &fr, w, h);
+        let world = play.world3(&mut gpu, &fr, w, h);
         gpu.render(&view, w, h, &fr.back, Some(world), &fr.front);
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         draw += t.elapsed().as_secs_f64();
@@ -781,7 +966,7 @@ impl Session {
             }
             Session::Roam(p) => {
                 let fr = p.frame(w as f32, h as f32, dt);
-                let world = roam_world(gpu, p, &fr, w, h);
+                let world = p.world3(gpu, &fr, w, h);
                 gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
             }
         }
@@ -819,7 +1004,13 @@ struct App {
     saved: bool,
     /// Roam: the mouse is captured (looking), else free (click to capture).
     grabbed: bool,
+    /// Roam: every frame measured against the budget; spike reports to `runs/spikes/` (game, panel, seed).
+    watch: Option<FrameWatch>,
 }
+
+/// The window's frame watch: the watch, the frame count, the last frame's start, and where the game came from
+/// (game, panel, seed) for its spike reports.
+type FrameWatch = (sim_gpu::perf::Watch, u64, Instant, (PathBuf, PathBuf, Option<u64>));
 
 /// A key's name as views write it ("w", "shift", "space"), by position on the keyboard, so WASD is WASD on any layout.
 fn key_name(k: PhysicalKey) -> Option<String> {
@@ -1054,7 +1245,12 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let dt = now.duration_since(self.last).as_secs_f32().min(0.1);
                 self.last = now;
+                if let Session::Roam(p) = &mut w.play {
+                    p.stats = Default::default();
+                }
+                let t = Instant::now();
                 w.play.advance(dt, self.paused, &mut self.clock, self.speed);
+                let advance_ms = t.elapsed().as_secs_f64() * 1000.0;
                 // A run that just ended is kept, so it can be replayed later (`--replay`).
                 if let Session::Track(p) = &w.play
                     && p.engine.outcome().is_some()
@@ -1068,6 +1264,7 @@ impl ApplicationHandler for App {
                     self.saved = true;
                 }
                 let (cw, ch) = (w.config.width, w.config.height);
+                let t = Instant::now();
                 match w.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1077,7 +1274,28 @@ impl ApplicationHandler for App {
                     wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {}
                     _ => w.surface.configure(&w.gpu.device, &w.config),
                 }
+                let draw_all_ms = t.elapsed().as_secs_f64() * 1000.0;
+                let t = Instant::now();
                 w.window.set_title(&w.play.title(self.speed, self.paused));
+                let window_ms = t.elapsed().as_secs_f64() * 1000.0;
+                if let (Session::Roam(p), Some((watch, frame, prev, source))) = (&w.play, self.watch.as_mut()) {
+                    let s = p.stats.clone();
+                    let rec = sim_gpu::perf::FrameRecord {
+                        frame: *frame,
+                        tick: p.world().tick,
+                        walk_ms: (advance_ms - s.ticks_ms).max(0.0),
+                        draw_ms: (draw_all_ms - s.build_ms).max(0.0),
+                        window_ms,
+                        work_ms: now.elapsed().as_secs_f64() * 1000.0,
+                        interval_ms: now.duration_since(*prev).as_secs_f64() * 1000.0,
+                        stats: s,
+                    };
+                    *prev = now;
+                    *frame += 1;
+                    if let Some(path) = watch.frame(rec, p, (&source.0, &source.1, source.2)) {
+                        eprintln!("frame over budget: {} ({})", path.display(), watch.spikes.last().map_or("", |s| s.1.as_str()));
+                    }
+                }
             }
             _ => {}
         }
@@ -1090,6 +1308,13 @@ impl ApplicationHandler for App {
         {
             p.input.look.0 += delta.0 as f32;
             p.input.look.1 += delta.1 as f32;
+        }
+    }
+
+    /// Roam: how the frames went (percentiles, spikes and their reports).
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        if let Some((watch, ..)) = &self.watch {
+            eprintln!("{}", watch.summary());
         }
     }
 

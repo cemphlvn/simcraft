@@ -1,6 +1,6 @@
 //! The little 3D math the renderer needs: vectors and one view-projection matrix (column-major, for WGSL).
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct V3(pub f32, pub f32, pub f32);
 
 impl std::ops::Add for V3 {
