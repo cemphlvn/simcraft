@@ -987,8 +987,8 @@ fn golden_mound_hash() {
         e.tick();
     }
     // Recorded when the game was made. Change only on purpose, together with the game.
-    // Fields hashed a value at a time (the fingerprint moved, the game did not: eval --check identical).
-    assert_eq!(format!("{:016x}", e.world().hash()), "777c36790473d478");
+    // Game changes since: termites remember how long they carried (`held`), and tire (eval step 004).
+    assert_eq!(format!("{:016x}", e.world().hash()), "bb47f35180c22591");
 }
 
 #[test]

@@ -62,8 +62,10 @@ pillar = 4      # a column with at least this many is a pillar
 ```
 
 Series: `structure.built`, `structure.height` (tallest column), `structure.stacking` (for each built voxel, how many
-built voxels share its column, averaged: about 1 for scattered work, high when work lands on work; independent of how
-much was built), `structure.pillars`, `structure.roofs` (built voxels over open air: arches, overhangs).
+built voxels share its column, averaged: about 1 for scattered work, high when work lands on work),
+`structure.pillars`, `structure.roofs` (built voxels over open air: arches, overhangs). Stacking grows with density
+too (when much is built, even random drops land on each other), so compare it with a control at the same settings
+(the same step with the behaviour under test switched off), not across very different amounts built.
 
 These metrics read every voxel of every sample, so they live in `tools/evalmetrics.py`, written in Cython's
 pure-Python mode: plain Python everywhere, compiled to C by `tools/build_evalmetrics.sh` where Cython is available

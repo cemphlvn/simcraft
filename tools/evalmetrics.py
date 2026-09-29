@@ -79,7 +79,7 @@ def structure(field: dict, value: int = 1, pillar: int = 4) -> dict:
     built    voxels holding `value`
     height   the tallest column of them (voxels)
     stacking for each built voxel, how many built voxels share its column, averaged: ~1 for scattered work,
-             high when work lands on work (pillars). Independent of how much was built.
+             high when work lands on work (pillars). Grows with density too: compare with a control.
     pillars  columns with at least `pillar` built voxels
     roofs    built voxels with open air right under them (arches, overhangs)"""
     w, h, d = field["width"], field["height"], field["depth"]

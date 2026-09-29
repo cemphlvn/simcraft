@@ -4,12 +4,12 @@ assertion_line: 75
 expression: profile(&dir)
 ---
 ticks 60, entities per tick 121.0
-per tick:        evals     315.4  queries    188.3  maps      0.0
-per entity-tick: evals      2.61  queries     1.56  maps     0.00
+per tick:        evals     379.4  queries    185.2  maps    120.0
+per entity-tick: evals      3.14  queries     1.53  maps     0.99
 hottest rules (checks per tick, % that fired):
-  deposit                       68.3    0.0%
-  sniff                         68.3    0.0%
-  stray                         68.3   20.1%
-  quarry                        51.7    3.4%
-  roam                          51.7   19.8%
-  crawl                          0.0    0.0%
+  deposit                       65.2    0.4%
+  sniff                         65.2    1.8%
+  stray                         65.2   20.1%
+  tire                          65.2  100.0%
+  quarry                        54.8    3.3%
+  roam                          54.8   19.9%

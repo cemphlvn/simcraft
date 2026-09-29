@@ -19,7 +19,8 @@ Game(
 
     kinds: {
         // Crawlers: they walk on floors, walls and ceilings, never through the air.
-        "termite": (glyph: 't', cling: true, fsm: "termite"),
+        // `held`: ticks it has carried its ball (arms tire).
+        "termite": (glyph: 't', cling: true, fsm: "termite", props: { "held": 0 }),
         "you":     (glyph: '@', cling: true, props: { "carrying": 0 }),
     },
 
@@ -31,6 +32,7 @@ Game(
         "fresh": 50000,      // smell of a fresh ball (step 001: 10000 faded before anyone arrived)
         "follow": 70,        // % of steps a carrying termite follows the smell (the rest are random)
         "reach": 2,          // how far you can reach to dig or drop (voxels)
+        "tire": 10,          // extra chance in 100 000 per tick to drop, per tick already carried (step 004; 0 = never tire)
     },
 
     fsms: {
@@ -46,8 +48,9 @@ Game(
                 "Carrying": (rules: [
                     // Drop where I stand, then climb onto the ball: the ball rests against whatever I cling to.
                     (name: "deposit",
-                     when: r#"field_at("mud", 0, 0, -1) == 0 && rand(100000) < p.drop_base + field("cement") * p.drop_gain / 100"#,
-                     then: [ SetField("mud", "2"), SetField("cement", "p.fresh"), Move3("0", "0", "-1"), Goto("Searching"), Emit("deposit") ]),
+                     when: r#"field_at("mud", 0, 0, -1) == 0 && rand(100000) < p.drop_base + field("cement") * p.drop_gain / 100 + me.held * p.tire"#,
+                     then: [ SetField("mud", "2"), SetField("cement", "p.fresh"), Move3("0", "0", "-1"), Set("held", "0"), Goto("Searching"), Emit("deposit") ]),
+                    (name: "tire", then: [ Add("held", "1") ]),
                     (name: "sniff", when: "pace(p.crawl) && rand(100) < p.follow", then: [ ClimbField("cement") ]),
                     (name: "stray", when: "pace(p.crawl)", then: [ Wander ]),
                 ]),

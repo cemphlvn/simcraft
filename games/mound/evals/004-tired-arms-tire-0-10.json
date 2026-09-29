@@ -1,0 +1,109 @@
+{
+ "step": 4,
+ "change": "tired arms: tire 0 -> 10",
+ "seeds": {
+  "1": {
+   "stacking": 2.55,
+   "height": 6,
+   "pillars": 106,
+   "roofs": 875,
+   "built": 2244,
+   "deposits": 2427,
+   "digs": 2466,
+   "carrying": 32,
+   "density": 1.4
+  },
+  "2": {
+   "stacking": 2.57,
+   "height": 6,
+   "pillars": 113,
+   "roofs": 930,
+   "built": 2356,
+   "deposits": 2547,
+   "digs": 2591,
+   "carrying": 37,
+   "density": 1.47
+  },
+  "3": {
+   "stacking": 2.59,
+   "height": 6,
+   "pillars": 122,
+   "roofs": 927,
+   "built": 2312,
+   "deposits": 2524,
+   "digs": 2558,
+   "carrying": 28,
+   "density": 1.45
+  },
+  "4": {
+   "stacking": 2.55,
+   "height": 6,
+   "pillars": 98,
+   "roofs": 937,
+   "built": 2295,
+   "deposits": 2489,
+   "digs": 2529,
+   "carrying": 33,
+   "density": 1.43
+  },
+  "5": {
+   "stacking": 2.51,
+   "height": 7,
+   "pillars": 104,
+   "roofs": 901,
+   "built": 2283,
+   "deposits": 2499,
+   "digs": 2532,
+   "carrying": 28,
+   "density": 1.43
+  }
+ },
+ "metrics": {
+  "stacking": {
+   "mean": 2.55,
+   "min": 2.51,
+   "max": 2.59
+  },
+  "height": {
+   "mean": 6.2,
+   "min": 6,
+   "max": 7
+  },
+  "pillars": {
+   "mean": 108.6,
+   "min": 98,
+   "max": 122
+  },
+  "roofs": {
+   "mean": 914.0,
+   "min": 875,
+   "max": 937
+  },
+  "built": {
+   "mean": 2298.0,
+   "min": 2244,
+   "max": 2356
+  },
+  "deposits": {
+   "mean": 2497.2,
+   "min": 2427,
+   "max": 2547
+  },
+  "digs": {
+   "mean": 2535.2,
+   "min": 2466,
+   "max": 2591
+  },
+  "carrying": {
+   "mean": 31.6,
+   "min": 28,
+   "max": 37
+  },
+  "density": {
+   "mean": 1.44,
+   "min": 1.4,
+   "max": 1.47
+  }
+ },
+ "errors": {}
+}

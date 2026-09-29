@@ -38,3 +38,11 @@ goal = "info"
 [metrics.digs]
 expr = "events['dug']"
 goal = "info"
+
+[metrics.carrying]
+expr = "round(last('state.termite.Carrying') / max(1, last('count.termite')) * 100)"
+goal = "info"             # % of termites holding a ball at the end: a colony locked up carrying is near 100
+
+[metrics.density]
+expr = "round(last('structure.built') / 1600, 2)"
+goal = "info"             # built balls per column (40x40): stacking grows with it, so read stacking against a control
