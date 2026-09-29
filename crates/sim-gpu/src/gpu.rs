@@ -55,7 +55,7 @@ fn fs(v: VOut) -> @location(0) vec4<f32> {
 "#;
 
 const SHADER3: &str = r#"
-struct Globals3 { view_proj: mat4x4<f32>, fog: vec4<f32> };
+struct Globals3 { view_proj: mat4x4<f32>, fog: vec4<f32>, eye: vec4<f32>, range: vec4<f32> };
 @group(0) @binding(0) var<uniform> g: Globals3;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -79,7 +79,13 @@ fn vs(v: VIn) -> VOut {
     o.pos = g.view_proj * vec4<f32>(v.pos, 1.0);
     o.uv = v.uv;
     o.color = v.color;
-    o.fog = v.fog;
+    // Fog by distance from the eye when the frame asks for it (range.y > 0): meshes kept on the GPU need no
+    // per-frame fog of their own. Otherwise the vertex's own fog (tracks set it).
+    var f = v.fog;
+    if (g.range.y > 0.0) {
+        f = max(f, clamp((distance(v.pos, g.eye.xyz) - g.range.x) / g.range.y, 0.0, 1.0));
+    }
+    o.fog = f;
     return o;
 }
 
@@ -113,11 +119,29 @@ pub struct Mesh {
     pub verts: Vec<Vert3>,
 }
 
-/// The 3D part of a frame: camera matrix, fog colour (sRGB), meshes.
+/// The 3D part of a frame: camera matrix, fog colour (sRGB), meshes; and optionally fog by distance from `eye`
+/// (`fog_range`: starts at, fully fogged this much farther; 0 = off) and meshes kept on the GPU (`Gpu::keep`),
+/// drawn first.
 pub struct World3<'a> {
     pub view_proj: [[f32; 4]; 4],
     pub fog: [f32; 3],
     pub meshes: &'a [Mesh],
+    pub eye: [f32; 3],
+    pub fog_range: [f32; 2],
+    pub kept: &'a [u32],
+}
+
+impl<'a> World3<'a> {
+    pub fn new(view_proj: [[f32; 4]; 4], fog: [f32; 3], meshes: &'a [Mesh]) -> World3<'a> {
+        World3 { view_proj, fog, meshes, eye: [0.0; 3], fog_range: [0.0; 2], kept: &[] }
+    }
+}
+
+/// Meshes uploaded once and drawn every frame until their version changes (terrain that rarely changes).
+struct Kept {
+    version: u64,
+    buf: Option<wgpu::Buffer>,
+    draws: Vec<(String, Wrap, u32, u32)>,
 }
 
 #[repr(C)]
@@ -150,14 +174,50 @@ pub struct Gpu {
     globals3_bg: wgpu::BindGroup,
     verts: wgpu::Buffer,
     vcapacity: usize,
+    kept: BTreeMap<u32, Kept>,
     depth: Option<(u32, u32, wgpu::TextureView)>,
     /// Texture sizes (for the composer's aspect ratios).
     pub sizes: BTreeMap<String, (u32, u32)>,
 }
 
+/// Every mesh's vertices in order, colours to linear light; on all cores (the per-frame cost of a 3D frame).
+fn to_linear(meshes: &[Mesh]) -> Vec<Vert3> {
+    use rayon::prelude::*;
+    let total: usize = meshes.iter().map(|m| m.verts.len()).sum();
+    let mut out = vec![Vert3 { pos: [0.0; 3], uv: [0.0; 2], color: [0.0; 4], fog: 0.0 }; total];
+    let mut rest = out.as_mut_slice();
+    let mut jobs = Vec::with_capacity(meshes.len());
+    for m in meshes {
+        let (head, tail) = rest.split_at_mut(m.verts.len());
+        jobs.push((head, &m.verts));
+        rest = tail;
+    }
+    jobs.into_par_iter().for_each(|(dst, src)| {
+        dst.par_chunks_mut(4096).zip(src.par_chunks(4096)).for_each(|(d, s)| {
+            for (d, v) in d.iter_mut().zip(s) {
+                *d = Vert3 { color: linear(v.color), ..*v };
+            }
+        });
+    });
+    out
+}
+
 /// Quad colours are written in sRGB (as picked by eye); the shader blends in linear light.
 fn linear(c: [f32; 4]) -> [f32; 4] {
-    [c[0].max(0.0).powf(2.2), c[1].max(0.0).powf(2.2), c[2].max(0.0).powf(2.2), c[3]]
+    [to_lin(c[0]), to_lin(c[1]), to_lin(c[2]), c[3]]
+}
+
+/// x^2.2 from a table (interpolated; error under 1e-4): the per-vertex cost of a 3D frame without `powf`.
+fn to_lin(x: f32) -> f32 {
+    const N: usize = 4096;
+    static LUT: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    if !(0.0..1.0).contains(&x) {
+        return x.max(0.0).powf(2.2);
+    }
+    let lut = LUT.get_or_init(|| (0..=N).map(|i| (i as f32 / N as f32).powf(2.2)).collect());
+    let f = x * N as f32;
+    let i = f as usize;
+    lut[i] + (lut[i + 1] - lut[i]) * (f - i as f32)
 }
 
 /// Premultiplies alpha and builds the mip chain (box filter on premultiplied values: no dark fringes).
@@ -378,7 +438,7 @@ impl Gpu {
         });
         let globals3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals3"),
-            size: 80,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -441,6 +501,7 @@ impl Gpu {
             globals3_bg,
             verts,
             vcapacity: 4096,
+            kept: BTreeMap::new(),
             depth: None,
             sizes: BTreeMap::new(),
         };
@@ -593,7 +654,7 @@ impl Gpu {
             });
             self.depth = Some((w, h, t.create_view(&wgpu::TextureViewDescriptor::default())));
         }
-        let verts: Vec<Vert3> = world.meshes.iter().flat_map(|m| m.verts.iter().map(|v| Vert3 { color: linear(v.color), ..*v })).collect();
+        let verts = to_linear(world.meshes);
         if verts.len() > self.vcapacity {
             self.vcapacity = verts.len().next_power_of_two();
             self.verts = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -609,6 +670,7 @@ impl Gpu {
         let fog = linear([world.fog[0], world.fog[1], world.fog[2], 1.0]);
         let mut g: Vec<f32> = world.view_proj.iter().flatten().copied().collect();
         g.extend_from_slice(&fog);
+        g.extend_from_slice(&[world.eye[0], world.eye[1], world.eye[2], 0.0, world.fog_range[0], world.fog_range[1], 0.0, 0.0]);
         self.queue.write_buffer(&self.globals3, 0, bytemuck::cast_slice(&g));
         let depth = &self.depth.as_ref().expect("made above").2;
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -630,6 +692,14 @@ impl Gpu {
         });
         pass.set_pipeline(&self.pipeline3);
         pass.set_bind_group(0, &self.globals3_bg, &[]);
+        for slot in world.kept {
+            let Some(Kept { buf: Some(buf), draws, .. }) = self.kept.get(slot) else { continue };
+            pass.set_vertex_buffer(0, buf.slice(..));
+            for (image, wrap, at, n) in draws {
+                pass.set_bind_group(1, self.bind(image, *wrap), &[]);
+                pass.draw(*at..*at + *n, 0..1);
+            }
+        }
         pass.set_vertex_buffer(0, self.verts.slice(..));
         let mut at = 0u32;
         for m in world.meshes {
@@ -640,6 +710,35 @@ impl Gpu {
             }
             at += n;
         }
+    }
+
+    /// Keeps meshes on the GPU under `slot` until `version` changes: uploaded once, drawn by every frame that lists the
+    /// slot in `World3::kept`. For terrain: rebuilt when it changes, not copied every frame.
+    pub fn keep(&mut self, slot: u32, version: u64, meshes: &[Mesh]) {
+        if self.kept.get(&slot).is_some_and(|k| k.version == version) {
+            return;
+        }
+        let verts = to_linear(meshes);
+        let buf = (!verts.is_empty()).then(|| {
+            let b = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("kept"),
+                size: std::mem::size_of_val(verts.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&b, 0, bytemuck::cast_slice(&verts));
+            b
+        });
+        let mut at = 0u32;
+        let draws = meshes
+            .iter()
+            .map(|m| {
+                let n = m.verts.len() as u32;
+                at += n;
+                (m.image.clone(), m.wrap, at - n, n)
+            })
+            .collect();
+        self.kept.insert(slot, Kept { version, buf, draws });
     }
 
     /// Renders offscreen and reads the picture back (screenshots, evals).

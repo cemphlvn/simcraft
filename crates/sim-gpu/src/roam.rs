@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use rayon::prelude::*;
 use serde::Deserialize;
 use sim_core::{Entity, World};
 use sim_render::feel::Tween;
@@ -195,9 +196,10 @@ pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material
         ([0, 0, -1], [1, 0, 0], [0, 1, 0], 0.68),
     ];
     const AO: [f32; 4] = [0.5, 0.68, 0.84, 1.0];
-    // One level at a time, merged in level order.
+    // One level per job, on all cores; merged in level order, so the meshes are the same at any core count.
     let plane = (wd * ht) as usize;
     let levels: Vec<BTreeMap<i64, Vec<Vert3>>> = (0..w.depth as usize)
+        .into_par_iter()
         .map(|level| {
             let mut by: BTreeMap<i64, Vec<Vert3>> = BTreeMap::new();
             for (i, &val) in vals.iter().enumerate().skip(level * plane).take(plane) {
@@ -519,7 +521,8 @@ impl RoamPlay {
             self.terrain = (world.field_values(&tf).map(<[i64]>::to_vec).unwrap_or_default(), meshes);
             self.terrain_version += 1;
         }
-        let mut meshes: Vec<Mesh> = self.terrain.1.clone();
+        // The terrain is not in the frame: the GPU keeps it (`terrain()`).
+        let mut meshes: Vec<Mesh> = Vec::new();
 
         // The plain beyond the world's edge, at ground level: the ground goes on to the horizon. Tiles outside the
         // world only (inside, the terrain is the ground), small enough for the fog to fade across them.
@@ -550,10 +553,10 @@ impl RoamPlay {
             let t = rgb(m.tint);
             [t[0] * 0.7, t[1] * 0.7, t[2] * 0.7]
         });
+        // Gaits first (they remember), then every body on all cores.
+        let mut jobs = Vec::new();
         for e in world.entities().values() {
             let Some(body) = self.roam.kinds.get(&e.kind) else { continue };
-            let (x, y, z) = self.tween.at(e.id, (e.x, e.y, e.z));
-            let (feet, up) = cling_point(world, x, y, z);
             let prev = self.tween.prev.get(&e.id).copied().unwrap_or((e.x, e.y, e.z));
             let moved = V3((e.x - prev.0) as f32, (prev.2 - e.z) as f32, (e.y - prev.1) as f32);
             let g = self.gait.entry(e.id).or_insert((V3(0.0, 0.0, 1.0), (e.id % 7) as f32));
@@ -561,10 +564,30 @@ impl RoamPlay {
                 g.0 = moved.norm();
                 g.1 += dt * 14.0;
             }
-            let carrying =
-                body.carries_in.as_deref().is_some_and(|c| e.props.get(c).is_some_and(|v| *v != 0) || sim_state::in_label(&e.state, c));
-            crawler(&mut bodies, body, feet, up, g.0, g.1, carrying, ball);
+            jobs.push((e, body, *g));
         }
+        let tween = &self.tween;
+        let (look, far) = (eye.basis().2, self.roam.far);
+        let parts: Vec<Vec<Vert3>> = jobs
+            .par_iter()
+            .with_min_len(16)
+            .filter_map(|(e, body, g)| {
+                let (x, y, z) = tween.at(e.id, (e.x, e.y, e.z));
+                let (feet, up) = cling_point(world, x, y, z);
+                // Not drawn: lost in the fog, or behind you (with a margin for the field of view's edges).
+                let to = feet - eye.pos;
+                let dist = to.dot(to).sqrt();
+                if dist > far || (dist > 1.5 && to.dot(look) < -0.2 * dist) {
+                    return None;
+                }
+                let carrying =
+                    body.carries_in.as_deref().is_some_and(|c| e.props.get(c).is_some_and(|v| *v != 0) || sim_state::in_label(&e.state, c));
+                let mut v = Vec::with_capacity(1600);
+                crawler_at(&mut v, body, feet, up, g.0, g.1, carrying, ball, dist < 12.0);
+                Some(v)
+            })
+            .collect();
+        bodies.extend(parts.into_iter().flatten());
         meshes.push(Mesh { image: WHITE.into(), wrap: Wrap::Clamp, verts: bodies });
 
         // What you hold, low in front of your eyes, swaying with your step; your mandibles either side.
@@ -633,14 +656,7 @@ impl RoamPlay {
             meshes.push(Mesh { image: BLOB.into(), wrap: Wrap::Clamp, verts: v });
         }
 
-        // Fog by distance from the eye.
-        for m in &mut meshes {
-            for v in &mut m.verts {
-                let d = V3(v.pos[0], v.pos[1], v.pos[2]) - eye.pos;
-                let dist = d.dot(d).sqrt();
-                v.fog = ((dist - self.roam.far * 0.35) / (self.roam.far * 0.65)).clamp(0.0, 1.0);
-            }
-        }
+        // Fog by distance from the eye is the GPU's (`fog_range`), for the kept terrain and these meshes alike.
 
         // Behind: sky above the horizon, turning with your view.
         let mut back = Vec::new();

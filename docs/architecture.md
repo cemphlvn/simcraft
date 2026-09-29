@@ -68,7 +68,8 @@ tick:
 - **Rules never mutate the world.** They produce a `Group`: the effects of one rule firing.
 - **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently. Likewise, if any `Need` in the group no longer holds against the live state, the group is dropped with a `short` event.
 - An entity **moves at most once per tick**. The first `Move` wins.
-- Evaluation (read-only) runs on `[run] threads` cores (0 = all); results merge in entity-id order, so the core count never changes the outcome. `apply` is single-threaded.
+- Evaluation (read-only) runs on `[run] threads` cores (0 = all) once 48 entities have something to evaluate (idle kinds do not count), in jobs of at least 16; results merge in entity-id order, so the core count never changes the outcome. `apply` is single-threaded. Field physics (diffusion and decay, one fused pass) runs level by level on the same cores in large worlds: each voxel reads only the old field, so the result is the same at any core count.
+- The world's hash covers every entity and every field voxel, every tick; fields are hashed a value at a time (not byte-wise FNV), since they are most of a 3D world's state.
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 - **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
 
@@ -645,6 +646,10 @@ invisible field (the pheromone).
   terrain changes); crawlers from segments and six stepping legs, oriented on the face they cling to; your mandibles
   and the ball you hold in view; the targeted face glows (red after a refusal); distance fog; the painted sky turns
   with the view; the ground goes on beyond the world's edge.
+- **Cost:** the terrain is kept on the GPU (`Gpu::keep`) and uploaded only when it changes; fog is computed on the
+  GPU from the distance to the eye; bodies behind you or lost in the fog are not built, far ones are coarse and
+  legless; bodies, the terrain mesher and the colour conversion run on all cores. `simcraft-play <game> --bench N`
+  reports where a frame goes and the worst frame after warm-up.
 - **Measured:** `simcraft-play <game> --feel` runs the real controller through a scripted walk, turn, hop and climb
   and prints the feel metrics (`games/<name>/FEEL.md`); `--shot` after `--ticks` stands you facing the tallest
   thing built (`--camera wide`: from above). `simcraft-check` checks the view against the game (your kind is

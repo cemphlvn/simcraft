@@ -87,8 +87,10 @@ fn bump(c: &AtomicU64) {
     c.fetch_add(1, Ordering::Relaxed);
 }
 
-/// A core takes this many entities as one chunk; small worlds pay no parallel overhead.
-const CHUNK: usize = 64;
+/// A core takes at least this many entities as one job; below `PARALLEL_FROM` entities with something to evaluate
+/// (idle kinds cost nothing), a tick stays on one core: small worlds pay no parallel overhead.
+const CHUNK: usize = 16;
+const PARALLEL_FROM: usize = 48;
 
 /// Context seen by world queries registered in Rhai (`around`, `rand`).
 /// Each core has its own context (thread-local): the world being read, `me`, salt.
@@ -2345,7 +2347,8 @@ impl Rules for Game {
             self.eval_entity(world, e, scope)
         };
         // In a small world, distributing work costs more than the work: sequential path.
-        let pool = self.pool.as_ref().filter(|_| entities.len() >= 4 * CHUNK);
+        let active = entities.iter().filter(|e| !self.plan(&e.kind).idle).count();
+        let pool = self.pool.as_ref().filter(|_| active >= PARALLEL_FROM);
         let groups: Vec<Vec<Group>> = match pool {
             #[cfg(feature = "parallel")]
             Some(pool) => pool.install(|| entities.par_iter().with_min_len(CHUNK).map_init(init, per).collect()),
@@ -2371,36 +2374,58 @@ impl Rules for Game {
                 }
             }
         }
-        for (name, f) in self.def.fields.iter().filter(|(_, f)| f.diffusion > 0) {
+        // Diffusion then decay, in one pass per field. Each voxel's new value reads only the old field, so levels are
+        // computed side by side on the game's cores (large worlds) and the result is the same at any core count.
+        for (name, f) in self.def.fields.iter().filter(|(_, f)| f.diffusion > 0 || f.decay > 0) {
             let Some(old) = world.field_values(name) else { continue };
-            let (w, h, d) = (world.width, world.height, world.depth);
-            let at = |x: i64, y: i64, z: i64| old[((z * h + y) * w + x) as usize];
-            let mut new = old.to_vec();
-            for z in 0..d {
+            let (w, h, d) = (world.width as usize, world.height as usize, world.depth as usize);
+            let (diffusion, keep) = (f.diffusion, 100 - f.decay);
+            let plane = w * h;
+            let level = |z: usize, out: &mut [i64]| {
                 for y in 0..h {
                     for x in 0..w {
-                        let here = at(x, y, z);
-                        let (mut sum, mut k) = (0, 0);
-                        for (dx, dy, dz) in [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)] {
-                            let (nx, ny, nz) = (x + dx, y + dy, z + dz);
-                            if (0..w).contains(&nx) && (0..h).contains(&ny) && (0..d).contains(&nz) {
-                                sum += at(nx, ny, nz);
+                        let i = z * plane + y * w + x;
+                        let here = old[i];
+                        let mut v = here;
+                        if diffusion > 0 {
+                            let (mut sum, mut k) = (0i64, 0i64);
+                            let mut add = |j: usize| {
+                                sum += old[j];
                                 k += 1;
+                            };
+                            if x > 0 {
+                                add(i - 1);
+                            }
+                            if x + 1 < w {
+                                add(i + 1);
+                            }
+                            if y > 0 {
+                                add(i - w);
+                            }
+                            if y + 1 < h {
+                                add(i + w);
+                            }
+                            if z > 0 {
+                                add(i - plane);
+                            }
+                            if z + 1 < d {
+                                add(i + plane);
+                            }
+                            if k > 0 {
+                                v = here + (sum - k * here) * diffusion / (100 * k);
                             }
                         }
-                        if k > 0 {
-                            new[((z * h + y) * w + x) as usize] = here + (sum - k * here) * f.diffusion / (100 * k);
-                        }
+                        out[y * w + x] = if f.decay > 0 { v * keep / 100 } else { v };
                     }
                 }
+            };
+            let mut new = vec![0i64; old.len()];
+            match self.pool.as_ref().filter(|_| old.len() >= 16_384) {
+                #[cfg(feature = "parallel")]
+                Some(pool) => pool.install(|| new.par_chunks_mut(plane).enumerate().for_each(|(z, out)| level(z, out))),
+                _ => new.chunks_mut(plane).enumerate().for_each(|(z, out)| level(z, out)),
             }
             world.replace_field(name, new);
-        }
-        for (name, f) in self.def.fields.iter().filter(|(_, f)| f.decay > 0) {
-            if let Some(old) = world.field_values(name) {
-                let new = old.iter().map(|v| v * (100 - f.decay) / 100).collect();
-                world.replace_field(name, new);
-            }
         }
         // Boundary last: level 0 holds its pinned value at the end of every tick.
         for (name, v) in tops {

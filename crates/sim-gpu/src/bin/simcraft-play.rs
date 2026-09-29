@@ -558,7 +558,7 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
                 play.tween.alpha = 1.0;
             }
             let fr = play.frame(w as f32, h as f32, if a.record > 0 { dt } else { 0.0 });
-            let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+            let world = World3::new(fr.eye.view_proj(w as f32, h as f32), fr.fog, &fr.meshes);
             let img = gpu.shot_scene(w, h, &fr.back, Some(world), &fr.front);
             let path = if a.record > 0 { PathBuf::from(format!("{}_{f:03}.png", stem.display())) } else { out.clone() };
             img.save(&path)?;
@@ -593,6 +593,9 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
         return Ok(());
     }
+    if a.bench > 0 {
+        return bench_roam(engine, roam, &assets, a);
+    }
     if let Some(out) = &a.shot {
         let instance = wgpu::Instance::default();
         let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
@@ -612,9 +615,9 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         }
         let (w, h) = a.size;
         let fr = play.frame(w as f32, h as f32, 1.0 / 60.0);
-        let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+        let world = roam_world(&mut gpu, &play, &fr, w, h);
         gpu.shot_scene(w, h, &fr.back, Some(world), &fr.front).save(out)?;
-        let tris: usize = fr.meshes.iter().map(|m| m.verts.len() / 3).sum();
+        let tris: usize = fr.meshes.iter().chain(play.terrain().1).map(|m| m.verts.len() / 3).sum();
         eprintln!("wrote {} ({w}x{h}) at tick {}, {tris} triangles — {}", out.display(), play.world().tick, play.title());
         return Ok(());
     }
@@ -636,6 +639,84 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args)
         grabbed: false,
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+/// A roam frame's 3D part: the terrain kept on the GPU (uploaded only when it changed), fog by distance from the eye.
+fn roam_world<'a>(gpu: &mut Gpu, p: &RoamPlay, fr: &'a sim_gpu::track::Frame, w: u32, h: u32) -> World3<'a> {
+    const TERRAIN: &[u32] = &[0];
+    let (version, meshes) = p.terrain();
+    gpu.keep(0, version, meshes);
+    let mut world = World3::new(fr.eye.view_proj(w as f32, h as f32), fr.fog, &fr.meshes);
+    world.eye = [fr.eye.pos.0, fr.eye.pos.1, fr.eye.pos.2];
+    world.fog_range = p.fog_range();
+    world.kept = TERRAIN;
+    world
+}
+
+/// Roam: `a.bench` frames offscreen at 60 fps, walking a circle while the colony builds (after `--ticks` of warm-up):
+/// where the time goes per frame (simulation, the body, building the frame, the GPU), and the frame's size.
+fn bench_roam(engine: Engine<Running, Game>, roam: Roam, assets: &Assets, a: &Args) -> Result<(), String> {
+    let instance = wgpu::Instance::default();
+    let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
+    upload_all(&mut gpu, assets);
+    let rate = engine.rules().cfg.run.tick_rate as f32;
+    let mut play = RoamPlay::new(engine, roam);
+    play.step(a.ticks);
+    let (w, h) = a.size;
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bench"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: gpu.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let (mut sim, mut body, mut compose, mut draw, mut clock, mut tris) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f32, 0usize);
+    let mut worst = 0.0f64;
+    let dt = 1.0 / 60.0;
+    for f in 0..a.bench {
+        let whole = Instant::now();
+        let input = sim_gpu::walker::Input { forward: 1.0, look: (3.0, 0.0), ..Default::default() };
+        let t = Instant::now();
+        play.walk(dt, input);
+        body += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        clock += dt * rate * a.speed;
+        let n = clock.floor() as u32;
+        clock -= n as f32;
+        play.step(n);
+        play.tween.alpha = clock;
+        sim += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let fr = play.frame(w as f32, h as f32, dt);
+        compose += t.elapsed().as_secs_f64();
+        tris = tris.max(fr.meshes.iter().chain(play.terrain().1).map(|m| m.verts.len() / 3).sum());
+        let t = Instant::now();
+        let world = roam_world(&mut gpu, &play, &fr, w, h);
+        gpu.render(&view, w, h, &fr.back, Some(world), &fr.front);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        draw += t.elapsed().as_secs_f64();
+        // After the first frames (pipelines and the first terrain upload warm up): the spikes a player feels.
+        if f >= 30 {
+            worst = worst.max(whole.elapsed().as_secs_f64());
+        }
+    }
+    let per = |s: f64| s * 1000.0 / a.bench as f64;
+    eprintln!(
+        "{} frames at {w}x{h}, up to {tris} triangles: sim {:.3} ms, body {:.3} ms, frame {:.3} ms, gpu {:.3} ms, worst frame {:.2} ms (tick {}, {} threads)",
+        a.bench,
+        per(sim),
+        per(body),
+        per(compose),
+        per(draw),
+        worst * 1000.0,
+        play.world().tick,
+        rayon::current_num_threads()
+    );
+    Ok(())
 }
 
 /// Where a finished run is kept: `runs/<game>-<unix seconds>.jsonl`.
@@ -695,12 +776,12 @@ impl Session {
             }
             Session::Track(p) => {
                 let fr = p.frame(w as f32, h as f32, dt);
-                let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+                let world = World3::new(fr.eye.view_proj(w as f32, h as f32), fr.fog, &fr.meshes);
                 gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
             }
             Session::Roam(p) => {
                 let fr = p.frame(w as f32, h as f32, dt);
-                let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+                let world = roam_world(gpu, p, &fr, w, h);
                 gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
             }
         }

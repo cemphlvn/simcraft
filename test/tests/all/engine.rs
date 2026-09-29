@@ -806,7 +806,8 @@ fn golden_colony3d_hash() {
     }
     // Recorded at colony3d eval step 001 (identity salts, player actions). Change only on purpose, together with the
     // game (and its EVALS.md).
-    assert_eq!(format!("{:016x}", e.world().hash()), "8f913e43070d74a7");
+    // Fields hashed a value at a time (the fingerprint moved, the game did not: eval --check identical).
+    assert_eq!(format!("{:016x}", e.world().hash()), "19eebc498db42c39");
 }
 
 // --- tick rate ---
@@ -986,7 +987,8 @@ fn golden_mound_hash() {
         e.tick();
     }
     // Recorded when the game was made. Change only on purpose, together with the game.
-    assert_eq!(format!("{:016x}", e.world().hash()), "08a1751ef66c65b1");
+    // Fields hashed a value at a time (the fingerprint moved, the game did not: eval --check identical).
+    assert_eq!(format!("{:016x}", e.world().hash()), "777c36790473d478");
 }
 
 #[test]

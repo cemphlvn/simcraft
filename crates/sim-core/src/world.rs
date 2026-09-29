@@ -556,9 +556,12 @@ impl World {
                 e.genome.iter().for_each(|g| h.u64(*g as u8 as u64));
             }
         }
+        // Fields are hashed a value at a time, not a byte at a time: every voxel is hashed every tick, and byte-wise
+        // FNV over two 40x40x20 fields was most of a tick (0.5 of 0.73 ms in mound).
         for (name, values) in &self.fields {
             h.str(name);
-            values.iter().for_each(|v| h.u64(*v as u64));
+            h.u64(values.len() as u64);
+            values.iter().for_each(|v| h.word(*v as u64));
         }
         h.0
     }
@@ -588,6 +591,10 @@ impl Fnv {
     }
     fn u64(&mut self, v: u64) {
         self.bytes(&v.to_le_bytes());
+    }
+    /// A whole word in one step (multiply, then rotate: every input bit reaches every output bit within a few words).
+    fn word(&mut self, v: u64) {
+        self.0 = (self.0 ^ v).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(23);
     }
     fn str(&mut self, s: &str) {
         self.u64(s.len() as u64);
