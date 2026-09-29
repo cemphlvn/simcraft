@@ -76,6 +76,23 @@ impl Eye {
     }
 
     /// Screen pixel of a world point, or `None` behind the camera (for tests and 2D overlays).
+    /// An orthographic view × projection looking from `pos` at `target` (roll ignored), `half` units either side,
+    /// depth 0..1 over `near..far`: the sun's view for shadow maps.
+    pub fn ortho(&self, half: f32) -> [[f32; 4]; 4] {
+        let f = (self.target - self.pos).norm();
+        let helper = if f.1.abs() > 0.95 { V3(0.0, 0.0, 1.0) } else { V3(0.0, 1.0, 0.0) };
+        let r = helper.cross(f).norm();
+        let u = f.cross(r);
+        let (e, s, span) = (self.pos, 1.0 / half, self.far - self.near);
+        let rows = [
+            [r.0 * s, r.1 * s, r.2 * s, -r.dot(e) * s],
+            [u.0 * s, u.1 * s, u.2 * s, -u.dot(e) * s],
+            [f.0 / span, f.1 / span, f.2 / span, (-f.dot(e) - self.near) / span],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        std::array::from_fn(|c| std::array::from_fn(|r| rows[r][c]))
+    }
+
     pub fn project(&self, p: V3, w: f32, h: f32) -> Option<(f32, f32)> {
         let m = self.view_proj(w, h);
         let v = [p.0, p.1, p.2, 1.0];

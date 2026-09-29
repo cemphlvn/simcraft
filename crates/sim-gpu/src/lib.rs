@@ -6,6 +6,7 @@ pub mod gpu;
 pub mod math;
 pub mod model;
 pub mod perf;
+pub mod post;
 pub mod roam;
 pub mod skin;
 pub mod stage;

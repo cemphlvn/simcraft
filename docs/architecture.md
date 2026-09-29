@@ -642,8 +642,14 @@ invisible field (the pheromone).
   shows a ball in the mandibles), `smell` (field, colour, full strength, radius), `feel` (`WalkFeel`: eye height,
   body size, walk/run speeds, `accel`/`air` ease rates, climb, jump, gravity, mouse sensitivity, `look_smooth`,
   bob, fov and run fov, lean, landing dip, `eye_glide`), `keys`.
-- **Drawing:** terrain faces open to air only, per material, with per-corner ambient occlusion (rebuilt when the
-  terrain changes); crawlers from segments and six stepping legs, oriented on the face they cling to; your mandibles
+- **Drawing:** terrain as `surface: Blocks` (faces open to air, per-corner ambient occlusion) or `surface: Smooth`
+  (surface nets through the same voxels: flat ground exactly on the voxel faces, edges and corners rounded by
+  relaxation, smooth normals, ambient occlusion from a prefix sum of open samples; beside the world, the untouched
+  ground continues up to its first height, so a pit at the edge has an outer wall); crawlers stand on the drawn
+  surface (its vertex and normal nearest their voxel's face: they tilt over rounded edges); `lens: (aperture, haze,
+  shadow)`: a macro lens (depth of field from a golden-angle disk blur by each pixel's distance, autofocus on what
+  the crosshair looks at, a placed camera on its target), sun shadows (a 2048² map over 22 voxels around where you
+  look; terrain and models cast and receive), and haze brighter towards the sun; crawlers from segments and six stepping legs, oriented on the face they cling to; your mandibles
   and the ball you hold in view; the targeted face glows (red after a refusal); distance fog; the painted sky turns
   with the view; the ground goes on beyond the world's edge.
 - **Cost:** the terrain is kept on the GPU (`Gpu::keep`) and uploaded only when it changes; fog is computed on the
@@ -861,8 +867,10 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
   `field` request and structure evals (game 9, `games/mound`)
 - [x] Models: glTF import, instanced GPU skinning with PBR, the state-machine contract, `simcraft-model`, a rigged
   photoreal termite (Higgsfield → Blender), macro laterite and mud textures
-- [ ] Mound next: an organic terrain surface (surface nets instead of cubes), sun shadows and a macro lens, grass
-  stalks, procedural feet on walls (same bones), replays of your runs, a queen
+- [x] Mound: an organic surface (surface nets), sun shadows, a macro lens and haze, crawlers on the drawn surface;
+  the colony no longer locks up carrying (tired arms, eval step 004)
+- [ ] Mound next: per-foot placement on walls (leg IK on the same bones, near termites only), grass stalks, replays
+  of your runs, a queen, the missing mud (8% of drops)
 - [x] Checking: `rustfmt.toml`, `simcraft-check`, the edit hook; `MoveBy` and the `clamped` warning
 - [x] Tracks: replays (`R`, `N`, `--replay`), lives meter, gone animations, hurt effect
 - [ ] Track next: a feel eval for switches (arrival time, overshoot, bank), text for scores, sound

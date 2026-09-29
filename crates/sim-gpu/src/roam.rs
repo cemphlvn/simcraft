@@ -31,6 +31,13 @@ pub struct Roam {
     pub actions: RoamActions,
     /// The terrain field is drawn voxel by voxel; each value with its material.
     pub materials: BTreeMap<i64, Material>,
+    /// How the terrain's surface is drawn: `Blocks` (a cube per voxel) or `Smooth` (one continuous, rounded
+    /// surface through the same voxels: flat ground stays exactly on the voxel faces).
+    #[serde(default)]
+    pub surface: Surface,
+    /// A camera like a macro lens: depth of field, sun shadows, haze (None = everything sharp and unshadowed).
+    #[serde(default)]
+    pub lens: Option<LensSpec>,
     /// The painted sky behind everything (an image), and the fog colour it fades to at the horizon.
     #[serde(default)]
     pub sky: Option<String>,
@@ -237,9 +244,12 @@ pub fn solid_for_body(w: &World, v: [i64; 3]) -> bool {
     z >= 0 && w.is_terrain(x, y, z)
 }
 
-fn solid_voxel(w: &World, v: [i64; 3]) -> bool {
+/// Is this view voxel solid? Inside the world: its terrain. Beside it: untouched ground up to `ground` (the view
+/// height of the ground's top at the start, what the plain around the world shows), so a pit dug at the edge has an
+/// outer wall instead of a hole into the void.
+fn solid_voxel(w: &World, v: [i64; 3], ground: i64) -> bool {
     let (x, y, z) = to_world(w, v);
-    w.is_terrain(x, y, z)
+    if (0..w.width).contains(&x) && (0..w.height).contains(&y) { w.is_terrain(x, y, z) } else { (0..ground).contains(&v[1]) }
 }
 
 /// A voxel face: its normal, the two in-face axes u and v, its shade.
@@ -250,7 +260,258 @@ pub type Voxel = (i64, i64, i64);
 
 /// Terrain as meshes, one per material: only faces open to air, each corner darkened by the voxels around it
 /// (ambient occlusion), so shapes read without lights. Rebuilt when the terrain changes.
-pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material>) -> Vec<Mesh> {
+/// `aperture`: how fast things blur away from the focus (0 = pinhole; 0.05–0.15 reads as macro); `haze`: light
+/// scattered towards the sun in the fog; `shadow`: how dark the sun's shade (0 = no shadows).
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LensSpec {
+    #[serde(default)]
+    pub aperture: f32,
+    #[serde(default)]
+    pub haze: f32,
+    #[serde(default)]
+    pub shadow: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+pub enum Surface {
+    #[default]
+    Blocks,
+    Smooth,
+}
+
+/// The terrain as one smooth surface (surface nets): samples at voxel centres (solid or not), a vertex in each
+/// cell the surface crosses, a quad across each edge between a solid and an open sample. Flat ground lies exactly on
+/// the voxel faces (walking and clinging match what is drawn); edges and corners are rounded by relaxing each
+/// vertex towards its neighbours, inside its cell. Lighting is baked per vertex from a smooth normal (sun, sky,
+/// ground) and how enclosed the point is (ambient occlusion). One mesh per material (the solid side's value).
+pub fn smooth_terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material>, ground: i64) -> Vec<Mesh> {
+    smooth_terrain(w, field, materials, ground).0
+}
+
+/// The drawn smooth surface, for standing on it: a vertex and a normal per cell the surface crosses.
+#[derive(Clone, Debug, Default)]
+pub struct SurfaceMap {
+    origin: [i64; 3],
+    dims: [usize; 3],
+    verts: Vec<Option<V3>>,
+    normals: Vec<V3>,
+}
+
+impl SurfaceMap {
+    /// The point of the drawn surface under `p` (the nearest surface vertex's tangent plane) and its normal; None
+    /// where there is no surface nearby.
+    pub fn stand(&self, p: V3) -> Option<(V3, V3)> {
+        let c = [(p.0 - 0.5).floor() as i64, (p.1 - 0.5).floor() as i64, (p.2 - 0.5).floor() as i64];
+        let mut best: Option<(f32, V3, V3)> = None;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let q = [c[0] + dx - self.origin[0], c[1] + dy - self.origin[1], c[2] + dz - self.origin[2]];
+                    if q.iter().zip(self.dims).any(|(v, d)| *v < 0 || *v as usize >= d) {
+                        continue;
+                    }
+                    let i = (q[2] as usize * self.dims[1] + q[1] as usize) * self.dims[0] + q[0] as usize;
+                    let (Some(v), n) = (self.verts[i], self.normals[i]) else { continue };
+                    let d = (v - p).dot(v - p);
+                    if n.dot(n) > 0.0 && best.is_none_or(|b| d < b.0) {
+                        best = Some((d, v, n.norm()));
+                    }
+                }
+            }
+        }
+        let (d, v, n) = best?;
+        (d < 1.5).then(|| (p - n.scale((p - v).dot(n)), n))
+    }
+}
+
+/// The smooth surface's meshes, and the map to stand on it.
+pub fn smooth_terrain(w: &World, field: &str, materials: &BTreeMap<i64, Material>, ground: i64) -> (Vec<Mesh>, SurfaceMap) {
+    let Some(vals) = w.field_values(field) else { return (Vec::new(), SurfaceMap::default()) };
+    let (wd, ht, dp) = (w.width, w.height, w.depth);
+    // View sample grid: X = x, Y = up (depth - 1 - z), Z = y. Outside the world: below is solid, above is open,
+    // beside it the untouched ground up to `ground` (as the plain shows it; the first material).
+    let outside = *materials.keys().next().unwrap_or(&1);
+    let value = |x: i64, yv: i64, z: i64| -> i64 {
+        if yv < 0 {
+            return outside;
+        }
+        if yv >= dp {
+            return 0;
+        }
+        if !(0..wd).contains(&x) || !(0..ht).contains(&z) {
+            return if yv < ground { outside } else { 0 };
+        }
+        vals[((dp - 1 - yv) * ht * wd + z * wd + x) as usize]
+    };
+    let solid = |x: i64, y: i64, z: i64| value(x, y, z) != 0;
+    // Cells span samples (i..i+1) in each axis; sample i sits at i + 0.5. Two margin cells around the world (the
+    // outer walls of pits dug at the edge).
+    let (x0, x1, y0, y1, z0, z1) = (-2i64, wd + 1, -1i64, dp, -2i64, ht + 1);
+    let (nx, ny, nz) = ((x1 - x0) as usize, (y1 - y0) as usize, (z1 - z0) as usize);
+    let cell = |x: i64, y: i64, z: i64| ((z - z0) as usize * ny + (y - y0) as usize) * nx + (x - x0) as usize;
+    let mut vert: Vec<Option<V3>> = vec![None; nx * ny * nz];
+    for z in z0..z1 {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let c = |dx: i64, dy: i64, dz: i64| solid(x + dx, y + dy, z + dz);
+                let corners = [c(0, 0, 0), c(1, 0, 0), c(0, 1, 0), c(1, 1, 0), c(0, 0, 1), c(1, 0, 1), c(0, 1, 1), c(1, 1, 1)];
+                if corners.iter().all(|&s| s) || corners.iter().all(|&s| !s) {
+                    continue;
+                }
+                // The mean of the crossing points (edge midpoints) of the 12 cell edges.
+                let (mut sum, mut n) = (V3(0.0, 0.0, 0.0), 0.0f32);
+                for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+                    if corners[a] != corners[b] {
+                        let p = |i: usize| V3((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32);
+                        sum = sum + (p(a) + p(b)).scale(0.5);
+                        n += 1.0;
+                    }
+                }
+                let base = V3(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                vert[cell(x, y, z)] = Some(base + sum.scale(1.0 / n));
+            }
+        }
+    }
+    // Relax: each vertex moves halfway to the mean of its neighbours, and stays in its cell. Flat stays flat.
+    for _ in 0..2 {
+        let prev = vert.clone();
+        for z in z0..z1 {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let Some(v) = prev[cell(x, y, z)] else { continue };
+                    let (mut sum, mut n) = (V3(0.0, 0.0, 0.0), 0.0f32);
+                    for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)] {
+                        let (a, b, c) = (x + dx, y + dy, z + dz);
+                        if (x0..x1).contains(&a)
+                            && (y0..y1).contains(&b)
+                            && (z0..z1).contains(&c)
+                            && let Some(u) = prev[cell(a, b, c)]
+                        {
+                            sum = sum + u;
+                            n += 1.0;
+                        }
+                    }
+                    if n > 0.0 {
+                        let m = v + (sum.scale(1.0 / n) - v).scale(0.5);
+                        let lo = V3(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                        vert[cell(x, y, z)] = Some(V3(
+                            m.0.clamp(lo.0 + 0.02, lo.0 + 0.98),
+                            m.1.clamp(lo.1 + 0.02, lo.1 + 0.98),
+                            m.2.clamp(lo.2 + 0.02, lo.2 + 0.98),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // Quads: across each sample edge whose ends differ, joining the four cells around that edge (by cell index:
+    // a vertex is its cell).
+    let mut quads: Vec<([usize; 4], V3, i64)> = Vec::new();
+    for z in z0 + 1..z1 {
+        for y in y0 + 1..y1 {
+            for x in x0 + 1..x1 {
+                let here = value(x, y, z);
+                for axis in 0..3 {
+                    let (dx, dy, dz) = [(1, 0, 0), (0, 1, 0), (0, 0, 1)][axis];
+                    let there = value(x + dx, y + dy, z + dz);
+                    if (here != 0) == (there != 0) || x + dx >= x1 || y + dy >= y1 || z + dz >= z1 {
+                        continue;
+                    }
+                    // The four cells sharing this edge: offsets in the two other axes.
+                    let (u, v) = [((0, 1, 0), (0, 0, 1)), ((0, 0, 1), (1, 0, 0)), ((1, 0, 0), (0, 1, 0))][axis];
+                    let at = |a: i64, b: i64| cell(x - u.0 * a - v.0 * b, y - u.1 * a - v.1 * b, z - u.2 * a - v.2 * b);
+                    let q = [at(1, 1), at(0, 1), at(0, 0), at(1, 0)];
+                    if q.iter().any(|&c| vert[c].is_none()) {
+                        continue;
+                    }
+                    // Normal: from the solid sample towards the open one.
+                    let sign = if here != 0 { 1.0 } else { -1.0 };
+                    let n = V3(dx as f32 * sign, dy as f32 * sign, dz as f32 * sign);
+                    quads.push((q, n, if here != 0 { here } else { there }));
+                }
+            }
+        }
+    }
+    let pos = |c: usize| vert[c].expect("checked when the quad was made");
+    // Smooth normals: the mean of the face normals around each vertex, per cell.
+    let mut normals = vec![V3(0.0, 0.0, 0.0); vert.len()];
+    for (q, n, _) in &quads {
+        let face = (pos(q[2]) - pos(q[0])).cross(pos(q[3]) - pos(q[1]));
+        let face = if face.dot(*n) < 0.0 { face.scale(-1.0) } else { face };
+        for &c in q {
+            normals[c] = normals[c] + face;
+        }
+    }
+    // How enclosed a point is: the share of open samples in the 4x4x4 block around it, from a 3D prefix sum of the
+    // open samples (eight lookups a query instead of 64).
+    let (px0, py0, pz0) = (x0 - 3, y0 - 3, z0 - 3);
+    let (pnx, pny, pnz) = ((x1 - x0 + 7) as usize, (y1 - y0 + 7) as usize, (z1 - z0 + 7) as usize);
+    let pidx = |x: usize, y: usize, z: usize| (z * (pny + 1) + y) * (pnx + 1) + x;
+    let mut prefix = vec![0i32; (pnx + 1) * (pny + 1) * (pnz + 1)];
+    for z in 0..pnz {
+        for y in 0..pny {
+            for x in 0..pnx {
+                let open = !solid(px0 + x as i64, py0 + y as i64, pz0 + z as i64) as i32;
+                prefix[pidx(x + 1, y + 1, z + 1)] =
+                    open + prefix[pidx(x, y + 1, z + 1)] + prefix[pidx(x + 1, y, z + 1)] + prefix[pidx(x + 1, y + 1, z)]
+                        - prefix[pidx(x, y, z + 1)]
+                        - prefix[pidx(x, y + 1, z)]
+                        - prefix[pidx(x + 1, y, z)]
+                        + prefix[pidx(x, y, z)];
+            }
+        }
+    }
+    let openness = |p: V3| -> f32 {
+        let lo = |v: f32, o: i64| ((v - 2.0).floor() as i64 - o).max(0) as usize;
+        let (ax, ay, az) = (lo(p.0, px0).min(pnx - 4), lo(p.1, py0).min(pny - 4), lo(p.2, pz0).min(pnz - 4));
+        let (bx, by, bz) = (ax + 4, ay + 4, az + 4);
+        let sum = prefix[pidx(bx, by, bz)] - prefix[pidx(ax, by, bz)] - prefix[pidx(bx, ay, bz)] - prefix[pidx(bx, by, az)]
+            + prefix[pidx(ax, ay, bz)]
+            + prefix[pidx(ax, by, az)]
+            + prefix[pidx(bx, ay, az)]
+            - prefix[pidx(ax, ay, az)];
+        sum as f32 / 64.0
+    };
+    // Light per vertex, once per cell: sun, sky and ground by the smooth normal, times the openness.
+    let sun = V3(0.35, 0.85, 0.4).norm();
+    let mut light = vec![f32::NAN; vert.len()];
+    let mut by: BTreeMap<i64, Vec<Vert3>> = BTreeMap::new();
+    for (q, n, material) in quads {
+        let Some(mat) = materials.get(&material) else { continue };
+        let tint = rgb(mat.tint);
+        // Texture along the quad's own axis (its sample-edge direction): no stretching on walls or floors.
+        let uv = |p: V3| -> [f32; 2] {
+            let (a, b) = if n.1 != 0.0 {
+                (p.0, p.2)
+            } else if n.0 != 0.0 {
+                (p.2, -p.1)
+            } else {
+                (p.0, -p.1)
+            };
+            [a * mat.scale, b * mat.scale]
+        };
+        let face = (pos(q[2]) - pos(q[0])).cross(pos(q[3]) - pos(q[1]));
+        let order: [usize; 6] = if face.dot(n) >= 0.0 { [0, 1, 2, 0, 2, 3] } else { [0, 2, 1, 0, 3, 2] };
+        let verts = by.entry(material).or_default();
+        for i in order {
+            let c = q[i];
+            let p = pos(c);
+            if light[c].is_nan() {
+                let nn = if normals[c].dot(normals[c]) > 0.0 { normals[c].norm() } else { n };
+                let l = 0.42 + 0.34 * (nn.1 * 0.5 + 0.5) + 0.38 * nn.dot(sun).max(0.0);
+                let ao = 0.55 + 0.9 * openness(p).min(0.5);
+                light[c] = (l * ao).min(1.15);
+            }
+            let l = light[c];
+            verts.push(Vert3 { pos: [p.0, p.1, p.2], uv: uv(p), color: [tint[0] * l, tint[1] * l, tint[2] * l, 1.0], fog: 0.0 });
+        }
+    }
+    let meshes = by.into_iter().map(|(val, verts)| Mesh { image: materials[&val].image.clone(), wrap: Wrap::Repeat, verts }).collect();
+    (meshes, SurfaceMap { origin: [x0, y0, z0], dims: [nx, ny, nz], verts: vert, normals })
+}
+
+pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material>, ground: i64) -> Vec<Mesh> {
     let Some(vals) = w.field_values(field) else { return Vec::new() };
     let (wd, ht) = (w.width, w.height);
     const FACES: [Face; 6] = [
@@ -280,7 +541,7 @@ pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material
                 let verts = by.entry(val).or_default();
                 for (n, u, v, shade) in FACES {
                     let out = [c[0] + n[0], c[1] + n[1], c[2] + n[2]];
-                    if solid_voxel(w, out) {
+                    if solid_voxel(w, out, ground) {
                         continue;
                     }
                     // The face's plane: the voxel's side toward n.
@@ -293,7 +554,8 @@ pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material
                         let su = if du == 0 { -1 } else { 1 };
                         let sv = if dv == 0 { -1 } else { 1 };
                         let at = |a: i64, b: i64| std::array::from_fn(|k| out[k] + u[k] * a + v[k] * b);
-                        let (s1, s2, cr) = (solid_voxel(w, at(su, 0)), solid_voxel(w, at(0, sv)), solid_voxel(w, at(su, sv)));
+                        let (s1, s2, cr) =
+                            (solid_voxel(w, at(su, 0), ground), solid_voxel(w, at(0, sv), ground), solid_voxel(w, at(su, sv), ground));
                         let level = if s1 && s2 { 0 } else { 3 - (s1 as usize + s2 as usize + cr as usize) };
                         light[j] = AO[level] * shade;
                     }
@@ -319,6 +581,34 @@ pub fn terrain_meshes(w: &World, field: &str, materials: &BTreeMap<i64, Material
     for level in levels {
         for (val, verts) in level {
             by.entry(val).or_default().extend(verts);
+        }
+    }
+    // Outer walls: the untouched ground beside the world, where it faces an open voxel inside it (a pit at the edge).
+    if let Some((&val, mat)) = materials.iter().next() {
+        let tint = rgb(mat.tint);
+        let verts = by.entry(val).or_default();
+        for (x, z, n) in (0..wd)
+            .flat_map(|x| [(x, -1, [0i64, 0, 1]), (x, ht, [0, 0, -1])])
+            .chain((0..ht).flat_map(|z| [(-1, z, [1i64, 0, 0]), (wd, z, [-1, 0, 0])]))
+        {
+            for yv in 0..ground {
+                let out = [x + n[0], yv, z + n[2]];
+                if solid_voxel(w, out, ground) {
+                    continue;
+                }
+                let (u, v) = if n[0] != 0 { ([0i64, 0, 1], [0i64, 1, 0]) } else { ([1, 0, 0], [0, 1, 0]) };
+                let base: [f32; 3] = std::array::from_fn(|k| [x, yv, z][k] as f32 + if n[k] > 0 { 1.0 } else { 0.0 });
+                let corners: Vec<[f32; 3]> = [(0i64, 0i64), (1, 0), (1, 1), (0, 1)]
+                    .into_iter()
+                    .map(|(du, dv)| std::array::from_fn(|k| base[k] + (u[k] * du + v[k] * dv) as f32))
+                    .collect();
+                let l = 0.62;
+                for j in [0usize, 1, 2, 0, 2, 3] {
+                    let p = corners[j];
+                    let uv = if n[0] != 0 { [p[2] * mat.scale, -p[1] * mat.scale] } else { [p[0] * mat.scale, -p[1] * mat.scale] };
+                    verts.push(Vert3 { pos: p, uv, color: [tint[0] * l, tint[1] * l, tint[2] * l, 1.0], fog: 0.0 });
+                }
+            }
         }
     }
     by.into_iter()
@@ -491,6 +781,10 @@ pub struct RoamPlay {
     terrain_version: u64,
     /// Crawlers' headings (last move) and gait phases.
     gait: BTreeMap<u64, (V3, f32)>,
+    /// The drawn smooth surface, to stand crawlers on (None with block terrain: the voxel faces are what is drawn).
+    surface: Option<SurfaceMap>,
+    /// Where the lens is focused (eases towards what the crosshair looks at, like autofocus).
+    focus: f32,
     /// Each entity's clip time, and when (view time) it last moved.
     clock: BTreeMap<u64, f32>,
     moved_at: BTreeMap<u64, f32>,
@@ -530,6 +824,8 @@ impl RoamPlay {
             gait: BTreeMap::new(),
             clock: BTreeMap::new(),
             moved_at: BTreeMap::new(),
+            focus: 4.0,
+            surface: None,
             refused: None,
             ground_top,
         }
@@ -612,7 +908,8 @@ impl RoamPlay {
     /// What the crosshair points at: (solid voxel, open voxel before it), in world coordinates.
     pub fn target(&self) -> Option<(Voxel, Voxel)> {
         let w = self.world();
-        let hit = ray(self.walker.eye_pos(), self.walker.look_dir(), self.roam.actions.reach, &|x, y, z| solid_voxel(w, [x, y, z]))?;
+        // Only the world's own terrain can be dug or built on: outside it is air to the look ray.
+        let hit = ray(self.walker.eye_pos(), self.walker.look_dir(), self.roam.actions.reach, &|x, y, z| solid_voxel(w, [x, y, z], 0))?;
         Some((to_world(w, hit.0), to_world(w, hit.1)))
     }
 
@@ -653,6 +950,23 @@ impl RoamPlay {
     fn build_frame(&mut self, w: f32, h: f32, dt: f32) -> Frame {
         self.time += dt;
         let eye = self.overview.unwrap_or_else(|| self.walker.eye());
+        // Autofocus: on what the middle of the view looks at (within 40 voxels), easing there.
+        {
+            let world = self.engine.world();
+            let look = (eye.target - eye.pos).norm();
+            let hit = ray(eye.pos, look, 40.0, &|x, y, z| solid_voxel(world, [x, y, z], self.ground_top as i64));
+            let want = match self.overview {
+                // A placed camera (a shot) focuses on what it is aimed at.
+                Some(o) => (o.target - o.pos).dot(look).max(0.3),
+                None => hit.map_or(40.0, |(v, _)| {
+                    let c = V3(v[0] as f32 + 0.5, v[1] as f32 + 0.5, v[2] as f32 + 0.5);
+                    (c - eye.pos).dot(look).max(0.3)
+                }),
+            };
+            // The first frame focuses at once (a camera switched on), later ones ease.
+            let first = self.time <= dt.max(1.0 / 60.0) * 1.5;
+            self.focus = if first { want } else { self.focus + (want - self.focus) * (1.0 - (-6.0 * dt.max(1.0 / 60.0)).exp()) };
+        }
         let world = self.engine.world();
         let fog = rgb(self.roam.fog);
         // Terrain: rebuilt only when it changed.
@@ -660,7 +974,14 @@ impl RoamPlay {
         self.stats.terrain_rebuilt = false;
         if world.field_values(&tf).is_some_and(|v| v != self.terrain.0.as_slice()) {
             let t = std::time::Instant::now();
-            let meshes = terrain_meshes(world, &tf, &self.roam.materials);
+            let meshes = match self.roam.surface {
+                Surface::Blocks => terrain_meshes(world, &tf, &self.roam.materials, self.ground_top as i64),
+                Surface::Smooth => {
+                    let (meshes, map) = smooth_terrain(world, &tf, &self.roam.materials, self.ground_top as i64);
+                    self.surface = Some(map);
+                    meshes
+                }
+            };
             self.stats.terrain_ms = t.elapsed().as_secs_f64() * 1000.0;
             self.stats.terrain_rebuilt = true;
             self.stats.terrain_verts = meshes.iter().map(|m| m.verts.len()).sum();
@@ -673,7 +994,8 @@ impl RoamPlay {
         // The plain beyond the world's edge, at ground level: the ground goes on to the horizon. Tiles outside the
         // world only (inside, the terrain is the ground), small enough for the fog to fade across them.
         if let Some(m) = self.roam.materials.get(&1).or_else(|| self.roam.materials.values().next()) {
-            let (y, tile, reach) = (self.ground_top, 8i64, (self.roam.far as i64 / 8 + 1) * 8);
+            // A hair below the ground's top: the smooth surface runs half a voxel past the edge, over the plain.
+            let (y, tile, reach) = (self.ground_top - 0.01, 8i64, (self.roam.far as i64 / 8 + 1) * 8);
             let tint = rgb(m.tint);
             let c = [tint[0] * 0.92, tint[1] * 0.92, tint[2] * 0.92, 1.0];
             let mut v = Vec::new();
@@ -734,7 +1056,7 @@ impl RoamPlay {
                 *t += dt * spec.rate;
                 let time = *t;
                 let (x, y, z) = self.tween.at(e.id, (e.x, e.y, e.z));
-                let (feet, up) = cling_point(world, x, y, z);
+                let (feet, up) = self.stand(world, x, y, z);
                 let to = feet - eye.pos;
                 let dist = to.dot(to).sqrt();
                 if dist > far_away || (dist > 1.5 && to.dot(look_dir) < -0.2 * dist) {
@@ -783,13 +1105,15 @@ impl RoamPlay {
             jobs.push((e, body, *g));
         }
         let tween = &self.tween;
+        let surface = &self.surface;
         let (look, far) = (eye.basis().2, self.roam.far);
         let parts: Vec<Vec<Vert3>> = jobs
             .par_iter()
             .with_min_len(16)
             .filter_map(|(e, body, g)| {
                 let (x, y, z) = tween.at(e.id, (e.x, e.y, e.z));
-                let (feet, up) = cling_point(world, x, y, z);
+                let (feet, up) =
+                    surface.as_ref().and_then(|m| m.stand(cling_point(world, x, y, z).0)).unwrap_or_else(|| cling_point(world, x, y, z));
                 // Not drawn: lost in the fog, or behind you (with a margin for the field of view's edges).
                 let to = feet - eye.pos;
                 let dist = to.dot(to).sqrt();
@@ -888,11 +1212,7 @@ impl RoamPlay {
         // Behind: sky above the horizon, turning with your view.
         let mut back = Vec::new();
         let horizon = eye.project(eye.pos + V3(fwd.0, 0.0, fwd.2).norm().scale(1000.0), w, h).map_or(h * 0.5, |p| p.1);
-        back.push(Quad {
-            top: [fog[0] * 0.8, fog[1] * 0.9, 1.0, 1.0],
-            bottom: [fog[0], fog[1], fog[2], 1.0],
-            ..plain(WHITE, 0.0, 0.0, w, h)
-        });
+        back.push(Quad { top: [fog[0], fog[1], fog[2], 1.0], bottom: [fog[0], fog[1], fog[2], 1.0], ..plain(WHITE, 0.0, 0.0, w, h) });
         if let Some(sky) = &self.roam.sky {
             let hgt = (horizon + h * 0.05).max(1.0);
             let u0 = self.walker.view_yaw / 120.0;
@@ -908,6 +1228,12 @@ impl RoamPlay {
     /// Forgets the built terrain: the next frame rebuilds and re-uploads it (what a dig or a drop causes).
     pub fn forget_terrain(&mut self) {
         self.terrain.0.clear();
+    }
+
+    /// Where a crawler at (x, y, z) stands: on the drawn surface (smooth terrain), else on its voxel's face.
+    fn stand(&self, world: &World, x: f32, y: f32, z: f32) -> (V3, V3) {
+        let on_face = cling_point(world, x, y, z);
+        self.surface.as_ref().and_then(|m| m.stand(on_face.0)).unwrap_or(on_face)
     }
 
     /// The terrain meshes and their version (bumped at each rebuild), for `Gpu::keep`.
@@ -943,6 +1269,19 @@ impl RoamPlay {
         world.fog_range = self.fog_range();
         world.kept = TERRAIN;
         world.models = &fr.models;
+        world.light.sun_dir = [0.35, 0.85, 0.4];
+        if let Some(l) = self.roam.lens {
+            let look = (fr.eye.target - fr.eye.pos).norm();
+            let c = fr.eye.pos + V3(look.0, 0.0, look.2).scale(8.0);
+            if l.shadow > 0.0 {
+                world.shadow = Some(crate::gpu::Shadow { center: [c.0, self.ground_top, c.2], radius: 22.0, strength: l.shadow });
+            }
+            if l.aperture > 0.0 {
+                world.lens = Some(crate::gpu::Lens { focus: self.focus, aperture: l.aperture, near: fr.eye.near, far: fr.eye.far });
+            }
+            world.haze = l.haze;
+            world.light.haze = l.haze;
+        }
         world
     }
 
@@ -1067,14 +1406,71 @@ mod tests {
         let w = world();
         let mats: BTreeMap<i64, Material> =
             [(1, "earth"), (2, "mud")].map(|(k, n)| (k, Material { image: n.into(), scale: 1.0, tint: (255, 255, 255) })).into();
-        let meshes = terrain_meshes(&w, "mud", &mats);
+        let meshes = terrain_meshes(&w, "mud", &mats, 1);
         let faces = |img: &str| meshes.iter().find(|m| m.image == img).map_or(0, |m| m.verts.len() / 6);
-        // Earth: 16 tops (one under the ball), 16 bottoms, 16 outer sides.
-        assert_eq!(faces("earth"), 15 + 16 + 16);
+        // Earth: 16 tops (one under the ball), 16 bottoms; no outer sides: the ground continues beside the world.
+        assert_eq!(faces("earth"), 15 + 16);
         // The ball: its top and four sides; not its bottom (earth under it).
         assert_eq!(faces("mud"), 5);
         let ao = meshes.iter().find(|m| m.image == "earth").unwrap().verts.iter().map(|v| v.color[0]).fold(1.0f32, f32::min);
         assert!(ao < 0.6, "corners beside the ball are darker");
+    }
+
+    #[test]
+    fn a_smooth_surface_keeps_flat_ground_on_the_voxel_faces_and_rounds_a_pillar() {
+        // Ground one level deep on a 10x10 world, a ball at (1, 1): the ground's top is y = 1 (the bottom level is
+        // view y 0..1), and far from the ball it stays exactly there.
+        let mut w = World::new3(1, 10, 10, 4);
+        w.add_field("mud", 0);
+        w.set_terrain(Some("mud".into()));
+        for y in 0..10 {
+            for x in 0..10 {
+                w.set_field("mud", x, y, 3, 1);
+            }
+        }
+        w.set_field("mud", 1, 1, 2, 2);
+        let mats: BTreeMap<i64, Material> =
+            [(1, "earth"), (2, "mud")].map(|(k, n)| (k, Material { image: n.into(), scale: 1.0, tint: (255, 255, 255) })).into();
+        let meshes = smooth_terrain_meshes(&w, "mud", &mats, 1);
+        let earth = meshes.iter().find(|m| m.image == "earth").expect("earth");
+        let tops: Vec<f32> =
+            earth.verts.iter().filter(|v| (v.pos[0] - 6.5).abs() < 1.6 && (v.pos[2] - 6.5).abs() < 1.6).map(|v| v.pos[1]).collect();
+        assert!(!tops.is_empty() && tops.iter().all(|y| (y - 1.0).abs() < 1e-4), "flat ground on the face: {tops:?}");
+        // A pillar three balls high: its side is rounded (vertices between the voxel's corners, not on them).
+        for z in 0..3 {
+            w.set_field("mud", 5, 5, z, 2);
+        }
+        let meshes = smooth_terrain_meshes(&w, "mud", &mats, 1);
+        let mud = meshes.iter().find(|m| m.image == "mud").expect("the pillar");
+        let mid = mud.verts.iter().filter(|v| v.pos[1] > 2.0 && v.pos[1] < 3.0);
+        let radii: Vec<f32> = mid.map(|v| ((v.pos[0] - 5.5).powi(2) + (v.pos[2] - 5.5).powi(2)).sqrt()).collect();
+        let (lo, hi) = radii.iter().fold((f32::MAX, 0.0f32), |(a, b), r| (a.min(*r), b.max(*r)));
+        assert!(!radii.is_empty() && hi < 0.7 && hi - lo < 0.2, "a round column, not a square one: radii {lo}..{hi}");
+    }
+
+    #[test]
+    fn crawlers_stand_on_the_drawn_surface_and_tilt_with_its_curve() {
+        let mut w = World::new3(1, 10, 10, 5);
+        w.add_field("mud", 0);
+        w.set_terrain(Some("mud".into()));
+        for y in 0..10 {
+            for x in 0..10 {
+                w.set_field("mud", x, y, 4, 1);
+            }
+        }
+        for z in 1..4 {
+            w.set_field("mud", 5, 5, z, 2);
+        }
+        let mats: BTreeMap<i64, Material> =
+            [(1, "earth"), (2, "mud")].map(|(k, n)| (k, Material { image: n.into(), scale: 1.0, tint: (255, 255, 255) })).into();
+        let (_, map) = smooth_terrain(&w, "mud", &mats, 1);
+        // Flat ground, far from the pillar: exactly the voxel face, facing up.
+        let (p, n) = map.stand(V3(1.5, 1.0, 1.5)).expect("ground");
+        assert!((p.1 - 1.0).abs() < 1e-4 && (n.1 - 1.0).abs() < 1e-4, "{p:?} {n:?}");
+        // On the pillar's top edge (the voxel face's corner): the drawn surface is rounded there.
+        let (p, n) = map.stand(V3(5.95, 4.0, 5.5)).expect("the pillar's edge");
+        assert!(n.1 < 0.98 && n.0 > 0.1, "tilted outwards over the rounded edge: {n:?}");
+        assert!((p - V3(5.95, 4.0, 5.5)).dot(p - V3(5.95, 4.0, 5.5)).sqrt() < 0.5, "close to where it clings: {p:?}");
     }
 
     #[test]

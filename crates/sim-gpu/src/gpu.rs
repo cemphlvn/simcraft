@@ -55,8 +55,21 @@ fn fs(v: VOut) -> @location(0) vec4<f32> {
 "#;
 
 const SHADER3: &str = r#"
-struct Globals3 { view_proj: mat4x4<f32>, fog: vec4<f32>, eye: vec4<f32>, range: vec4<f32> };
+struct Globals3 {
+    view_proj: mat4x4<f32>,
+    fog: vec4<f32>,
+    eye: vec4<f32>,
+    range: vec4<f32>,
+    light_vp: mat4x4<f32>,
+    // on, strength (how dark), texel, bias
+    shadow: vec4<f32>,
+    // towards the sun (xyz), haze (w)
+    sun: vec4<f32>,
+    sun_col: vec4<f32>,
+};
 @group(0) @binding(0) var<uniform> g: Globals3;
+@group(0) @binding(1) var shadow_map: texture_depth_2d;
+@group(0) @binding(2) var shadow_samp: sampler_comparison;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
 
@@ -71,6 +84,7 @@ struct VOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) fog: f32,
+    @location(3) world: vec3<f32>,
 };
 
 @vertex
@@ -86,7 +100,30 @@ fn vs(v: VIn) -> VOut {
         f = max(f, clamp((distance(v.pos, g.eye.xyz) - g.range.x) / g.range.y, 0.0, 1.0));
     }
     o.fog = f;
+    o.world = v.pos;
     return o;
+}
+
+// Depth from the sun (shadow maps).
+@vertex
+fn vs_shadow(v: VIn) -> @builtin(position) vec4<f32> {
+    return g.light_vp * vec4<f32>(v.pos, 1.0);
+}
+
+// How much sun reaches a point: the shadow map, 3x3 filtered (soft edges).
+fn sunlit(p: vec3<f32>) -> f32 {
+    let c = g.light_vp * vec4<f32>(p, 1.0);
+    let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || c.z > 1.0) {
+        return 1.0;
+    }
+    var sum = 0.0;
+    for (var i = -1; i <= 1; i = i + 1) {
+        for (var j = -1; j <= 1; j = j + 1) {
+            sum = sum + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(f32(i), f32(j)) * g.shadow.z, c.z - g.shadow.w);
+        }
+    }
+    return sum / 9.0;
 }
 
 @fragment
@@ -95,11 +132,21 @@ fn fs(v: VOut) -> @location(0) vec4<f32> {
     if (c.a < 0.02) {
         discard;
     }
+    var rgb = c.rgb * v.color.rgb;
+    if (g.shadow.x > 0.5) {
+        rgb = rgb * mix(1.0 - g.shadow.y, 1.0, sunlit(v.world));
+    }
+    // Haze: the fog is brighter towards the sun (light scattered in the air).
+    let toward = pow(max(dot(normalize(v.world - g.eye.xyz), g.sun.xyz), 0.0), 6.0) * g.sun.w;
+    let fogc = mix(g.fog.rgb, g.sun_col.rgb, clamp(toward, 0.0, 1.0));
     // Premultiplied: fog blends towards the horizon colour in proportion to coverage.
-    let rgb = mix(c.rgb * v.color.rgb, g.fog.rgb * c.a, v.fog);
+    rgb = mix(rgb, fogc * c.a, v.fog);
     return vec4<f32>(rgb, c.a) * v.color.a;
 }
 "#;
+
+/// The sun's shadow map is this many texels a side.
+pub const SHADOW_SIZE: u32 = 2048;
 
 /// A vertex of the 3D world: position, texture coordinate, colour (sRGB, multiplied), fog amount 0..1.
 #[repr(C)]
@@ -132,11 +179,47 @@ pub struct World3<'a> {
     /// Skinned, instanced models (`Gpu::upload_model`), lit by `light`.
     pub models: &'a [crate::skin::ModelDraw],
     pub light: crate::skin::Light,
+    /// Sun shadows over a region (None = no shadows).
+    pub shadow: Option<Shadow>,
+    /// A lens: depth of field (None = everything sharp).
+    pub lens: Option<Lens>,
+    /// Light scattered towards the sun in the fog (0 = none).
+    pub haze: f32,
+}
+
+/// Sun shadows over a square `radius` around `center` (world units); `strength`: how dark the shade (0..1).
+#[derive(Clone, Copy, Debug)]
+pub struct Shadow {
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub strength: f32,
+}
+
+/// A lens focused `focus` units away; `aperture`: how fast things blur away from the focus (0 = pinhole).
+/// `near`/`far`: the camera's (to read depth back as distance).
+#[derive(Clone, Copy, Debug)]
+pub struct Lens {
+    pub focus: f32,
+    pub aperture: f32,
+    pub near: f32,
+    pub far: f32,
 }
 
 impl<'a> World3<'a> {
     pub fn new(view_proj: [[f32; 4]; 4], fog: [f32; 3], meshes: &'a [Mesh]) -> World3<'a> {
-        World3 { view_proj, fog, meshes, eye: [0.0; 3], fog_range: [0.0; 2], kept: &[], models: &[], light: crate::skin::Light::default() }
+        World3 {
+            view_proj,
+            fog,
+            meshes,
+            eye: [0.0; 3],
+            fog_range: [0.0; 2],
+            kept: &[],
+            models: &[],
+            light: crate::skin::Light::default(),
+            shadow: None,
+            lens: None,
+            haze: 0.0,
+        }
     }
 }
 
@@ -180,6 +263,12 @@ pub struct Gpu {
     kept: BTreeMap<u32, Kept>,
     /// Models (made on the first upload).
     pub skin: Option<crate::skin::Skin>,
+    shadow_view: wgpu::TextureView,
+    shadow_sampler: wgpu::Sampler,
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_bg: wgpu::BindGroup,
+    /// The lens (depth of field), made when a frame first asks for one.
+    post: Option<crate::post::Post>,
     depth: Option<(u32, u32, wgpu::TextureView)>,
     /// Texture sizes (for the composer's aspect ratios).
     pub sizes: BTreeMap<String, (u32, u32)>,
@@ -398,12 +487,53 @@ impl Gpu {
             .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("world"), source: wgpu::ShaderSource::Wgsl(SHADER3.into()) });
         let globals3_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals3"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-                count: None,
-            }],
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        // The sun's shadow map (depth from the sun), and its comparing sampler.
+        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow map"),
+            size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
         });
         let layout3 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("world"),
@@ -448,14 +578,65 @@ impl Gpu {
         });
         let globals3 = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals3"),
-            size: 112,
+            size: 224,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let globals3_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals3"),
             layout: &globals3_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals3.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
+            ],
+        });
+        // Depth only, from the sun: the terrain kept on the GPU casts shadows (models cast theirs in `Skin`).
+        // Its own bind group: the pass writes the shadow map, so it must not also bind it for reading.
+        let shadow_globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow globals"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let shadow_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow globals"),
+            layout: &shadow_globals_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals3.as_entire_binding() }],
+        });
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow"),
+            bind_group_layouts: &[Some(&shadow_globals_layout)],
+            immediate_size: 0,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&shadow_layout),
+            vertex: wgpu::VertexState {
+                module: &shader3,
+                entry_point: Some("vs_shadow"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vert3>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attrs3,
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.0, clamp: 0.0 },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         });
         let verts = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("verts"),
@@ -513,6 +694,11 @@ impl Gpu {
             vcapacity: 4096,
             kept: BTreeMap::new(),
             skin: None,
+            shadow_view,
+            shadow_sampler,
+            shadow_pipeline,
+            shadow_bg,
+            post: None,
             depth: None,
             sizes: BTreeMap::new(),
         };
@@ -597,9 +783,24 @@ impl Gpu {
         }
         self.queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&[w as f32, h as f32, 0.0, 0.0]));
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        self.quad_pass(&mut enc, target, true, back, 0);
-        if let Some(world) = world {
-            self.world_pass(&mut enc, target, w, h, &world);
+        // With a lens: the sky and the world are drawn into an offscreen picture, then blurred by distance onto the
+        // target; the HUD (front) comes after, sharp.
+        let lens = world.as_ref().and_then(|w| w.lens);
+        if let Some(lens) = lens {
+            let post = self.post.get_or_insert_with(|| crate::post::Post::new(&self.device, self.format));
+            let scene = post.scene(&self.device, w, h);
+            self.quad_pass(&mut enc, &scene, true, back, 0);
+            if let Some(world) = world {
+                self.world_pass(&mut enc, &scene, w, h, &world);
+            }
+            let depth = &self.depth.as_ref().expect("made by the world pass").2;
+            let post = self.post.as_ref().expect("made above");
+            post.apply(&self.device, &self.queue, &mut enc, target, depth, w, h, lens);
+        } else {
+            self.quad_pass(&mut enc, target, true, back, 0);
+            if let Some(world) = world {
+                self.world_pass(&mut enc, target, w, h, &world);
+            }
         }
         if !front.is_empty() {
             self.quad_pass(&mut enc, target, false, front, back.len());
@@ -660,7 +861,8 @@ impl Gpu {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // Readable too: the lens reads depth back as distance.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             self.depth = Some((w, h, t.create_view(&wgpu::TextureViewDescriptor::default())));
@@ -679,13 +881,75 @@ impl Gpu {
             self.queue.write_buffer(&self.verts, 0, bytemuck::cast_slice(&verts));
         }
         let fog = linear([world.fog[0], world.fog[1], world.fog[2], 1.0]);
+        // The sun's view over the shadowed region.
+        let d = world.light.sun_dir;
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+        let sun_dir = [d[0] / len, d[1] / len, d[2] / len];
+        let (light_vp, shadow) = match world.shadow {
+            Some(sh) => {
+                let c = crate::math::V3(sh.center[0], sh.center[1], sh.center[2]);
+                let eye = crate::math::Eye {
+                    pos: c + crate::math::V3(sun_dir[0], sun_dir[1], sun_dir[2]).scale(sh.radius * 3.0),
+                    target: c,
+                    roll: 0.0,
+                    fov: 0.0,
+                    near: 0.1,
+                    far: sh.radius * 6.0,
+                };
+                (eye.ortho(sh.radius), [1.0, sh.strength, 1.0 / SHADOW_SIZE as f32, 0.0015])
+            }
+            None => (crate::model::IDENTITY, [0.0; 4]),
+        };
+        let sun_col = linear([world.light.sun[0].min(1.0), world.light.sun[1].min(1.0), world.light.sun[2].min(1.0), 1.0]);
         if let (Some(skin), false) = (self.skin.as_mut(), world.models.is_empty()) {
-            skin.prepare(&self.device, &self.queue, world.view_proj, fog, world.eye, world.fog_range, world.light, world.models);
+            skin.prepare(
+                &self.device,
+                &self.queue,
+                world.view_proj,
+                fog,
+                world.eye,
+                world.fog_range,
+                world.light,
+                world.models,
+                light_vp,
+                shadow,
+            );
         }
         let mut g: Vec<f32> = world.view_proj.iter().flatten().copied().collect();
         g.extend_from_slice(&fog);
         g.extend_from_slice(&[world.eye[0], world.eye[1], world.eye[2], 0.0, world.fog_range[0], world.fog_range[1], 0.0, 0.0]);
+        g.extend(light_vp.iter().flatten().copied());
+        g.extend_from_slice(&shadow);
+        g.extend_from_slice(&[sun_dir[0], sun_dir[1], sun_dir[2], world.haze]);
+        g.extend_from_slice(&sun_col);
         self.queue.write_buffer(&self.globals3, 0, bytemuck::cast_slice(&g));
+        // Shadows first: depth from the sun, of the kept terrain and the models.
+        if world.shadow.is_some() {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_bind_group(0, &self.shadow_bg, &[]);
+            for slot in world.kept {
+                let Some(Kept { buf: Some(buf), draws, .. }) = self.kept.get(slot) else { continue };
+                let total: u32 = draws.iter().map(|d| d.3).sum();
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..total, 0..1);
+            }
+            if let (Some(skin), false) = (self.skin.as_ref(), world.models.is_empty()) {
+                skin.draw_shadow(&mut pass, world.models);
+            }
+        }
+        let keep_depth = world.lens.is_some();
         let depth = &self.depth.as_ref().expect("made above").2;
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("world"),
@@ -697,7 +961,10 @@ impl Gpu {
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: if keep_depth { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
+                }),
                 stencil_ops: None,
             }),
             occlusion_query_set: None,
@@ -766,7 +1033,9 @@ impl Gpu {
         if !self.models_supported() {
             return;
         }
-        let skin = self.skin.get_or_insert_with(|| crate::skin::Skin::new(&self.device, &self.queue, self.format));
+        let skin = self
+            .skin
+            .get_or_insert_with(|| crate::skin::Skin::new(&self.device, &self.queue, self.format, &self.shadow_view, &self.shadow_sampler));
         skin.upload(&self.device, &self.queue, name, model, overrides);
     }
 

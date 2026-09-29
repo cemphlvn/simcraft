@@ -10,6 +10,10 @@ Roam(
         1: (image: "laterite", scale: 0.35),     // earth: dry red laterite, macro-photographed
         2: (image: "mud", scale: 0.3),           // mud balls: packed moist clay pellets
     },
+    // One continuous, rounded surface through the voxels (the mound looks built of clay, not of cubes).
+    surface: Smooth,
+    // A macro lens: things blur away from what you look at, the sun casts shadows, the haze glows towards it.
+    lens: (aperture: 0.08, haze: 0.6, shadow: 0.5),
     sky: "sky",
     fog: (214, 196, 170),
     far: 45.0,

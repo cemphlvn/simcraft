@@ -383,8 +383,9 @@ struct Args {
     view: usize,
     replay: Option<PathBuf>,
     feel: bool,
-    /// Roam shots: close to a crawler instead of facing the work.
+    /// Roam shots: close to a crawler instead of facing the work; or a camera placed by hand.
     closeup: bool,
+    eye: Vec<f32>,
     /// Frame drops: the window's budget (ms), a headless sweep (frames), a stress run (frames per level), a spike
     /// report to rebuild and profile (and how many times).
     budget: f64,
@@ -413,6 +414,7 @@ fn args() -> Args {
         replay: None,
         feel: false,
         closeup: false,
+        eye: Vec::new(),
         budget: 20.0,
         sweep: 0,
         stress: 0,
@@ -430,6 +432,7 @@ fn args() -> Args {
             "--replay" => a.replay = it.next().map(PathBuf::from),
             "--feel" => a.feel = true,
             "--closeup" => a.closeup = true,
+            "--eye" => a.eye = it.next().map(|s| s.split(',').filter_map(|v| v.parse().ok()).collect()).unwrap_or_default(),
             "--budget" => a.budget = it.next().and_then(|s| s.parse().ok()).unwrap_or(20.0),
             "--sweep" => a.sweep = it.next().and_then(|s| s.parse().ok()).unwrap_or(1200),
             "--stress" => a.stress = it.next().and_then(|s| s.parse().ok()).unwrap_or(300),
@@ -642,6 +645,11 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args,
         face_the_work(&mut play, 2);
         if a.closeup {
             sim_gpu::roam::close_up(&mut play, "termite");
+        }
+        // Any camera, for looking at one spot: --eye x,y,z,tx,ty,tz (view space: y up).
+        if let [x, y, z, tx, ty, tz] = a.eye[..] {
+            play.overview =
+                Some(sim_gpu::math::Eye { pos: V3(x, y, z), target: V3(tx, ty, tz), roll: 0.0, fov: 50.0, near: 0.02, far: 300.0 });
         }
         play.smell_on = a.press.iter().any(|p| p == "f");
         // Settle the body on the ground before the picture.
