@@ -3,5 +3,6 @@ line-length = 140
 target-version = "py311"
 
 [lint]
-# Defaults (pyflakes, pycodestyle errors) + bugbear: likely bugs show as findings, not in review.
-extend-select = ["B"]
+# Defaults (pyflakes, pycodestyle errors) + bugbear (likely bugs) + PERF, C4 (work done for nothing: a loop that
+# should be a comprehension, a list built only to be iterated), like the Rust perf lints + UP, SIM (plainer code).
+extend-select = ["B", "PERF", "C4", "UP", "SIM"]

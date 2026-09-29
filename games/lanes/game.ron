@@ -1,4 +1,5 @@
 #![enable(implicit_some)]
+// Experimental: an example game, still changing (first person, positions as the core mechanic).
 // Lanes. A first-person car game about positions: the car drives itself down a four-lane road, and 1 2 3 4 are the
 // four positions across it. Press one and the car glides there, lane by lane (anything on the way still counts).
 // Where you are decides what happens: coins, fuel pads and checkpoint gates are collected by being there; walls

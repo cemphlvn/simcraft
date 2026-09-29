@@ -75,12 +75,14 @@ Other AI tools: point them at `skills/<name>/SKILL.md` (Agent Skills format) and
 | **Computer engineering** | [`docs/architecture.md`](docs/architecture.md), then [`CONTRIBUTING.md`](CONTRIBUTING.md) | The Rust core: rules compiler, state charts, determinism, the C API |
 | **Art and design** | [`adapters/unity`](adapters/unity/com.simcraft.core), [`adapters/unreal`](adapters/unreal/Simcraft) | Prefabs and actors per kind, a look per state (`glyphs`): what the player sees while the core decides |
 
-**Nine games so far:** `wolf_sheep` (predators and prey), `forest_fire` (fires of every size), `mercy_dungeon` (fight or spare),
+**Ten games so far:** `wolf_sheep` (predators and prey), `forest_fire` (fires of every size), `mercy_dungeon` (fight or spare),
 `market` (two players trading), `gamedev` (a studio building games on its own engine), `colony` (ants, scent trails
 and winter, built [eval-driven](games/colony/EVALS.md)), `colony3d` (the same colony underground: a physical nest,
 temperature and scent as fields), `forage` (ants born with a brain and nothing else learn to forage by natural
-selection, [eval-driven](games/forage/EVALS.md)), `lanes` (first person in a car: 1 2 3 4 are positions across the road,
-space jumps, Enter dashes; the feel of moving between positions is tuned as data). How the engine grew out of
+selection, [eval-driven](games/forage/EVALS.md)), `lanes` (*experimental*; first person in a car: 1 2 3 4 are positions across the road,
+space jumps, Enter dashes; the feel of moving between positions is tuned as data), `mound` (*experimental*; you are a termite, in
+first person with WASD and the mouse, among a colony that builds a mound with no plan: each mud ball smells, and
+carriers drop where it smells; built [eval-driven](games/mound/EVALS.md), its feel [too](games/mound/FEEL.md)). How the engine grew out of
 them, change by change: [`docs/emergence.md`](docs/emergence.md).
 
 ## Tour

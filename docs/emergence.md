@@ -236,6 +236,23 @@ Not a game yet. Research: `docs/research/kernel.md`.
 
 ---
 
+## Request: a termite mound, played as a termite (game 9, `mound`)
+
+"Stigmergy: the work done so far tells the next worker what to do. A new game in 3D; I play the termite with WASD
+and the mouse, a smooth, termite-y feel, shift runs, space jumps." Built eval-driven: [`games/mound/EVALS.md`](../games/mound/EVALS.md)
+(does work attract work?) and [`games/mound/FEEL.md`](../games/mound/FEEL.md) (how moving feels).
+
+| # | Symptom | Need | Refactor | Evidence |
+|---|---|---|---|---|
+| T.1 | A termite on a mound must walk up walls; in 3D, `Wander` floats off into the air | Crawlers | `cling: true`: a clinging kind only enters voxels touching terrain (`World::can_enter`, one test for moves, leaps, `Climb`, `ClimbField`); `Wander` picks among those; `[spawn]` places crawlers on surfaces (random 3D spawning had also dropped entities inside terrain without a word) | `ground_starts_under_air_and_crawlers_start_on_it`; every other game's golden hash unchanged (the test is exactly the old one for non-clinging kinds) |
+| T.2 | A test found a termite floating on the first tick: it had dug the earth under its own feet | Support that can vanish | Crawlers whose support is gone fall until they touch terrain (`World::settle_clingers`, after `apply`) | `crawlers_never_float_while_they_dig_climb_and_build` (1500 ticks); mound eval step 002 records it as an engine step |
+| T.3 | You aim a mud ball two voxels away; `SetFieldAt` clamped every offset to one voxel, silently (like `Move` once did, E.2) | A reach | `SetFieldAt` is exact; the game guards the reach in `when` (no game used it, so nothing changed) | `you_dig_and_drop_exactly_where_you_reach_and_no_farther` |
+| T.4 | A 40x40 ground six levels deep would be 240 layout rows | Ground under air, declared | Fields: `from_level` (`init` from that level down) | the same test |
+| T.5 | The mound lives in a field; evals saw only entities | Fields for agents and evals | Protocol: `{"cmd":"field","name":F}`; eval.toml `[structure]` (built, height, stacking, pillars, roofs) in `tools/evalmetrics.py`, Cython pure-Python mode (plain Python anywhere, compiled where Cython is: 0.34 vs 2.2 ms a sample, same numbers) | mound evals 000–002; parallel probes once overwrote each other's panels ("less digging builds more"): each evaluation now has its own directory, and seeds run in parallel (27 s → 5 s, identical) |
+| T.6 | First person in a world that is built while you walk in it | A voxel view, the body in the view, the truth in the game | `roam.ron`, `sim_gpu::roam` (faces with ambient occlusion, clinging bodies, mandibles, smell view), `sim_gpu::walker` (the feel as data and pure logic), `simcraft-play` roam session (raw mouse, captured cursor), `--feel`, `simcraft-check` for roam views | walker tests (glide, walls, climbing, jump, look ease, the look ray); feel step 001: the eye glides after the body, eye jolts 0.162 → 0.042 |
+
+---
+
 ## What the engine became
 
 | | Before the games | After five games |

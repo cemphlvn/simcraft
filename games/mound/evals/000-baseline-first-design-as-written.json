@@ -1,0 +1,89 @@
+{
+ "step": 0,
+ "change": "baseline: first design as written",
+ "seeds": {
+  "1": {
+   "stacking": 1.09,
+   "height": 2,
+   "pillars": 0,
+   "roofs": 6,
+   "built": 149,
+   "deposits": 149,
+   "digs": 269
+  },
+  "2": {
+   "stacking": 1.13,
+   "height": 2,
+   "pillars": 0,
+   "roofs": 10,
+   "built": 138,
+   "deposits": 138,
+   "digs": 255
+  },
+  "3": {
+   "stacking": 1.18,
+   "height": 4,
+   "pillars": 1,
+   "roofs": 9,
+   "built": 133,
+   "deposits": 134,
+   "digs": 252
+  },
+  "4": {
+   "stacking": 1.13,
+   "height": 3,
+   "pillars": 0,
+   "roofs": 7,
+   "built": 159,
+   "deposits": 163,
+   "digs": 281
+  },
+  "5": {
+   "stacking": 1.11,
+   "height": 2,
+   "pillars": 0,
+   "roofs": 5,
+   "built": 146,
+   "deposits": 148,
+   "digs": 268
+  }
+ },
+ "metrics": {
+  "stacking": {
+   "mean": 1.13,
+   "min": 1.09,
+   "max": 1.18
+  },
+  "height": {
+   "mean": 2.6,
+   "min": 2,
+   "max": 4
+  },
+  "pillars": {
+   "mean": 0.2,
+   "min": 0,
+   "max": 1
+  },
+  "roofs": {
+   "mean": 7.4,
+   "min": 5,
+   "max": 10
+  },
+  "built": {
+   "mean": 145.0,
+   "min": 133,
+   "max": 159
+  },
+  "deposits": {
+   "mean": 146.4,
+   "min": 134,
+   "max": 163
+  },
+  "digs": {
+   "mean": 265.0,
+   "min": 252,
+   "max": 281
+  }
+ },
+ "errors": {}
+}

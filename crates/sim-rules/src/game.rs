@@ -60,6 +60,10 @@ pub enum Perception {
 pub struct FieldDef {
     #[serde(default)]
     pub init: i64,
+    /// `init` only from this level down (deeper, larger z); above it the field starts at 0. Ground under air:
+    /// `(init: 1, from_level: 16)`.
+    #[serde(default)]
+    pub from_level: Option<i64>,
     /// % of the difference to the 6 face neighbours' average moved per tick (0 = none).
     #[serde(default)]
     pub diffusion: i64,
@@ -110,6 +114,7 @@ impl GameDef {
                     props: env.props.clone(),
                     fsm: env.fsm.clone(),
                     solid: false,
+                    cling: false,
                     hidden: true,
                     glyphs: BTreeMap::new(),
                     senses: BTreeMap::new(),
@@ -216,6 +221,10 @@ pub struct KindDef {
     /// At most one solid per cell; solids cannot pass through each other.
     #[serde(default)]
     pub solid: bool,
+    /// Crawls: only enters voxels touching `terrain` (floors, walls, ceilings), so it climbs and never floats.
+    /// `Wander` and `Climb` pick among those; `[spawn]` places it on surfaces.
+    #[serde(default)]
+    pub cling: bool,
     /// Not drawn (environments).
     #[serde(default)]
     pub hidden: bool,

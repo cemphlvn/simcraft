@@ -1,0 +1,89 @@
+{
+ "step": 1,
+ "change": "stronger smell: fresh 10000 -> 50000",
+ "seeds": {
+  "1": {
+   "stacking": 2.05,
+   "height": 6,
+   "pillars": 11,
+   "roofs": 94,
+   "built": 345,
+   "deposits": 432,
+   "digs": 548
+  },
+  "2": {
+   "stacking": 1.36,
+   "height": 3,
+   "pillars": 0,
+   "roofs": 32,
+   "built": 205,
+   "deposits": 231,
+   "digs": 348
+  },
+  "3": {
+   "stacking": 1.9,
+   "height": 5,
+   "pillars": 6,
+   "roofs": 50,
+   "built": 242,
+   "deposits": 289,
+   "digs": 404
+  },
+  "4": {
+   "stacking": 1.41,
+   "height": 3,
+   "pillars": 0,
+   "roofs": 34,
+   "built": 245,
+   "deposits": 278,
+   "digs": 387
+  },
+  "5": {
+   "stacking": 1.84,
+   "height": 5,
+   "pillars": 6,
+   "roofs": 64,
+   "built": 268,
+   "deposits": 323,
+   "digs": 442
+  }
+ },
+ "metrics": {
+  "stacking": {
+   "mean": 1.71,
+   "min": 1.36,
+   "max": 2.05
+  },
+  "height": {
+   "mean": 4.4,
+   "min": 3,
+   "max": 6
+  },
+  "pillars": {
+   "mean": 4.6,
+   "min": 0,
+   "max": 11
+  },
+  "roofs": {
+   "mean": 54.8,
+   "min": 32,
+   "max": 94
+  },
+  "built": {
+   "mean": 261.0,
+   "min": 205,
+   "max": 345
+  },
+  "deposits": {
+   "mean": 310.6,
+   "min": 231,
+   "max": 432
+  },
+  "digs": {
+   "mean": 425.8,
+   "min": 348,
+   "max": 548
+  }
+ },
+ "errors": {}
+}

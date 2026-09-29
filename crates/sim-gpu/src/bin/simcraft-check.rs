@@ -64,6 +64,53 @@ fn check_buttons(what: &str, buttons: &[Button], engine: &Engine<Running, Game>,
     }
 }
 
+/// A roam view names your kind, three actions that take `dx`, `dy`, `dz`, kinds, a smell field and a carried prop:
+/// each checked against the game.
+fn check_roam(roam: &sim_gpu::roam::Roam, engine: &Engine<Running, Game>, r: &mut Report) {
+    let game = engine.rules();
+    match game.def.kinds.get(&roam.you) {
+        None => r.error(format!("roam.ron: you are '{}', which the game does not have", roam.you)),
+        Some(k) => {
+            if !game.cfg.agent.controllable.contains(&roam.you) {
+                r.error(format!("roam.ron: '{}' is not controllable (engine.toml [agent] controllable)", roam.you));
+            }
+            if let Some(p) = &roam.actions.carrying
+                && !k.props.contains_key(p)
+            {
+                r.error(format!("roam.ron: carrying reads '{}.{p}', which has no such prop", roam.you));
+            }
+        }
+    }
+    let a = &roam.actions;
+    for name in [&a.crawl, &a.dig, &a.drop] {
+        match game.def.actions.iter().find(|x| &x.name == name) {
+            None => r.error(format!("roam.ron: action '{name}' is not declared (game.ron `actions`)")),
+            Some(x) if x.args != ["dx", "dy", "dz"] => {
+                r.error(format!("roam.ron: action '{name}' takes {:?}; the view passes [\"dx\", \"dy\", \"dz\"]", x.args))
+            }
+            _ => {}
+        }
+    }
+    for k in roam.kinds.keys().filter(|k| !game.def.kinds.contains_key(*k)) {
+        r.error(format!("roam.ron: draws kind '{k}', which the game does not have"));
+    }
+    if let Some(s) = &roam.smell
+        && !game.def.fields.contains_key(&s.field)
+    {
+        r.error(format!("roam.ron: smell reads field '{}', which the game does not declare", s.field));
+    }
+    if game.def.terrain.is_none() {
+        r.error("roam.ron: the game has no `terrain` to walk on".into());
+    }
+    let f = roam.feel;
+    if f.run < f.walk || f.height < f.eye || f.radius >= 0.5 {
+        r.warn(format!(
+            "roam.ron: feel: run {} < walk {}, eye {} above the body's height {}, or radius {} too wide for one voxel",
+            f.run, f.walk, f.eye, f.height, f.radius
+        ));
+    }
+}
+
 fn run(dir: &Path, ticks: u32) -> Report {
     let mut r = Report { errors: Vec::new(), warns: Vec::new(), notes: Vec::new() };
     let panels: Vec<PathBuf> = ["engine.toml", "play.toml"].iter().map(|p| dir.join(p)).filter(|p| p.exists()).collect();
@@ -128,6 +175,12 @@ fn run(dir: &Path, ticks: u32) -> Report {
                         }
                     }
                     Err(e) => r.error(format!("track.ron: {e}")),
+                }
+            }
+            if dir.join("roam.ron").exists() {
+                match sim_gpu::load_roam(dir) {
+                    Ok((roam, _)) => check_roam(&roam, &engine, &mut r),
+                    Err(e) => r.error(format!("roam.ron: {e}")),
                 }
             }
         }

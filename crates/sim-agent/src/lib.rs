@@ -28,6 +28,10 @@ pub enum Request {
     Step {
         n: Option<u64>,
     },
+    /// A field at every voxel (x fastest, then y, then z).
+    Field {
+        name: String,
+    },
     Hash,
     Snapshot,
     Restore {
@@ -60,6 +64,11 @@ impl Session {
             Request::Observe { entity, seat } => self.observe(entity, seat.as_deref()),
             Request::Act { seat, actions } => self.act(seat.as_deref(), &actions),
             Request::Step { n } => Ok(self.step(n.unwrap_or(1))),
+            Request::Field { name } => {
+                let w = self.engine.world();
+                let values = w.field_values(&name).ok_or_else(|| format!("no field '{name}'"))?;
+                Ok(json!({ "tick": w.tick, "name": name, "width": w.width, "height": w.height, "depth": w.depth, "values": values }))
+            }
             Request::Hash => {
                 let w = self.engine.world();
                 Ok(json!({ "tick": w.tick, "hash": format!("{:016x}", w.hash()) }))
@@ -126,6 +135,7 @@ impl Session {
                 "observe": "{\"cmd\":\"observe\"} or {\"cmd\":\"observe\",\"entity\":ID} (local view, '@' = you)",
                 "act": "{\"cmd\":\"act\",\"as\":\"<seat>\",\"actions\":[{\"entity\":ID,\"do\":\"<action>\",\"args\":{...}}]}  see `actions`; `as` only when the game has seats; applied next step, before rules",
                 "step": "{\"cmd\":\"step\",\"n\":N}  stops early when the game ends (`done`, `result`)",
+                "field": "{\"cmd\":\"field\",\"name\":\"<field>\"}  the field at every voxel (x fastest, then y, then z)",
                 "hash": "{\"cmd\":\"hash\"}",
                 "quit": "{\"cmd\":\"quit\"}",
             },

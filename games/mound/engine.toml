@@ -1,0 +1,21 @@
+# Mound: the operator's panel (game.ron is the game; this is how the engine runs it).
+
+[run]
+seed = 1
+max_ticks = 100000
+# Ticks per second: termites crawl at `crawl` steps a second whatever this is (pace); the player's moves
+# are synced once a tick, so higher is smoother under your feet.
+tick_rate = 20
+
+[world]
+width = 40
+height = 40
+depth = 20
+
+[spawn]
+termite = 120
+you = 1
+
+[agent]
+controllable = ["you"]
+observe_radius = 6

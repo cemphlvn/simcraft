@@ -1,0 +1,89 @@
+{
+ "step": 2,
+ "change": "engine: crawlers fall when their floor is dug away (no game change)",
+ "seeds": {
+  "1": {
+   "stacking": 1.81,
+   "height": 5,
+   "pillars": 7,
+   "roofs": 76,
+   "built": 311,
+   "deposits": 378,
+   "digs": 496
+  },
+  "2": {
+   "stacking": 1.4,
+   "height": 3,
+   "pillars": 0,
+   "roofs": 33,
+   "built": 243,
+   "deposits": 261,
+   "digs": 376
+  },
+  "3": {
+   "stacking": 1.42,
+   "height": 4,
+   "pillars": 3,
+   "roofs": 33,
+   "built": 212,
+   "deposits": 237,
+   "digs": 353
+  },
+  "4": {
+   "stacking": 1.86,
+   "height": 5,
+   "pillars": 7,
+   "roofs": 63,
+   "built": 297,
+   "deposits": 368,
+   "digs": 482
+  },
+  "5": {
+   "stacking": 1.5,
+   "height": 3,
+   "pillars": 0,
+   "roofs": 42,
+   "built": 257,
+   "deposits": 300,
+   "digs": 416
+  }
+ },
+ "metrics": {
+  "stacking": {
+   "mean": 1.6,
+   "min": 1.4,
+   "max": 1.86
+  },
+  "height": {
+   "mean": 4.0,
+   "min": 3,
+   "max": 5
+  },
+  "pillars": {
+   "mean": 3.4,
+   "min": 0,
+   "max": 7
+  },
+  "roofs": {
+   "mean": 49.4,
+   "min": 33,
+   "max": 76
+  },
+  "built": {
+   "mean": 264.0,
+   "min": 212,
+   "max": 311
+  },
+  "deposits": {
+   "mean": 308.8,
+   "min": 237,
+   "max": 378
+  },
+  "digs": {
+   "mean": 424.6,
+   "min": 353,
+   "max": 496
+  }
+ },
+ "errors": {}
+}

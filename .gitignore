@@ -16,3 +16,7 @@ __pycache__/
 
 # Generated image sources (large; see assets/src/README.md)
 assets/src/*.png
+
+# Compiled eval metrics (tools/build_evalmetrics.sh)
+tools/*.so
+tools/build/

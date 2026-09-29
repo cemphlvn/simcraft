@@ -1,0 +1,28 @@
+#![enable(implicit_some)]
+// You are a termite: first person, at termite height. WASD crawls, the mouse looks, shift hurries, space hops,
+// walking into a wall climbs it. Left click drops the ball you carry where you look; right click digs one.
+// Hold f to smell: the cement pheromone glows where fresh mud is.
+Roam(
+    assets: ["nature_hd"],
+    you: "you",
+    actions: (crawl: "crawl", dig: "dig", drop: "drop", reach: 2.5, carrying: "carrying"),
+    materials: {
+        1: (image: "soil", scale: 1.0, tint: (196, 150, 112)),     // earth
+        2: (image: "soil", scale: 1.0, tint: (150, 92, 60)),       // mud balls: wetter, redder
+    },
+    sky: "sky",
+    fog: (214, 196, 170),
+    far: 45.0,
+    kinds: {
+        "termite": (color: (238, 226, 200), head: (176, 112, 52), size: 0.8, carries_in: "Carrying"),
+    },
+    smell: (field: "cement", color: (190, 255, 120), full: 50000, radius: 8),
+    feel: (
+        eye: 0.35, radius: 0.3, height: 0.45,
+        walk: 2.5, run: 5.0, accel: 9.0, air: 2.5, climb: 2.0,
+        jump: 4.5, gravity: 14.0,
+        sensitivity: 0.12, look_smooth: 16.0,
+        bob: 0.025, bob_rate: 1.6, fov: 72.0, run_fov: 82.0, lean: 2.5, land_dip: 0.012,
+        eye_glide: 18.0,   // feel step 001: the eye glides after the body (0 = bolted)
+    ),
+)

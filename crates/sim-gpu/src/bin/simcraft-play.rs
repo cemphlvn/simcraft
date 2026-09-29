@@ -5,6 +5,9 @@
 //!   simcraft-play games/colony3d --bench N [--size 1600x900]     (N frames offscreen: where the time goes)
 //!   simcraft-play games/colony3d --shot out.png --record N [--press ACTION@FRAME]...   (N frames at 30 fps: out_000.png…)
 //!
+//! A game with a `roam.ron` is first person in a voxel world: WASD, the mouse (click to capture it; esc lets it
+//! go), shift runs, space jumps, walking into a wall climbs it, left click drops, right click digs, f smells.
+//! `--shot` there looks at the tallest thing built after `--ticks`; `--feel` prints how moving feels (FEEL.md).
 //! A game with a `track.ron` plays in first person (keys: its buttons', e.g. 1–4, space, Enter; c camera view;
 //! p pauses; R replays the run, N starts a new one; `--view N` starts a shot in view N; `--replay runs/X.jsonl`
 //! plays a saved run, in a window or into `--shot`/`--record`). Runs are saved to `runs/<game>-<time>.jsonl`.
@@ -21,17 +24,20 @@ use std::time::Instant;
 use sim_core::{Engine, EntityId, Loaded, Running, World};
 use sim_gpu::gpu::Gpu;
 use sim_gpu::gpu::World3;
+use sim_gpu::math::V3;
+use sim_gpu::roam::{Roam, RoamPlay, face_the_work};
 use sim_gpu::stage::{ButtonState, PileMemory, Quad, card, season_of};
 use sim_gpu::track::{Track, TrackPlay, load_run, save_run};
-use sim_gpu::{Camera, Composer, Stage, load_stage, load_track};
+use sim_gpu::walker::feel_probe;
+use sim_gpu::{Camera, Composer, Stage, load_roam, load_stage, load_track};
 use sim_render::Assets;
 use sim_render::feel::{CameraFeel, Spring, Tween};
 use sim_rules::Game;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Shot {
@@ -376,6 +382,7 @@ struct Args {
     record: u32,
     view: usize,
     replay: Option<PathBuf>,
+    feel: bool,
 }
 
 fn args() -> Args {
@@ -395,6 +402,7 @@ fn args() -> Args {
         record: 0,
         view: 0,
         replay: None,
+        feel: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -405,6 +413,7 @@ fn args() -> Args {
             "--shot" => a.shot = it.next().map(PathBuf::from),
             "--ticks" => a.ticks = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--replay" => a.replay = it.next().map(PathBuf::from),
+            "--feel" => a.feel = true,
             "--view" => a.view = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--record" => a.record = it.next().and_then(|s| s.parse().ok()).unwrap_or(60),
             "--panel" => a.panel = it.next().map(PathBuf::from),
@@ -434,6 +443,10 @@ fn main() {
     let run = || -> Result<(), String> {
         let panel = panel_path(&a.dir, a.panel.as_deref());
         let engine = boot(&a.dir, a.seed, &panel)?;
+        if a.dir.join("roam.ron").exists() && a.stage.is_none() {
+            let (roam, assets) = load_roam(&a.dir)?;
+            return run_roam(engine, roam, assets, &a);
+        }
         if a.dir.join("track.ron").exists() && a.stage.is_none() {
             let (track, assets) = load_track(&a.dir)?;
             let (dir, seed, panel) = (a.dir.clone(), a.seed, panel);
@@ -491,6 +504,7 @@ fn main() {
             reboot: None,
             script: None,
             saved: false,
+            grabbed: false,
         };
         el.run_app(&mut app).map_err(|e| e.to_string())
     };
@@ -567,6 +581,59 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
         reboot: Some(reboot),
         script,
         saved: false,
+        grabbed: false,
+    };
+    el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+/// First person in a voxel world: how moving feels (numbers), a screenshot, or a window.
+fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args) -> Result<(), String> {
+    if a.feel {
+        let report = feel_probe(roam.feel);
+        println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if let Some(out) = &a.shot {
+        let instance = wgpu::Instance::default();
+        let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
+        upload_all(&mut gpu, &assets);
+        let mut play = RoamPlay::new(engine, roam);
+        if a.camera == Shot::Wide {
+            play.overview =
+                Some(sim_gpu::math::Eye { pos: V3(0.0, 0.0, 0.0), target: V3(0.0, 0.0, 1.0), roll: 0.0, fov: 60.0, near: 0.1, far: 300.0 });
+        }
+        play.step(a.ticks);
+        play.tween.alpha = 1.0;
+        face_the_work(&mut play, 2);
+        play.smell_on = a.press.iter().any(|p| p == "f");
+        // Settle the body on the ground before the picture.
+        for _ in 0..30 {
+            play.walk(1.0 / 60.0, Default::default());
+        }
+        let (w, h) = a.size;
+        let fr = play.frame(w as f32, h as f32, 1.0 / 60.0);
+        let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+        gpu.shot_scene(w, h, &fr.back, Some(world), &fr.front).save(out)?;
+        let tris: usize = fr.meshes.iter().map(|m| m.verts.len() / 3).sum();
+        eprintln!("wrote {} ({w}x{h}) at tick {}, {tris} triangles — {}", out.display(), play.world().tick, play.title());
+        return Ok(());
+    }
+    let rate = engine.rules().cfg.run.tick_rate as f32;
+    let el = EventLoop::new().map_err(|e| e.to_string())?;
+    el.set_control_flow(ControlFlow::Poll);
+    let mut app = App {
+        play: Some(Start::Roam(Box::new((engine, roam)))),
+        assets,
+        window: None,
+        speed: rate * a.speed,
+        paused: false,
+        clock: 0.0,
+        last: Instant::now(),
+        cursor: (0.0, 0.0),
+        reboot: None,
+        script: None,
+        saved: false,
+        grabbed: false,
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
@@ -580,12 +647,14 @@ fn run_path(game: &str) -> PathBuf {
 enum Start {
     Stage(Box<(Engine<Running, Game>, Stage)>),
     Track(Box<(Engine<Running, Game>, Track)>),
+    Roam(Box<(Engine<Running, Game>, Roam)>),
 }
 
 /// What a window plays: a stage (side view) or a track (first person).
 enum Session {
     Stage(Box<Play>),
     Track(Box<TrackPlay>),
+    Roam(Box<RoamPlay>),
 }
 
 impl Session {
@@ -607,6 +676,14 @@ impl Session {
                 p.step(n);
                 p.tween.alpha = if paused { 1.0 } else { clock.clamp(0.0, 1.0) };
             }
+            // The body moves every frame; the game ticks at its rate and follows it.
+            Session::Roam(p) => {
+                let input = p.input;
+                p.input.look = (0.0, 0.0);
+                p.walk(time, input);
+                p.step(n);
+                p.tween.alpha = if paused { 1.0 } else { clock.clamp(0.0, 1.0) };
+            }
         }
     }
 
@@ -621,6 +698,11 @@ impl Session {
                 let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
                 gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
             }
+            Session::Roam(p) => {
+                let fr = p.frame(w as f32, h as f32, dt);
+                let world = World3 { view_proj: fr.eye.view_proj(w as f32, h as f32), fog: fr.fog, meshes: &fr.meshes };
+                gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
+            }
         }
     }
 
@@ -628,6 +710,7 @@ impl Session {
         match self {
             Session::Stage(p) => p.title(speed, paused),
             Session::Track(p) => p.title(speed, paused),
+            Session::Roam(p) => p.title(),
         }
     }
 }
@@ -653,6 +736,34 @@ struct App {
     reboot: Option<Reboot>,
     script: Option<Vec<sim_gpu::track::Press>>,
     saved: bool,
+    /// Roam: the mouse is captured (looking), else free (click to capture).
+    grabbed: bool,
+}
+
+/// A key's name as views write it ("w", "shift", "space"), by position on the keyboard, so WASD is WASD on any layout.
+fn key_name(k: PhysicalKey) -> Option<String> {
+    let PhysicalKey::Code(c) = k else { return None };
+    let s = format!("{c:?}");
+    Some(match c {
+        KeyCode::Space => "space".into(),
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => "shift".into(),
+        KeyCode::ControlLeft | KeyCode::ControlRight => "ctrl".into(),
+        KeyCode::Tab => "tab".into(),
+        _ => s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit"))?.to_lowercase(),
+    })
+}
+
+impl App {
+    fn grab(&mut self, on: bool) {
+        let Some(w) = &self.window else { return };
+        let ok =
+            !on || w.window.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| w.window.set_cursor_grab(CursorGrabMode::Confined)).is_ok();
+        if !on {
+            let _ = w.window.set_cursor_grab(CursorGrabMode::None);
+        }
+        w.window.set_cursor_visible(!(on && ok));
+        self.grabbed = on && ok;
+    }
 }
 
 impl ApplicationHandler for App {
@@ -696,12 +807,67 @@ impl ApplicationHandler for App {
                 p.script = self.script.take();
                 Session::Track(Box::new(p))
             }
+            Start::Roam(b) => {
+                let (engine, roam) = *b;
+                Session::Roam(Box::new(RoamPlay::new(engine, roam)))
+            }
         };
         self.window = Some(Window3 { window, surface, config, gpu, play });
         self.last = Instant::now();
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let Some(w) = self.window.as_mut() else { return };
+        if let Session::Roam(p) = &mut w.play {
+            match &event {
+                WindowEvent::KeyboardInput { event: k, .. } => {
+                    let down = k.state == ElementState::Pressed;
+                    if down && k.logical_key == Key::Named(NamedKey::Escape) {
+                        if self.grabbed {
+                            self.grab(false);
+                        } else {
+                            el.exit();
+                        }
+                        return;
+                    }
+                    if let Some(name) = key_name(k.physical_key) {
+                        let keys = &p.roam.keys;
+                        let axis = |on: bool| if on && down { 1.0 } else { 0.0 };
+                        let i = &mut p.input;
+                        if name == keys.forward || name == keys.back {
+                            i.forward = if name == keys.forward { axis(true) } else { -axis(true) };
+                        } else if name == keys.left || name == keys.right {
+                            i.strafe = if name == keys.right { axis(true) } else { -axis(true) };
+                        } else if name == keys.run {
+                            i.run = down;
+                        } else if name == keys.jump {
+                            i.jump = down;
+                        } else if name == keys.smell {
+                            p.smell_on = down;
+                        } else if name == "p" && down && !k.repeat {
+                            self.paused = !self.paused;
+                        }
+                    }
+                    return;
+                }
+                WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
+                    if !self.grabbed {
+                        self.grab(true);
+                    } else if *button == MouseButton::Left {
+                        p.use_target(false);
+                    } else if *button == MouseButton::Right {
+                        p.use_target(true);
+                    }
+                    return;
+                }
+                WindowEvent::Focused(false) => {
+                    p.input = Default::default();
+                    self.grab(false);
+                    return;
+                }
+                _ => {}
+            }
+        }
         let Some(w) = self.window.as_mut() else { return };
         match event {
             WindowEvent::CloseRequested => el.exit(),
@@ -716,6 +882,7 @@ impl ApplicationHandler for App {
                 match &mut w.play {
                     Session::Stage(p) => p.hover(cw, ch, self.cursor.0, self.cursor.1),
                     Session::Track(p) => p.hover(cw, ch, self.cursor.0, self.cursor.1),
+                    Session::Roam(_) => {}
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: winit::event::MouseButton::Left, .. } => {
@@ -727,6 +894,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     Session::Track(p) => p.click(cw, ch, self.cursor.0, self.cursor.1),
+                    Session::Roam(_) => {}
                 }
             }
             // First person: the track's keys go to its buttons (1–4, space, Enter...); p pauses, esc quits.
@@ -831,6 +999,16 @@ impl ApplicationHandler for App {
                 w.window.set_title(&w.play.title(self.speed, self.paused));
             }
             _ => {}
+        }
+    }
+
+    /// Raw mouse movement (not the cursor): looking around in first person, while the mouse is captured.
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let (true, Some(w), DeviceEvent::MouseMotion { delta }) = (self.grabbed, self.window.as_mut(), event)
+            && let Session::Roam(p) = &mut w.play
+        {
+            p.input.look.0 += delta.0 as f32;
+            p.input.look.1 += delta.1 as f32;
         }
     }
 

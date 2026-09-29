@@ -131,7 +131,7 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 
 **Seats (panel):** `[agent] seats = {alice = 1, bob = 2}` makes the game multi-player. Requests carry `"as": "<seat>"`; an entity belongs to a seat when its `owner` prop equals the seat's number, and controllable kinds must declare `owner`.
 
-**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, `hidden: bool` (not drawn), `glyphs: {state: char}` for per-state rendering (the deepest matching state wins), and `senses: {name: expr}` (see Perception).
+**Kinds** in `game.ron`: `glyph`, `props`, optional `fsm`, `solid: bool`, `hidden: bool` (not drawn), `glyphs: {state: char}` for per-state rendering (the deepest matching state wins), and `senses: {name: expr}` (see Perception), `cling: bool` (a crawler: it only enters voxels touching `terrain`, so it walks floors, walls and ceilings and never floats; `Wander` and `Climb` choose among those voxels, `[spawn]` places it on surfaces, and if its support is dug away it falls until it touches terrain again).
 
 ## State machines (`fsms:`)
 
@@ -234,6 +234,8 @@ A world has `width × height × depth` voxels; 2D games have depth 1 and behave 
   (`rows:` alone is one level). `cells` sets field values at a glyph's voxels without placing an entity.
 - **Fields** are numbers per voxel, owned by the world (hashed, snapshotted, replayed):
   `fields: { "temp": (init: 50, diffusion: 20, top: "env.seasons.warmth"), "soil": (init: 0) }`.
+  - `from_level: n`: `init` only from level `n` down (deeper); above it the field starts at 0. Ground under air
+    without a layout: `"mud": (init: 1, from_level: 14)`.
   - `diffusion`: % of the difference to the average of the 6 face neighbours moved per tick (integers; heat spreads
     through soil). `top`: a world-level expression pinned onto level 0 after diffusion, every tick (the air above
     the ground holds its value at the end of each tick).
@@ -245,7 +247,8 @@ A world has `width × height × depth` voxels; 2D games have depth 1 and behave 
     and takes the first open one. (Only worlds with terrain slide; 2D games have none.)
 - **Rule language:** `me.z`, `it.z`; `Move3(dx, dy, dz)`; `MoveToward` / `MoveAway` / `Wander` / `Climb` work in 3D;
   `field("temp")` (at me) and `field_at("temp", dx, dy, dz)` in expressions; actions `SetField(name, expr)`,
-  `AddField(name, expr)` at the subject's voxel, `SetFieldAt(name, dx, dy, dz, expr)` at a voxel next to it (dig);
+  `AddField(name, expr)` at the subject's voxel, `SetFieldAt(name, dx, dy, dz, expr)` exactly at that offset (dig, drop: a
+  reach; the game guards how far, e.g. `when: "abs(arg.dx) <= p.reach"`);
   `ClimbField(name)` steps to the open neighbour with the most `name`.
 - `around` and `near` count and measure in 3D.
 
@@ -403,6 +406,7 @@ One JSON request per line, one JSON response per line. On startup it prints `{"o
 | `{"cmd":"info"[,"as":SEAT]}` | Game, kinds (glyph, props, states), controllable kinds, `seats`, `you` (your entity ids), declared `actions`, `score`, effective switches/params, command schema |
 | `{"cmd":"observe"[,"as":SEAT]}` | Full map (ASCII), `you`, `scores`, counts, states, entities |
 | `{"cmd":"observe","entity":ID}` | `observe_radius` window, `@` = you, visible entities |
+| `{"cmd":"field","name":F}` | `tick`, `width`, `height`, `depth`, `values`: the field at every voxel, in voxel order (x fastest, then y, then z). What evals measure structures with (a mound, a trail) |
 | `{"cmd":"act"[,"as":SEAT],"actions":[{"entity":ID,"do":"<action>","args":{...}}]}` | Evaluated now, applied on the next `step` before rules. Per-action `results` with `ok` or the reason (`refused: needs …`, `unknown action`, `takes args`, `switched off`, `not controllable`, `not yours`) |
 | `{"cmd":"step","n":N}` | tick, done, result (from `end`), `scores`, hash, counts, states (`{kind: {state: n}}`), events (game events plus `conflict`, `short`, `blocked`, `error: …`) |
 | `{"cmd":"hash"}` | State fingerprint (replay/verification) |
@@ -621,6 +625,31 @@ Stage(
   0.02 ms, GPU 2–2.6 ms per frame (with a full CPU wait per frame, so an upper bound); up to 244 quads; textures
   43 MB with mips (11 MB if block-compressed).
 
+## First person in a voxel world (`games/<name>/roam.ron`, `sim-gpu`)
+
+You are one entity of the game (game 9, `games/mound`): WASD walks, the mouse looks (click captures it, esc lets it
+go), shift runs, space jumps, walking into a wall climbs it, left click drops, right click digs, a held key shows an
+invisible field (the pheromone).
+
+- **Who owns what.** The body moves continuously in the view (`sim_gpu::walker`: velocity eases toward what the keys
+  ask, the view eases after the mouse, the eye glides after the body, gravity, collision with terrain voxels,
+  climbing). The game follows it one voxel a tick through a declared action (`crawl(dx, dy, dz)`); digging and
+  dropping are declared actions on the voxel the crosshair ray meets (`dig`/`drop(dx, dy, dz)`, relative to your
+  entity), checked by the game like any agent's, so the game stays the one truth: deterministic, replayable.
+- **`roam.ron`:** `you` (kind), `actions` (crawl, dig, drop, `reach`, the `carrying` prop), `materials` (terrain value
+  → image, texture scale, tint), `sky`, `fog`, `far`, `kinds` (crawler bodies: colours, size, the state or prop that
+  shows a ball in the mandibles), `smell` (field, colour, full strength, radius), `feel` (`WalkFeel`: eye height,
+  body size, walk/run speeds, `accel`/`air` ease rates, climb, jump, gravity, mouse sensitivity, `look_smooth`,
+  bob, fov and run fov, lean, landing dip, `eye_glide`), `keys`.
+- **Drawing:** terrain faces open to air only, per material, with per-corner ambient occlusion (rebuilt when the
+  terrain changes); crawlers from segments and six stepping legs, oriented on the face they cling to; your mandibles
+  and the ball you hold in view; the targeted face glows (red after a refusal); distance fog; the painted sky turns
+  with the view; the ground goes on beyond the world's edge.
+- **Measured:** `simcraft-play <game> --feel` runs the real controller through a scripted walk, turn, hop and climb
+  and prints the feel metrics (`games/<name>/FEEL.md`); `--shot` after `--ticks` stands you facing the tallest
+  thing built (`--camera wide`: from above). `simcraft-check` checks the view against the game (your kind is
+  controllable, the three actions take `dx`, `dy`, `dz`, drawn kinds, the smell field, the carried prop).
+
 ## First person: tracks (`games/<name>/track.ron`, `sim-gpu`)
 
 A game whose world is lanes (x) and a road ahead (y) can be played from inside: the camera rides with the followed
@@ -779,6 +808,9 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [ ] Capabilities: pick renderer and quality per machine
 - [x] HD stage: `sim-gpu` (wgpu), `stage.ron`, `simcraft-play`, `simcraft-import`; colony3d in natural-history art
 - [x] First person: `track.ron`, 3D camera and fog, views, built-in camera effects, tunable position switch (game 8, `games/lanes`)
+- [x] First person in a voxel world: `roam.ron`, WASD and mouse, crawlers (`cling`), exact reach (`SetFieldAt`), the
+  `field` request and structure evals (game 9, `games/mound`)
+- [ ] Mound next: termite-scale art (laterite mud, grass stalks), replays of your runs, the view tilting on walls, a queen
 - [x] Checking: `rustfmt.toml`, `simcraft-check`, the edit hook; `MoveBy` and the `clamped` warning
 - [x] Tracks: replays (`R`, `N`, `--replay`), lives meter, gone animations, hurt effect
 - [ ] Track next: a feel eval for switches (arrival time, overshoot, bank), text for scores, sound

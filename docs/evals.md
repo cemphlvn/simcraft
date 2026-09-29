@@ -49,3 +49,23 @@ should not reward a game that ends before the event could happen (give it the wo
 
 `games/colony`: [`eval.toml`](../games/colony/eval.toml), [`EVALS.md`](../games/colony/EVALS.md). Step 003 there
 broke the game; the eval showed it at once.
+
+## Structures (fields)
+
+A game that builds (a mound, a trail) is measured from a field, not from entities:
+
+```toml
+[structure]
+field = "mud"   # the field to read ({"cmd":"field"} at every sample)
+value = 2       # the voxels that count as built
+pillar = 4      # a column with at least this many is a pillar
+```
+
+Series: `structure.built`, `structure.height` (tallest column), `structure.stacking` (for each built voxel, how many
+built voxels share its column, averaged: about 1 for scattered work, high when work lands on work; independent of how
+much was built), `structure.pillars`, `structure.roofs` (built voxels over open air: arches, overhangs).
+
+These metrics read every voxel of every sample, so they live in `tools/evalmetrics.py`, written in Cython's
+pure-Python mode: plain Python everywhere, compiled to C by `tools/build_evalmetrics.sh` where Cython is available
+(`uv run --with cython`; about 6x faster). `python3 tools/evalmetrics.py` checks both give the same numbers. ruff
+(`ruff.toml`) lints the eval code, perf rules included.

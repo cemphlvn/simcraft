@@ -1,0 +1,15 @@
+---
+source: test/tests/all/work.rs
+assertion_line: 75
+expression: profile(&dir)
+---
+ticks 60, entities per tick 121.0
+per tick:        evals     315.4  queries    188.3  maps      0.0
+per entity-tick: evals      2.61  queries     1.56  maps     0.00
+hottest rules (checks per tick, % that fired):
+  deposit                       68.3    0.0%
+  sniff                         68.3    0.0%
+  stray                         68.3   20.1%
+  quarry                        51.7    3.4%
+  roam                          51.7   19.8%
+  crawl                          0.0    0.0%

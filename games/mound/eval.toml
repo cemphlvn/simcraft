@@ -1,0 +1,40 @@
+# What "better" means for the mound (tools/eval.py, docs/evals.md): does work attract work?
+# Built mud is read from the `mud` field (value 2 = a ball someone placed). The control for every step is the same
+# step with the smell switched off (--set drop_gain=0 --set follow=0): what stigmergy adds is the difference.
+
+seeds = [1, 2, 3, 4, 5]
+max_ticks = 6000          # 5 minutes of game time at 20 ticks/s
+sample_every = 500
+
+[structure]
+field = "mud"
+value = 2
+pillar = 4
+
+[metrics.stacking]
+expr = "last('structure.stacking')"
+goal = "max"              # primary: ~1 = scattered, higher = balls land on balls
+
+[metrics.height]
+expr = "last('structure.height')"
+goal = "max"              # tallest column (balls)
+
+[metrics.pillars]
+expr = "last('structure.pillars')"
+goal = "max"              # columns of 4 or more
+
+[metrics.roofs]
+expr = "last('structure.roofs')"
+goal = "info"             # balls over open air: the first arches
+
+[metrics.built]
+expr = "last('structure.built')"
+goal = "info"
+
+[metrics.deposits]
+expr = "events['deposit']"
+goal = "info"
+
+[metrics.digs]
+expr = "events['dug']"
+goal = "info"

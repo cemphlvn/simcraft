@@ -7,7 +7,7 @@
 
 The designer declares the metrics in games/<name>/eval.toml (see docs/evals.md). Every run uses
 the same seeds, and simcraft is deterministic, so a saved eval is also a regression test.
-Standard library only.
+Standard library only; field metrics (evalmetrics.py) run compiled when tools/build_evalmetrics.sh has built them.
 """
 
 import argparse
@@ -17,8 +17,12 @@ import math
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import evalmetrics  # field metrics; compiled by tools/build_evalmetrics.sh when available
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENT = ROOT / "target" / "release" / "simcraft-agent"
@@ -64,6 +68,7 @@ class Run:
         self.series = collections.defaultdict(list)  # name -> [(tick, value)]
         self.errors = collections.Counter()
         self.result = None
+        self.structure = cfg.get("structure")
         every = cfg.get("sample_every", 20)
         self._sample(call, 0, call({"cmd": "step", "n": 0}))
         while True:
@@ -94,6 +99,13 @@ class Run:
                 sums[f"sum.{e['kind']}.{prop}"] += v
         for name, v in sums.items():
             self.series[name].append((tick, v))
+        if self.structure:
+            reply = call({"cmd": "field", "name": self.structure["field"]})
+            if not reply.get("ok"):
+                sys.exit(f"[structure] field: {reply.get('error')}")
+            got = evalmetrics.structure(reply, self.structure.get("value", 1), self.structure.get("pillar", 4))
+            for name, v in got.items():
+                self.series[f"structure.{name}"].append((tick, v))
 
     def scope(self):
         s = self.series
@@ -123,11 +135,14 @@ class Run:
 
 
 def evaluate(game_dir: Path, cfg: dict):
-    tmp = ROOT / "target" / "eval"
-    tmp.mkdir(parents=True, exist_ok=True)
+    base = ROOT / "target" / "eval"
+    base.mkdir(parents=True, exist_ok=True)
     per_seed, errors = {}, collections.Counter()
-    for seed in cfg["seeds"]:
-        run = Run(game_dir, seed, cfg, tmp)
+    # Each evaluation has its own panels (probes may run side by side); seeds run in parallel, one process each,
+    # and are read back in seed order, so the result is the same as one by one.
+    with tempfile.TemporaryDirectory(dir=base) as tmp, ThreadPoolExecutor() as pool:
+        runs = list(pool.map(lambda seed: Run(game_dir, seed, cfg, Path(tmp)), cfg["seeds"]))
+    for seed, run in zip(cfg["seeds"], runs, strict=True):
         errors.update(run.errors)
         scope = run.scope()
         per_seed[seed] = {}

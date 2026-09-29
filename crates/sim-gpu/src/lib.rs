@@ -4,8 +4,10 @@
 pub mod fx;
 pub mod gpu;
 pub mod math;
+pub mod roam;
 pub mod stage;
 pub mod track;
+pub mod walker;
 
 use std::path::{Path, PathBuf};
 
@@ -90,4 +92,27 @@ pub fn load_track(dir: &Path) -> Result<(track::Track, Assets), String> {
         }
     }
     Ok((track, assets))
+}
+
+/// Loads a roam view (`roam.ron`: first person in a voxel world) and the images of its asset packs.
+pub fn load_roam(dir: &Path) -> Result<(roam::Roam, Assets), String> {
+    let path = dir.join("roam.ron");
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let roam: roam::Roam = ron::Options::default()
+        .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+        .from_str(&src)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut assets = Assets::default();
+    for pack in &roam.assets {
+        let p = find(dir, "assets", pack).ok_or_else(|| format!("asset pack '{pack}' not found (assets/{pack}.ron)"))?;
+        let src = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        let mut a: Assets = ron::from_str(&src).map_err(|e| format!("{}: {e}", p.display()))?;
+        a.load_images(p.parent().unwrap_or_else(|| Path::new(".")))?;
+        assets = assets.merged(a);
+    }
+    let names = roam.materials.values().map(|m| &m.image).chain(roam.sky.iter());
+    if let Some(n) = names.into_iter().find(|n| !assets.loaded.contains_key(*n)) {
+        return Err(format!("roam: no image '{n}' in its asset packs"));
+    }
+    Ok((roam, assets))
 }

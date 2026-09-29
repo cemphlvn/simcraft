@@ -971,3 +971,75 @@ fn lanes_goto_moves_one_position_per_tick_and_refuses_where_you_already_are() {
         .collect();
     assert_eq!(xs, vec![x0, x0 + 1, x0 + 2, 3].into_iter().map(|x| x.min(3)).collect::<Vec<_>>(), "one position a tick");
 }
+
+// --- mound (crawlers, fields as material, the player's reach) ---
+
+fn mound() -> Engine<Running, Game> {
+    let (world, g) = Game::load(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../games/mound")), None).expect("loads");
+    Engine::<Loaded, _>::new(world, g).validate().expect("valid").start()
+}
+
+#[test]
+fn golden_mound_hash() {
+    let mut e = mound();
+    for _ in 0..300 {
+        e.tick();
+    }
+    // Recorded when the game was made. Change only on purpose, together with the game.
+    assert_eq!(format!("{:016x}", e.world().hash()), "08a1751ef66c65b1");
+}
+
+#[test]
+fn ground_starts_under_air_and_crawlers_start_on_it() {
+    let e = mound();
+    let w = e.world();
+    assert!(!w.is_terrain(5, 5, 13) && w.is_terrain(5, 5, 14) && w.is_terrain(5, 5, 19), "`from_level: 14`: air above, earth from 14");
+    assert_eq!(w.count("termite"), 120, "every termite found a place");
+    for t in w.of_kind("termite").chain(w.of_kind("you")) {
+        assert!(!w.is_terrain(t.x, t.y, t.z) && w.touches_terrain(t.x, t.y, t.z), "spawned on a surface: {t:?}");
+    }
+}
+
+#[test]
+fn crawlers_never_float_while_they_dig_climb_and_build() {
+    let mut e = mound();
+    for tick in 0..1500 {
+        e.tick();
+        let w = e.world();
+        for t in w.of_kind("termite") {
+            // A termite may be left inside a ball dropped where it stands; otherwise it touches terrain.
+            assert!(w.is_terrain(t.x, t.y, t.z) || w.touches_terrain(t.x, t.y, t.z), "tick {tick}: floating {t:?}");
+        }
+    }
+    let built = e.world().field_values("mud").unwrap().iter().filter(|v| **v == 2).count();
+    assert!(built > 20, "they built something: {built}");
+}
+
+#[test]
+fn you_dig_and_drop_exactly_where_you_reach_and_no_farther() {
+    let mut e = mound();
+    let me = e.world().of_kind("you").next().unwrap().clone();
+    let act = |e: &Engine<Running, Game>, name: &str, d: (i64, i64, i64)| {
+        let args = [("dx", d.0), ("dy", d.1), ("dz", d.2)].map(|(k, v)| (k.to_string(), v)).into_iter().collect();
+        e.rules().act(e.world(), None, me.id, name, &args)
+    };
+    assert!(act(&e, "drop", (1, 0, 0)).is_err(), "nothing to drop yet");
+    assert!(act(&e, "dig", (0, 0, 4)).is_err(), "out of reach");
+    let g = act(&e, "dig", (0, 0, 2)).expect("earth two below, within reach");
+    e.queue(g);
+    e.tick();
+    assert!(!e.world().is_terrain(me.x, me.y, me.z + 2), "SetFieldAt dug exactly two below, not one");
+    assert!(e.world().is_terrain(me.x, me.y, me.z + 1), "the voxel between is untouched");
+    let g = act(&e, "drop", (2, 0, 0)).expect("carrying now; two to the side is within reach and open");
+    e.queue(g);
+    e.tick();
+    assert_eq!(e.world().field("mud", me.x + 2, me.y, me.z), Some(2), "a ball, exactly there");
+    assert!(e.world().field("cement", me.x + 2, me.y, me.z).unwrap() > 0, "and it smells");
+}
+
+#[test]
+fn a_clinging_kind_needs_terrain() {
+    let game = r#"Game(name: "t", kinds: { "bug": (glyph: 'b', cling: true) }, rules: [])"#;
+    let errs = boot(game, "[run]\nseed = 1\nmax_ticks = 10\n[world]\nwidth = 4\nheight = 4\n").err().expect("must fail");
+    assert!(errs.iter().any(|e| e.contains("clings") && e.contains("terrain")), "{errs:?}");
+}

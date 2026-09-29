@@ -1032,8 +1032,18 @@ impl Game {
         };
         let mut world = World::new3(self.cfg.run.seed, w, h, d);
         world.set_solid(self.def.kinds.iter().filter(|(_, k)| k.solid).map(|(n, _)| n.clone()).collect());
+        world.set_cling(self.def.kinds.iter().filter(|(_, k)| k.cling).map(|(n, _)| n.clone()).collect());
         for (name, f) in &self.def.fields {
             world.add_field(name, f.init);
+            if let Some(from) = f.from_level {
+                for z in 0..from.clamp(0, d) {
+                    for y in 0..h {
+                        for x in 0..w {
+                            world.set_field(name, x, y, z, 0);
+                        }
+                    }
+                }
+            }
         }
         world.set_terrain(self.def.terrain.clone());
 
@@ -1086,10 +1096,11 @@ impl Game {
             let Some(def) = self.def.kinds.get(kind) else {
                 continue; // validate reports it
             };
-            if def.solid {
-                let placed = self.place_solid(&mut world, kind, *n);
+            if def.solid || def.cling {
+                let placed = self.place_shuffled(&mut world, kind, *n);
                 if placed < *n {
-                    errs.push(format!("engine.toml [spawn]: {kind} = {n}, but only {placed} free cells"));
+                    let room = if def.cling { "voxels against terrain" } else { "free cells" };
+                    errs.push(format!("engine.toml [spawn]: {kind} = {n}, but only {placed} {room}"));
                 }
                 continue;
             }
@@ -1113,7 +1124,8 @@ impl Game {
         (world, errs)
     }
 
-    fn place_solid(&self, world: &mut World, kind: &str, n: u32) -> u32 {
+    /// Solid and clinging kinds: one by one into shuffled voxels where they can stand.
+    fn place_shuffled(&self, world: &mut World, kind: &str, n: u32) -> u32 {
         let mut cells: Vec<i64> = (0..world.width * world.height * world.depth).collect();
         let salt = splitmix64(kind.bytes().fold(world.seed, |h, b| splitmix64(h ^ b as u64)));
         for i in (1..cells.len()).rev() {
@@ -1127,7 +1139,7 @@ impl Game {
             }
             let (state, props) = self.template(kind);
             let (x, y, z) = (cell % world.width, (cell / world.width) % world.height, cell / (world.width * world.height));
-            if world.spawn3(kind, &state, x, y, z, props).is_some() {
+            if world.can_enter(kind, x, y, z) && world.spawn3(kind, &state, x, y, z, props).is_some() {
                 placed += 1;
             }
         }
@@ -1901,9 +1913,9 @@ impl Game {
                 let d = self.eval_int(scope, ast)?;
                 out.push(Effect::FieldAdd { name: name.clone(), x: subj.x, y: subj.y, z: subj.z, d });
             }
+            // Exactly there (a reach): the game guards how far, e.g. `when: "abs(arg.dx) <= p.reach"`.
             CDo::SetFieldAt(name, dx, dy, dz, v) => {
-                let (dx, dy, dz) =
-                    (self.eval_int(scope, dx)?.signum(), self.eval_int(scope, dy)?.signum(), self.eval_int(scope, dz)?.signum());
+                let (dx, dy, dz) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?, self.eval_int(scope, dz)?);
                 let v = self.eval_int(scope, v)?;
                 out.push(Effect::FieldSet { name: name.clone(), x: subj.x + dx, y: subj.y + dy, z: subj.z + dz, v });
             }
@@ -2070,6 +2082,11 @@ impl Game {
             && !self.def.fields.contains_key(t)
         {
             errs.push(format!("terrain '{t}' is not a declared field"));
+        }
+        if self.def.terrain.is_none()
+            && let Some((k, _)) = self.def.kinds.iter().find(|(_, k)| k.cling)
+        {
+            errs.push(format!("kind '{k}' clings, but the world has no `terrain` to cling to"));
         }
         if let Some(l) = &self.def.layout {
             for (ch, values) in &l.cells {
@@ -2343,6 +2360,8 @@ impl Rules for Game {
     /// Fields: diffuse through the 6 face neighbours, then pin level 0 to each `top` expression.
     /// Integers, voxel order, native: deterministic and fast.
     fn physics(&self, world: &mut World) {
+        // Crawlers left over nothing (their floor dug away) fall until they touch terrain.
+        world.settle_clingers();
         let mut tops = Vec::new();
         if self.def.fields.values().any(|f| f.top.is_some()) {
             let mut scope = self.world_scope(world);
@@ -2528,11 +2547,7 @@ fn climb_field(world: &World, e: &Entity, name: &str, salt: u64) -> Option<(i64,
 
 /// One step towards the highest `value` among the neighbours a mover could enter; shuffled start breaks ties.
 fn uphill(world: &World, e: &Entity, salt: u64, here: i64, value: impl Fn(i64, i64, i64) -> Option<i64>) -> Option<(i64, i64, i64)> {
-    let cells: Vec<(i64, i64, i64)> = if world.is_solid(&e.kind) {
-        world.free_neighbors(e.x, e.y, e.z)
-    } else {
-        world.neighbors(e.x, e.y, e.z).into_iter().filter(|&(x, y, z)| !world.is_terrain(x, y, z)).collect()
-    };
+    let cells = world.enterable_neighbors(&e.kind, e.x, e.y, e.z);
     if cells.is_empty() {
         return None;
     }
@@ -2551,6 +2566,12 @@ fn uphill(world: &World, e: &Entity, salt: u64, here: i64, value: impl Fn(i64, i
 
 fn wander(world: &World, e: &Entity, salt: u64) -> Effect {
     let r = world.rand(e.id, salt ^ 0x5741_4E44);
+    // A crawler picks among the voxels it can stand in (most random steps would leave the surface).
+    if world.clings(&e.kind) {
+        let cells = world.enterable_neighbors(&e.kind, e.x, e.y, e.z);
+        let (dx, dy, dz) = cells.get((r % cells.len().max(1) as u64) as usize).map_or((0, 0, 0), |c| (c.0 - e.x, c.1 - e.y, c.2 - e.z));
+        return Effect::Move { e: e.id, dx, dy, dz };
+    }
     // In 3D the same draw also picks a level step; at depth 1 dx and dy are exactly as before.
     let dz = if world.depth > 1 { ((r / 9) % 3) as i64 - 1 } else { 0 };
     Effect::Move { e: e.id, dx: (r % 3) as i64 - 1, dy: ((r / 3) % 3) as i64 - 1, dz }

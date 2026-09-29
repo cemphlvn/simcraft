@@ -1,0 +1,76 @@
+#![enable(implicit_some)]
+// Experimental: an example game, still changing (first person in a voxel world; eval log in EVALS.md, feel in FEEL.md).
+// Mound: termites build without a plan (game 9). Stigmergy: the work done so far tells the next worker what to do.
+//   A termite digs a ball of earth from the ground and carries it.
+//   A fresh mud ball smells (cement pheromone); the smell spreads through the air and fades.
+//   A carrying termite drops its ball more readily where it smells more, and follows the smell uphill.
+// Nothing here says "build a pillar"; if pillars appear, they come from work landing on work.
+// You are one termite among them (sandbox): crawl, dig, drop, and watch whether the colony builds on your work.
+Game(
+    name: "mound",
+
+    fields: {
+        // 1 = earth (the ground), 2 = a mud ball someone put there. Non-zero is solid.
+        "mud": (init: 1, from_level: 14),
+        // Cement pheromone, from fresh mud balls: spreads to neighbouring voxels and evaporates.
+        "cement": (init: 0, diffusion: 20, decay: 4),
+    },
+    terrain: "mud",
+
+    kinds: {
+        // Crawlers: they walk on floors, walls and ceilings, never through the air.
+        "termite": (glyph: 't', cling: true, fsm: "termite"),
+        "you":     (glyph: '@', cling: true, props: { "carrying": 0 }),
+    },
+
+    params: {
+        "crawl": 4,          // steps per second
+        "dig": 30,           // chance in 1000 per tick that a searching termite on earth digs a ball
+        "drop_base": 20,     // chance in 100 000 per tick to drop a ball anywhere
+        "drop_gain": 40,     // extra chance in 100 000 per unit of smell (in hundredths of a fresh ball)
+        "fresh": 50000,      // smell of a fresh ball (step 001: 10000 faded before anyone arrived)
+        "follow": 70,        // % of steps a carrying termite follows the smell (the rest are random)
+        "reach": 2,          // how far you can reach to dig or drop (voxels)
+    },
+
+    fsms: {
+        "termite": (
+            initial: "Searching",
+            states: {
+                "Searching": (rules: [
+                    // Only earth, not the colony's own work.
+                    (name: "quarry", when: r#"field_at("mud", 0, 0, 1) == 1 && rand(1000) < p.dig"#,
+                     then: [ SetFieldAt("mud", "0", "0", "1", "0"), Goto("Carrying"), Emit("dug") ]),
+                    (name: "roam", when: "pace(p.crawl)", then: [ Wander ]),
+                ]),
+                "Carrying": (rules: [
+                    // Drop where I stand, then climb onto the ball: the ball rests against whatever I cling to.
+                    (name: "deposit",
+                     when: r#"field_at("mud", 0, 0, -1) == 0 && rand(100000) < p.drop_base + field("cement") * p.drop_gain / 100"#,
+                     then: [ SetField("mud", "2"), SetField("cement", "p.fresh"), Move3("0", "0", "-1"), Goto("Searching"), Emit("deposit") ]),
+                    (name: "sniff", when: "pace(p.crawl) && rand(100) < p.follow", then: [ ClimbField("cement") ]),
+                    (name: "stray", when: "pace(p.crawl)", then: [ Wander ]),
+                ]),
+            },
+        ),
+    },
+
+    // Everything a termite does lives in its machine above.
+    rules: [],
+
+    // You: the first-person player's moves arrive as these actions (one voxel a tick at most; the view glides).
+    actions: [
+        (name: "crawl", for: "you", args: ["dx", "dy", "dz"],
+         when: "abs(arg.dx) <= 1 && abs(arg.dy) <= 1 && abs(arg.dz) <= 1",
+         then: [ Move3("arg.dx", "arg.dy", "arg.dz") ]),
+        (name: "dig", for: "you", args: ["dx", "dy", "dz"],
+         when: r#"me.carrying == 0 && abs(arg.dx) <= p.reach && abs(arg.dy) <= p.reach && abs(arg.dz) <= p.reach
+                  && field_at("mud", arg.dx, arg.dy, arg.dz) != 0"#,
+         then: [ SetFieldAt("mud", "arg.dx", "arg.dy", "arg.dz", "0"), Set("carrying", "1"), Emit("dug") ]),
+        (name: "drop", for: "you", args: ["dx", "dy", "dz"],
+         when: r#"me.carrying == 1 && abs(arg.dx) <= p.reach && abs(arg.dy) <= p.reach && abs(arg.dz) <= p.reach
+                  && (arg.dx != 0 || arg.dy != 0 || arg.dz != 0) && field_at("mud", arg.dx, arg.dy, arg.dz) == 0"#,
+         then: [ SetFieldAt("mud", "arg.dx", "arg.dy", "arg.dz", "2"), SetFieldAt("cement", "arg.dx", "arg.dy", "arg.dz", "p.fresh"),
+                 Set("carrying", "0"), Emit("placed") ]),
+    ],
+)

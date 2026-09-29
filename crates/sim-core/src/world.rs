@@ -40,6 +40,8 @@ pub struct WorldSnapshot {
     pub fields: BTreeMap<String, Vec<i64>>,
     #[serde(default)]
     pub terrain: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub cling: BTreeSet<String>,
 }
 
 /// All game state. BTreeMap: iteration order is fixed by id → determinism.
@@ -64,6 +66,8 @@ pub struct World {
     fields: BTreeMap<String, Vec<i64>>,
     /// A voxel whose value in this field is non-zero is solid for every mover (soil, rock).
     terrain: Option<String>,
+    /// Kinds that crawl: they only enter voxels touching terrain (walls, floors, ceilings), so they never float.
+    cling: BTreeSet<String>,
 }
 
 impl World {
@@ -86,6 +90,7 @@ impl World {
             next_id: 1,
             fields: BTreeMap::new(),
             terrain: None,
+            cling: BTreeSet::new(),
         }
     }
 
@@ -101,6 +106,7 @@ impl World {
             entities: self.entities.values().cloned().collect(),
             fields: self.fields.clone(),
             terrain: self.terrain.clone(),
+            cling: self.cling.clone(),
         }
     }
 
@@ -119,6 +125,7 @@ impl World {
         }
         w.fields = s.fields;
         w.terrain = s.terrain;
+        w.cling = s.cling;
         for e in s.entities {
             if !w.in_bounds3(e.x, e.y, e.z) {
                 return Err(format!("entity {} at ({}, {}, {}) is outside the world", e.id, e.x, e.y, e.z));
@@ -145,6 +152,67 @@ impl World {
 
     pub fn is_solid(&self, kind: &str) -> bool {
         self.solid.contains(kind)
+    }
+
+    pub fn set_cling(&mut self, kinds: BTreeSet<String>) {
+        self.cling = kinds;
+    }
+
+    pub fn clings(&self, kind: &str) -> bool {
+        self.cling.contains(kind)
+    }
+
+    /// Does a face of this voxel touch terrain (a floor below, a wall beside, a ceiling above)?
+    pub fn touches_terrain(&self, x: i64, y: i64, z: i64) -> bool {
+        [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+            .into_iter()
+            .any(|(dx, dy, dz)| self.is_terrain(x + dx, y + dy, z + dz))
+    }
+
+    /// Could an entity of `kind` stand in this voxel? Inside the world, not terrain, not taken (solid kinds), and
+    /// for a clinging kind, against terrain.
+    pub fn can_enter(&self, kind: &str, x: i64, y: i64, z: i64) -> bool {
+        self.in_bounds3(x, y, z)
+            && !self.is_terrain(x, y, z)
+            && !(self.solid.contains(kind) && self.blocked3(x, y, z))
+            && (!self.cling.contains(kind) || self.touches_terrain(x, y, z))
+    }
+
+    /// Crawlers whose support is gone (dug away under them) fall straight down until they touch terrain (or reach
+    /// the bottom). In id order. Returns who fell.
+    pub fn settle_clingers(&mut self) -> Vec<EntityId> {
+        let ids: Vec<EntityId> =
+            self.cling.iter().filter_map(|k| self.by_kind.get(k)).flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
+        let mut fell = Vec::new();
+        for id in ids {
+            let Some(e) = self.entities.get(&id) else { continue };
+            let (x, y, mut z) = (e.x, e.y, e.z);
+            let solid = self.solid.contains(&e.kind);
+            let start = z;
+            while !self.is_terrain(x, y, z)
+                && !self.touches_terrain(x, y, z)
+                && z + 1 < self.depth
+                && !self.is_terrain(x, y, z + 1)
+                && !(solid && self.blocked3(x, y, z + 1))
+            {
+                z += 1;
+            }
+            if z != start {
+                let (from, to) = (self.cell(x, y, start), self.cell(x, y, z));
+                self.grid[from].retain(|&i| i != id);
+                let cell = &mut self.grid[to];
+                let pos = cell.partition_point(|&i| i < id);
+                cell.insert(pos, id);
+                self.entities.get_mut(&id).expect("checked above").z = z;
+                fell.push(id);
+            }
+        }
+        fell
+    }
+
+    /// The neighbouring voxels an entity of `kind` could step into.
+    pub fn enterable_neighbors(&self, kind: &str, x: i64, y: i64, z: i64) -> Vec<(i64, i64, i64)> {
+        self.ring(x, y, z, 1).filter(|&(x, y, z)| self.can_enter(kind, x, y, z)).collect()
     }
 
     pub fn entities(&self) -> &BTreeMap<EntityId, Entity> {
@@ -232,13 +300,12 @@ impl World {
         self.move3(id, dx, dy, 0)
     }
 
-    /// One step in 3D. Terrain stops everyone; a solid entity cannot enter an occupied voxel. True if it moved.
+    /// One step in 3D. Terrain stops everyone; a solid entity cannot enter an occupied voxel; a clinging one only
+    /// voxels against terrain. True if it moved.
     pub fn move3(&mut self, id: EntityId, dx: i64, dy: i64, dz: i64) -> bool {
         let Some(e) = self.entities.get(&id) else { return false };
         let (dx, dy, dz) = (dx.signum(), dy.signum(), dz.signum());
-        let solid = self.solid.contains(&e.kind);
-        let open =
-            |(x, y, z): (i64, i64, i64)| (x, y, z) != (e.x, e.y, e.z) && !self.is_terrain(x, y, z) && !(solid && self.blocked3(x, y, z));
+        let open = |(x, y, z): (i64, i64, i64)| (x, y, z) != (e.x, e.y, e.z) && self.can_enter(&e.kind, x, y, z);
         let want = self.clamp3(e.x + dx, e.y + dy, e.z + dz);
         let target = if self.is_terrain(want.0, want.1, want.2) {
             // Slide along terrain: the first open axis-reduced step.
@@ -262,13 +329,12 @@ impl World {
         true
     }
 
-    /// Exactly (dx, dy, dz) cells in one go (a dash, a leap): if the destination is inside the world, not terrain
-    /// and (for a solid entity) free. Nothing between is checked. True if it moved.
+    /// Exactly (dx, dy, dz) cells in one go (a dash, a leap): if the destination is inside the world and the kind
+    /// can stand there (`can_enter`). Nothing between is checked. True if it moved.
     pub fn leap(&mut self, id: EntityId, dx: i64, dy: i64, dz: i64) -> bool {
         let Some(e) = self.entities.get(&id) else { return false };
         let (x, y, z) = self.clamp3(e.x + dx, e.y + dy, e.z + dz);
-        let solid = self.solid.contains(&e.kind);
-        if (x, y, z) == (e.x, e.y, e.z) || self.is_terrain(x, y, z) || (solid && self.blocked3(x, y, z)) {
+        if (x, y, z) == (e.x, e.y, e.z) || !self.can_enter(&e.kind, x, y, z) {
             return false;
         }
         let from = self.cell(e.x, e.y, e.z);
