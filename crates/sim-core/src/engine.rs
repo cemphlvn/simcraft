@@ -49,6 +49,10 @@ pub struct Engine<S, R: Rules> {
     pending: Vec<Group>,
     outcome: Option<String>,
     bus: Bus,
+    /// Hash the world after every tick (the default: replays and tests compare every tick). A host that only
+    /// needs the hash now and then turns it off and asks `world().hash()` when it wants one; with bus subscribers
+    /// it is always computed (every `Tick` message carries it).
+    hash_ticks: bool,
     _state: PhantomData<S>,
 }
 
@@ -68,13 +72,21 @@ impl<S, R: Rules> Engine<S, R> {
         &self.rules
     }
     fn into_state<T>(self) -> Engine<T, R> {
-        Engine { world: self.world, rules: self.rules, pending: self.pending, outcome: self.outcome, bus: self.bus, _state: PhantomData }
+        Engine {
+            world: self.world,
+            rules: self.rules,
+            pending: self.pending,
+            outcome: self.outcome,
+            bus: self.bus,
+            hash_ticks: self.hash_ticks,
+            _state: PhantomData,
+        }
     }
 }
 
 impl<R: Rules> Engine<Loaded, R> {
     pub fn new(world: World, rules: R) -> Self {
-        Engine { world, rules, pending: Vec::new(), outcome: None, bus: Bus::default(), _state: PhantomData }
+        Engine { world, rules, pending: Vec::new(), outcome: None, bus: Bus::default(), hash_ticks: true, _state: PhantomData }
     }
 
     pub fn validate(self) -> Result<Engine<Validated, R>, Vec<String>> {
@@ -100,6 +112,12 @@ impl<R: Rules> Engine<Running, R> {
 
     pub fn outcome(&self) -> Option<&str> {
         self.outcome.as_deref()
+    }
+
+    /// Whether every tick hashes the world (see `hash_ticks`). Off: `TickReport::hash` is 0 unless the bus has
+    /// subscribers; ask `world().hash()` instead.
+    pub fn hash_every_tick(&mut self, on: bool) {
+        self.hash_ticks = on;
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -143,7 +161,8 @@ impl<R: Rules> Engine<Running, R> {
         self.world.index_motion(); // 5) the broadphase for the next tick's questions (derived, not hashed)
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
-        let (tick, hash) = (self.world.tick, self.world.hash());
+        let tick = self.world.tick;
+        let hash = if self.hash_ticks || !self.bus.is_empty() { self.world.hash() } else { 0 };
         if !self.bus.is_empty() {
             for ev in &events {
                 self.bus.publish(&Msg::Event(ev.clone()));

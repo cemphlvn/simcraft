@@ -258,15 +258,15 @@ impl Session {
     fn step(&mut self, n: u64) -> Value {
         let max = self.game().cfg.run.max_ticks;
         let mut events = Vec::new();
-        let mut hash = self.engine.world().hash();
+        // One hash for the step, at its end (not one per tick nobody reads).
+        self.engine.hash_every_tick(false);
         for _ in 0..n {
             if self.engine.world().tick >= max || self.engine.outcome().is_some() {
                 break;
             }
-            let report = self.engine.tick();
-            hash = report.hash;
-            events.extend(report.events);
+            events.extend(self.engine.tick().events);
         }
+        let hash = self.engine.world().hash();
         let tick = self.engine.world().tick;
         json!({
             "tick": tick,

@@ -1,0 +1,28 @@
+{
+ "step": "hash on demand: one per step, not one per tick",
+ "kind": "car",
+ "ticks": 300,
+ "rows": [
+  {
+   "n": 100,
+   "alive": 100,
+   "ms_per_tick": 0.29,
+   "cpu_ms_per_tick": 1.335,
+   "hash": "ae1442d3ce91c22e"
+  },
+  {
+   "n": 400,
+   "alive": 400,
+   "ms_per_tick": 0.709,
+   "cpu_ms_per_tick": 3.587,
+   "hash": "1c41e566c0fe1994"
+  },
+  {
+   "n": 1600,
+   "alive": 1600,
+   "ms_per_tick": 2.723,
+   "cpu_ms_per_tick": 13.948,
+   "hash": "678f3d49ec7f5296"
+  }
+ ]
+}

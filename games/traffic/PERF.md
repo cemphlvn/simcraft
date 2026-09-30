@@ -14,6 +14,7 @@ Guided by `docs/research/physics-engines.md` §6 (the order in which physics eng
 | 003 | Compiled rules (§6.3; closure compilation, Feeley and Lapalme 1987): the common subset of rule expressions (arithmetic, comparisons, `if`, `let`, `me/p/sense/it`, engine functions, script effect lists) is parsed once and evaluated natively; the rest runs in Rhai | 0.45 | 1.07 | **4.97** | 18.3 | same | CPU per tick 40.6 → 18.3 ms (2.2× less work) but wall only 1.3×: the work moved. Profile now: parallel rule evaluation 56% (Rhai scopes still built even when every expression of a kind is compiled), the world's hash every tick 13%, `integrate_motion` 11%, `apply` 7% |
 | 004 | Rebaseline: the game got a player car (a new prop, so a new world); 003's engine measured on it (`SIMCRAFT_NO_BARE=1`) | 0.47 | 1.31 | 5.36 | 19.2 | new game | Steps compare the same game: a change to the game is a new baseline, never a speed-up |
 | 005 | Bare kinds: a kind whose every expression is compiled builds no interpreter scope (`me`, `sense`, `it` maps); a fallback dresses the scope for that one expression | 0.47 | 1.06 | **3.44** | 14.7 | same | 1.6× at 1600; 75× since the baseline. In colony a kind became bare too: 0.2 fewer maps a tick, same world |
+| 006 | Hash on demand: the engine can skip hashing every tick (`Engine::hash_every_tick(false)`); the agent protocol hashes once per step, a window never (bus subscribers still get every tick's hash) | 0.29 | 0.71 | **2.72** | 13.9 | same | 1.3× at 1600, 1.6× at 100; 94× since the baseline. The hash function itself cannot change (the golden hashes), so the fix is not hashing what nobody reads |
 
 Correctness: `the_broadphase_answers_exactly_what_a_scan_answers` (40 random roads, both directions, sideways
 shifts, riders): every question gets the same answer with and without the index; the hashes above agree.
@@ -23,5 +24,4 @@ runs every game with and without the fast paths for 400 ticks and compares the h
 
 ## Next candidates (from the profile at step 003)
 
-- The world's hash every tick: hash only when asked (a replay check, a bus subscriber, a test), or keep it incremental.
 - `integrate_motion` and the index read motion props by name: pack them (§6.4), then integrate in parallel (§6.5).

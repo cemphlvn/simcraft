@@ -1492,7 +1492,9 @@ impl TrackPlay {
         self.track = self.base.themed(self.theme);
     }
 
-    pub fn new(engine: sim_core::Engine<sim_core::Running, Game>, track: Track, sizes: Sizes) -> TrackPlay {
+    pub fn new(mut engine: sim_core::Engine<sim_core::Running, Game>, track: Track, sizes: Sizes) -> TrackPlay {
+        // A window never reads a tick's hash (a replay is checked by its presses, a spike report asks for one).
+        engine.hash_every_tick(false);
         let n = track.buttons.len();
         let base = track.clone();
         TrackPlay {
