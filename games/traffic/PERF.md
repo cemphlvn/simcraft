@@ -22,6 +22,11 @@ Compiled rules: `SIMCRAFT_NATIVE_CHECK=1` asks the interpreter too for every com
 (it found a slot bug in nested `let`s on its first run: 0 differences since, in all 12 games); `fast_paths_change_nothing`
 runs every game with and without the fast paths for 400 ticks and compares the hash of every tick.
 
-## Next candidates (from the profile at step 003)
+Tried and not kept: updating motion props in place instead of re-inserting their keys (no measurable change,
+2.72 → 2.98 ms at 1600: noise). A step that does not show in the numbers is not kept.
 
-- `integrate_motion` and the index read motion props by name: pack them (§6.4), then integrate in parallel (§6.5).
+## Next candidates (from the profiles)
+
+- Compiled rules now dominate, and inside them looking props up by name (`memcmp`): packed motion data (§6.4) and
+  props by index instead of by name. Deferred: 1,600 cars cost 2.7 ms of a 16.7 ms frame; the realistic driving
+  model (much more work per car) will say when it is needed.

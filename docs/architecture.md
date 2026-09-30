@@ -69,7 +69,10 @@ tick:
 - **Groups are atomic.** If an entity the group touches already died earlier this tick, the whole group is dropped. If that entity is someone else, a `conflict` event is emitted (two wolves cannot eat the same sheep); if it is the group's own actor, the group is dropped silently. Likewise, if any `Need` in the group no longer holds against the live state, the group is dropped with a `short` event.
 - An entity **moves at most once per tick**. The first `Move` wins.
 - Evaluation (read-only) runs on `[run] threads` cores (0 = all) once 48 entities have something to evaluate (idle kinds do not count), in jobs of at least 16; results merge in entity-id order, so the core count never changes the outcome. `apply` is single-threaded. Field physics (diffusion and decay, one fused pass) runs level by level on the same cores in large worlds: each voxel reads only the old field, so the result is the same at any core count.
-- The world's hash covers every entity and every field voxel, every tick; fields are hashed a value at a time (not byte-wise FNV), since they are most of a 3D world's state.
+- The world's hash covers every entity and every field voxel. By default it is computed every tick (replays and tests
+  compare every tick); a host that does not read it turns it off (`Engine::hash_every_tick(false)`: the agent
+  protocol hashes once per `step`, a game window never) and asks `world().hash()` when it needs one. With bus
+  subscribers every tick is hashed anyway; fields are hashed a value at a time (not byte-wise FNV), since they are most of a 3D world's state.
 - FSM transitions are applied in `apply`. Rules see the old state for the rest of that tick.
 - **Solid kinds** occupy their cell: at most one solid per cell. A solid cannot move into, or spawn onto, a cell holding another solid (a blocked spawn emits `blocked`).
 
