@@ -26,3 +26,6 @@ assets/src/**/*.glb
 assets/src/**/*.png
 # Generated audio sources (the game uses the MP3s in assets/themes/)
 assets/src/**/*.m4a
+# Recordings dropped for the race (CC0, see the README there): large, fetched by hand
+assets/src/race/audio/*
+!assets/src/race/audio/README.md
