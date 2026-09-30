@@ -15,21 +15,11 @@ One readable game file, checked before it runs, built to run the same in the ter
 
 </div>
 
-```
-##################
-#f.f..........q.q#
-#.V......$.....V.#
-#f.f..........q.q#
-##################
-Day 14/150   score  you 124  ·  bob(builder) 131
-  YOU (A)  wood  14  stone   0  gold   84  houses 1
-  bob (B)  wood   0  stone   3  gold   51  houses 2
-  MARKET   wood $18 (stock 3)   stone $10 (stock 14)
-  · bob: sell_stone 4
-  · house you
-> sw 3
-```
-<sub>`games/market`, played in the terminal: the map, prices and rules come from one `game.ron`; bob is a scripted bot.</sub>
+<p align="center">
+  <img src="docs/media/race_chase.jpg" alt="games/race: eight stock cars on a banked oval, chase camera" width="100%">
+</p>
+<sub><code>games/race</code>: a stock-car race on a 1.5-mile banked oval, driven by simcraft's own physics engine. Eight cars
+are data, seven drive themselves, and you drive the eighth.</sub>
 
 ## Why simcraft
 
@@ -38,6 +28,66 @@ Day 14/150   score  you 124  ·  bob(builder) 131
 - **Same seed, same game.** Integer maths, no shared randomness: every run can be replayed and verified tick by tick, so experiments are evidence.
 - **Behaviour you can see.** State machines with nested states, layers, memory and interrupts, in the vocabulary of Unity's Animator and Unreal's StateTree.
 - **Hosts display, the core decides.** The same `game.ron` runs headless for experiments and inside Unity or Unreal.
+
+## Featured game: `games/race`
+
+<table>
+<tr>
+<td width="33%"><img src="docs/media/race_cockpit.jpg" alt="cockpit view"></td>
+<td width="33%"><img src="docs/media/race_grid.jpg" alt="the starting grid from above"></td>
+<td width="33%"><img src="docs/media/race_banner.jpg" alt="the start/finish line, chase view"></td>
+</tr>
+<tr>
+<td align="center"><sub>From the seat: dash, wheel, live mirror</sub></td>
+<td align="center"><sub>The grid from above: 8 liveries</sub></td>
+<td align="center"><sub>Start/finish, and the play mode button</sub></td>
+</tr>
+</table>
+
+A stock-car race on a 1.5-mile quad-oval with Charlotte Motor Speedway's published length, turn radii, turn
+lengths and 24° banking (the dogleg's exact shape is approximate). You start from the back of an 8-car field:
+
+```bash
+cargo build --release -p sim-gpu
+target/release/simcraft-play games/race           # C: cockpit → chase → top-down
+```
+
+| Key | |
+|---|---|
+| ↑ ↓ ← → | throttle, brake, steering (analog ramps from the keyboard) |
+| **G** or the MODE button | **CONTROL** (you steer; traction control and ABS) → **GUIDED** (you pick your line, the car follows it and keeps you within its grip) → **AUTOPILOT** |
+| A / Z · Backspace | shift up / down (a sequential gearbox, automatic until you shift) · reverse |
+| Tab · M · R | ride on board another car · mute · restart |
+
+**It runs on simcraft's own physics engine** (`crates/sim-physics`), written for this: deterministic, integer-only
+(Q48.16 fixed point, binary angles, CORDIC), so every race replays bit for bit. No third-party physics library.
+
+- **Cars are data** (`assets/vehicles/*.ron`): mass, geometry, a dyno torque curve, gears, brakes, tyres, aero. The
+  Next Gen Cup car uses its published figures; everything else is marked as an estimate.
+- **The model:**
+  - a dynamic bicycle model with slip-angle tyres and a friction circle;
+  - load transfer, downforce and banking;
+  - a drivetrain with an automatic gearbox that shifts at the optimal points;
+  - driver aids (traction control, ABS);
+  - contact between cars and walls (separating axis test, sequential impulses);
+  - 8 physics steps per 60 Hz tick.
+- **Tracks are data:** straights and turns eased by transition spirals (clothoids), with banking along them.
+- **The rivals' driver:**
+  - a quasi-steady-state lap plan;
+  - pure-pursuit steering with understeer compensation;
+  - racecraft (passing, following) and spin recovery.
+
+Measured, not assumed:
+
+| | Result |
+|---|---|
+| Autopilot lap in the Next Gen car | **30.75 s**; the real pole in 2024 was **29.355 s** ([log of every step](games/race/LAPS.md)) |
+| Physics tests against textbook answers | steady-turn geometry, understeer gradient, skidpad limit μ·g, a banked turn held by the slope alone, braking distance, top speed, gear shifts; 2,000 random collisions conserve momentum and never create energy |
+| Frame time, 8 cars + mirror | ~5 ms GPU per frame (1440×810) |
+
+Assets are generated (Higgsfield) and all brands are fictional: a 3D car model with PBR materials in 8 liveries,
+photographed track surfaces, a crowd, signage, and a spotter on the radio. Engine sounds and music are CC0
+recordings you add (`assets/src/race/audio/README.md`); until then the engine note is synthesised.
 
 ## Quick start
 
@@ -217,8 +267,11 @@ cargo test                    # everything, including snapshots and properties
 
 simcraft is young. What works today, and what does not yet:
 
-- **Worlds are grids**, one cell per position, integer props. No physics, no continuous space.
-- **No renderer of its own.** The terminal shows ASCII; pictures come from a host (Unity, Unreal).
+- **Worlds are grids with continuous motion on top:** positions and velocities finer than a cell, and vehicles driven
+  by simcraft's own physics engine (`sim-physics`). There are no general rigid bodies yet (stacks, ragdolls), and no
+  suspension yet.
+- **Renderers:** the terminal (ASCII and pixel art) and a GPU renderer (`sim-gpu`, wgpu): stages, tracks,
+  first-person voxel worlds, and the drive view that `games/race` uses. Hosts (Unity, Unreal) can draw instead.
 - **Host adapters:** the C API, the C++ wrapper and the C# `Simulation` are tested; the Unity `SimcraftWorld` component
   and the Unreal module are written but not yet compiled in their editors.
 - **Breaking changes will happen** before 1.0. Golden hashes make sure they never happen silently to existing games.

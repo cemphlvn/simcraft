@@ -15,21 +15,15 @@ Okunabilir tek bir oyun dosyası; çalışmadan önce denetlenir, terminalde, Un
 
 </div>
 
-```
-##################
-#f.f..........q.q#
-#.V......$.....V.#
-#f.f..........q.q#
-##################
-Day 14/150   score  you 124  ·  bob(builder) 131
-  YOU (A)  wood  14  stone   0  gold   84  houses 1
-  bob (B)  wood   0  stone   3  gold   51  houses 2
-  MARKET   wood $18 (stock 3)   stone $10 (stock 14)
-  · bob: sell_stone 4
-  · house you
-> sw 3
-```
-<sub>`games/market`, terminalde oynanırken: harita, fiyatlar ve kurallar tek bir `game.ron`'dan gelir; bob script'li bir bot.</sub>
+<p align="center">
+  <img src="docs/media/race_chase.jpg" alt="games/race: eğimli bir ovalde sekiz stock car" width="100%">
+</p>
+<sub><code>games/race</code>: 1.5 millik eğimli bir ovalde stock car yarışı, simcraft'ın kendi fizik motoruyla. Arabalar veridir;
+yedisi kendini sürer, sekizincisini sen. Ayrıntılar: <a href="README.md#featured-game-gamesrace">README (English)</a>.</sub>
+
+**Kendi fizik motoru** (`crates/sim-physics`): deterministik, yalnızca tam sayı (Q48.16 sabit nokta), her yarış bit bit
+tekrar oynatılır; dışarıdan fizik kütüphanesi yok. Oynamak için: `cargo build --release -p sim-gpu && target/release/simcraft-play games/race`
+(G: CONTROL → GUIDED → AUTOPILOT).
 
 ## Neden simcraft
 
