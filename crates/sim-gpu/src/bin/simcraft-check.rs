@@ -181,7 +181,7 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
         for b in &c.buttons {
             want(format!("key '{}'", b.key), &b.action, b.args.keys().chain(b.toggle.iter()).collect());
             let mut args = b.args.clone();
-            args.extend(b.toggle.iter().map(|t| (t.clone(), 1)));
+            args.extend(b.toggle.iter().map(|t| (t.clone(), b.values.map_or(1, |v| v.1))));
             presses.push((d.cars.clone(), b.action.clone(), args));
         }
     }
@@ -201,6 +201,27 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
         Ok(None) => r.notes.push("drive model: none (box cars)".into()),
         Err(e) => r.warn(format!("drive.ron: {e} (box cars are drawn instead)")),
     }
+    // The spotter's lines: which calls have a voice, which stay silent (text only).
+    let calls = [
+        "car_low",
+        "car_high",
+        "three_wide",
+        "still_there",
+        "clear_low",
+        "clear_high",
+        "clear",
+        "green",
+        "white_flag",
+        "checkered",
+        "wreck",
+    ];
+    let (said, silent): (Vec<&str>, Vec<&str>) = calls.iter().partition(|c| d.sound.voice.line(&d.dir, c).is_some());
+    r.notes.push(format!(
+        "drive voice: {} ({}); silent: {}",
+        said.len(),
+        said.join(", "),
+        if silent.is_empty() { "none".to_string() } else { silent.join(", ") }
+    ));
     // Pictures: a named one that is not there is a mistake (the surface quietly goes plain); the rest is listed.
     let photos = sim_gpu::drive::photos::Photos::resolve(&d.dir, &d.look.textures);
     for (k, why) in &photos.missing {

@@ -11,6 +11,7 @@
 //!
 //! Render space: X = the track's x, Y = up, Z = the track's y (metres; see `scene`).
 
+pub mod audio;
 pub mod car;
 pub mod carmodel;
 pub mod geom;
@@ -72,6 +73,9 @@ pub struct Drive {
     #[serde(default)]
     /// The game's own driver for your car (`O`, `--auto`).
     pub autopilot: Option<Autopilot>,
+    /// Your line drawn faintly on the road ahead from outside (chase, top-down), when the car steers by line.
+    #[serde(default)]
+    pub line_marker: Option<LineMarker>,
     /// Speed on the dash: "mph" or "kmh".
     #[serde(default = "mph")]
     pub units: String,
@@ -470,6 +474,9 @@ pub struct KeyAction {
     /// This arg flips between 1 and 0 on each press.
     #[serde(default)]
     pub toggle: Option<String>,
+    /// The toggle's two values (off, on) when they are not (0, 1): the first press sends `on`.
+    #[serde(default)]
+    pub values: Option<(i64, i64)>,
 }
 
 /// One analog value from keys: a held key ramps it up over `rise_ms`, letting go brings it back over `fall_ms`.
@@ -504,21 +511,28 @@ fn thousand() -> f32 {
     1000.0
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Sound {
-    pub engine: bool,
-    pub volume: f32,
-    /// The firing frequency is rpm / 60 × cylinders / 2.
-    pub cylinders: u32,
-    /// Wind noise at 80 m/s.
-    pub wind: f32,
+pub use audio::Sound;
+
+/// Your car's line on the road: the prop that holds it (mm left of the centreline), shown while `when` (a prop and
+/// its value) holds, this far ahead (m), in this colour.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineMarker {
+    pub prop: String,
+    #[serde(default)]
+    pub when: Option<(String, i64)>,
+    #[serde(default = "ahead")]
+    pub ahead: f32,
+    #[serde(default = "marker_color")]
+    pub color: (u8, u8, u8),
 }
 
-impl Default for Sound {
-    fn default() -> Self {
-        Sound { engine: true, volume: 0.5, cylinders: 8, wind: 0.25 }
-    }
+fn ahead() -> f32 {
+    70.0
+}
+
+fn marker_color() -> (u8, u8, u8) {
+    (90, 200, 255)
 }
 
 /// Handing your car to the game's own driver (its autopilot, with racecraft): the action and its arg, sent
@@ -597,6 +611,8 @@ pub struct CarView {
     pub number: i64,
     /// Contact this tick (N·s).
     pub impact: f32,
+    /// The line it steers by (m left of the centreline), when the drive view shows one (`line_marker`).
+    pub line: Option<f32>,
     /// Accelerations it reports (m/s²: forward, left) and its body motion (radians: nose up, right side down).
     pub accel: Option<(f32, f32)>,
     pub body: Option<(f32, f32)>,
@@ -835,6 +851,9 @@ pub fn sky_photo(eye: &Eye, w: f32, h: f32, f: &photos::Found) -> Vec<Quad> {
 #[derive(Clone, Debug, Default)]
 pub struct Hud {
     pub call: Option<String>,
+    /// The spotter's call as a line to say: car_low, car_high, three_wide, still_there, clear_low, clear_high,
+    /// clear (the host's voice plays it, `sound.voice`).
+    pub voice: Option<String>,
     pub position: usize,
     pub cars: usize,
     pub lap: i64,
@@ -1105,6 +1124,31 @@ impl Composer<'_> {
                 }
             }
         }
+        // From outside, the line you steer by: a faint ribbon on the road ahead of you.
+        if let (Some(m), Some(y), true) = (&self.drive.line_marker, you, rig.view != 0)
+            && let Some(line) = y.line
+        {
+            let col = rgb(m.color);
+            let n = 28;
+            for k in 0..n {
+                let (s0, s1) = (y.s + 3.0 + m.ahead * k as f32 / n as f32, y.s + 3.0 + m.ahead * (k + 1) as f32 / n as f32);
+                let (c0, c1) = (centre(self.track, s0), centre(self.track, s1));
+                let p = |c: &Centre, o: f32| self.ground.point(c, o, 0.05);
+                let fade = |t: f32| 0.45 * (1.0 - t).min(t * 4.0).min(1.0);
+                let (a0, a1) = (fade(k as f32 / n as f32), fade((k + 1) as f32 / n as f32));
+                let w = 0.35;
+                parts.solid.quad_c(
+                    [p(&c0, line - w), p(&c1, line - w), p(&c1, line + w), p(&c0, line + w)],
+                    [[0.0; 2]; 4],
+                    [
+                        [col[0], col[1], col[2], a0],
+                        [col[0], col[1], col[2], a1],
+                        [col[0], col[1], col[2], a1],
+                        [col[0], col[1], col[2], a0],
+                    ],
+                );
+            }
+        }
         let (meshes, mirror_meshes) = parts.meshes();
         let models = if instances.is_empty() { Vec::new() } else { vec![crate::skin::ModelDraw { model: CAR_MODEL.into(), instances }] };
         let (w, h) = (self.w, self.h);
@@ -1290,6 +1334,8 @@ struct Track1 {
 struct Spotter {
     alongside_since: Option<f32>,
     clear_at: Option<f32>,
+    /// Which side the last car alongside was on ("low", "high", or both: "").
+    side: &'static str,
 }
 
 /// A game in the driver's seat: the engine, the rig, the controls, the log. What a window, a shot, a recording and
@@ -1321,6 +1367,8 @@ pub struct DrivePlay {
     /// Toggle keys that are on.
     toggled: BTreeMap<String, bool>,
     spotter: Spotter,
+    /// What the HUD showed on the last frame (the host's sound follows it: the spotter's voice).
+    pub last_hud: Hud,
     pub refused: Option<(String, String, f32)>,
     /// Seconds a tick lasts.
     tick_dt: f32,
@@ -1360,6 +1408,7 @@ impl DrivePlay {
             watch: None,
             toggled: BTreeMap::new(),
             spotter: Spotter::default(),
+            last_hud: Hud::default(),
             refused: None,
             tick_dt: 1.0 / rate,
         };
@@ -1429,6 +1478,10 @@ impl DrivePlay {
                     position: n(&pr.position),
                     number: n(&pr.number).unwrap_or(e.id as i64),
                     impact: f(&pr.impact, 1.0).unwrap_or(0.0),
+                    line: self.drive.line_marker.as_ref().and_then(|m| {
+                        let on = m.when.as_ref().is_none_or(|(p, v)| prop(e, p) == Some(*v));
+                        on.then(|| f(&m.prop, 0.001)).flatten()
+                    }),
                     accel: match (f(&pr.g_long, 0.001), f(&pr.g_lat, 0.001)) {
                         (Some(l), Some(t)) => Some((l, t)),
                         _ => None,
@@ -1584,7 +1637,8 @@ impl DrivePlay {
             // A toggle flips its arg between 1 and 0 each press (reverse in, reverse out).
             if let Some(t) = &b.toggle {
                 let on = !self.toggled.get(key).copied().unwrap_or(false);
-                args.insert(t.clone(), on as i64);
+                let (off_v, on_v) = b.values.unwrap_or((0, 1));
+                args.insert(t.clone(), if on { on_v } else { off_v });
                 if self.send(id, &b.action, args) {
                     self.toggled.insert(key.to_string(), on);
                 }
@@ -1634,6 +1688,7 @@ impl DrivePlay {
         }
         let cars = self.cars();
         let hud = self.hud(&cars);
+        self.last_hud = hud.clone();
         let composer = Composer {
             drive: &self.drive,
             track: &self.track,
@@ -1693,26 +1748,37 @@ impl DrivePlay {
         }
         let now = self.time;
         let sp = &mut self.spotter;
-        let call = if low || high {
+        let (call, voice) = if low || high {
             let since = *sp.alongside_since.get_or_insert(now);
             sp.clear_at = None;
-            Some(if low && high {
-                "THREE WIDE".to_string()
-            } else if now - since > 2.5 {
-                "STILL THERE".to_string()
+            sp.side = if low && high {
+                ""
             } else if low {
-                "CAR LOW".to_string()
+                "low"
             } else {
-                "CAR HIGH".to_string()
-            })
+                "high"
+            };
+            let (c, v) = if low && high {
+                ("THREE WIDE", "three_wide")
+            } else if now - since > 2.5 {
+                ("STILL THERE", "still_there")
+            } else if low {
+                ("CAR LOW", "car_low")
+            } else {
+                ("CAR HIGH", "car_high")
+            };
+            (Some(c.to_string()), Some(v.to_string()))
         } else {
             if sp.alongside_since.take().is_some() {
                 sp.clear_at = Some(now);
             }
-            sp.clear_at.filter(|t| now - t < 1.2).map(|_| "CLEAR".to_string())
+            let side = sp.side;
+            let on = sp.clear_at.filter(|t| now - t < 1.2).is_some();
+            (on.then(|| "CLEAR".to_string()), on.then(|| if side.is_empty() { "clear".to_string() } else { format!("clear_{side}") }))
         };
         Hud {
             call,
+            voice,
             position,
             cars: cars.len(),
             lap,

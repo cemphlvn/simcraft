@@ -1,7 +1,8 @@
 // The race from the driver's seat of your car (the drive view, docs/architecture.md). The track and where it sits in
 // the world come from game.ron (`track:`); this file says how it looks, how the head moves, and how the keys drive.
 // Keys: up throttle, down brake, left/right steer (ramped, less at speed), A/Z paddles up/down, Backspace reverse,
-// C cockpit/chase, O autopilot, P pause, R restart, M mute, Esc quit.
+// T line steering / manual, C cockpit/chase/top-down, Tab ride on board the next car, O autopilot, P pause,
+// R restart, M mute, Esc quit.
 Drive(
     cars: "car",
     you: ("human", 1),
@@ -27,8 +28,12 @@ Drive(
             (key: "z", action: "shift", args: { "dir": -1 }),
             // Reverse in, and out on the next press.
             (key: "backspace", action: "reverse", toggle: "on"),
+            // Line steering (2, how the game starts you) and manual (0), in turn.
+            (key: "t", action: "assist", toggle: "mode", values: (2, 0)),
         ],
     ),
+    // From outside, the line you steer by, faint on the road ahead (while line steering is on).
+    line_marker: (prop: "line", when: ("pilot", 2)),
     // O and `--auto`: the game's own driver takes your car, and gives it back.
     autopilot: (action: "autopilot", arg: "on"),
     look: (
@@ -74,6 +79,15 @@ Drive(
             ((30, 150, 70), (245, 245, 245)),   // 6: green and white
             ((120, 40, 150), (250, 196, 30)),   // 7: purple and gold
         ],
+    ),
+    sound: (
+        // The spotter on the radio (assets/race/voice): each call says the first line that exists. Car low has no
+        // line of its own yet ("inside" says it); clear after a car low or high says which, else plain "clear".
+        voice: (dir: "race/voice", lines: {
+            "car_low": ["car_low", "inside"],
+            "clear_low": ["clear_low", "clear"],
+            "clear_high": ["clear_high", "clear"],
+        }),
     ),
     units: "mph",
     screen: (1440, 810),
