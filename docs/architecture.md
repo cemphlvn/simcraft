@@ -324,6 +324,8 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
 - **Intent (props the car reads; rules, actions or the autopilot write them):**
   - `throttle` and `brake`, 0..1000;
   - `steer`, -1000 (right) to 1000 (left);
+  - `shift` +1 or -1 asks for a gear up or down when `manual` is 1 (otherwise the gearbox shifts itself);
+  - `aids` 1 turns on traction control and ABS (the autopilot always drives with them);
   - `pilot` 1 hands the car to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰
     of its planned limit;
   - `grid` N puts the car in grid slot N on its first tick.
@@ -331,6 +333,7 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - `px`, `py`, and `vx`, `vy` in mm per tick;
   - `yaw`, 65536 a turn, counterclockwise from +x;
   - `speed` (mm/s), `g_long` and `g_lat` (mm/s², what the driver feels);
+  - `rpm` and `gear`;
   - `track_s` and `track_off` (mm along the track and left of its centreline);
   - the full-precision physics state in hidden props (`_x`, `_vx`, `_yaw`, ...), so hashes, snapshots and replays
     cover cars without anything new.
@@ -338,6 +341,9 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - a dynamic bicycle: slip-angle tyres, linear to the limit then sliding, a friction circle shared with drive
     and brakes;
   - load transfer, downforce and banking;
+  - a drivetrain: the torque curve at the rpm the gear gives, a slipping clutch pulling away, a limiter, engine
+    braking, and a sequential gearbox (automatic at the optimal shift points, or manual) with a torque cut per
+    shift;
   - the kinematic bicycle at walking pace;
   - 8 sub-steps a tick;
   - aids: traction control and ABS.
@@ -352,8 +358,7 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - oracle tests against textbook vehicle dynamics (`sim-physics`);
   - `simcraft-physics-bench` scenes, including `lap`, a stock car on the Charlotte-sized oval against the real
     pole (`games/race/LAPS.md`).
-- **Not yet:** contact between cars (they pass through each other), a gearbox and RPM (layer 3), and suspension
-  (layer 4).
+- **Not yet:** contact between cars (they pass through each other) and suspension (layer 4).
 
 ## Renderer (`sim-render`)
 

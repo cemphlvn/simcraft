@@ -34,9 +34,11 @@ pub const VEHICLE_PROPS: [&str; 17] = [
 ];
 
 /// Intent a vehicle reads (a rule, an action or the autopilot writes it): throttle and brake 0..1000, steer
-/// -1000 (right)..1000 (left); `pilot` 1 hands the car to the autopilot, driving `line` mm left of the centreline
-/// at `pace` ‰ of the plan (1000 by default); `grid` places the car on the starting grid (slot 1, 2, ...).
-pub const VEHICLE_INPUTS: [&str; 7] = ["throttle", "brake", "steer", "pilot", "line", "pace", "grid"];
+/// -1000 (right)..1000 (left); `shift` +1 / -1 asks the gearbox for a gear up or down (taken and cleared), when
+/// `manual` is 1 (else it shifts itself); `aids` 1 turns on traction control and ABS; `pilot` 1 hands the car to the
+/// autopilot, driving `line` mm left of the centreline at `pace` ‰ of the plan (1000 by default); `grid` places
+/// the car on the starting grid (slot 1, 2, ...).
+pub const VEHICLE_INPUTS: [&str; 10] = ["throttle", "brake", "steer", "shift", "manual", "aids", "pilot", "line", "pace", "grid"];
 
 /// The starting grid, behind the start line: rows `spacing` apart, `columns` side by side `gap` apart (mm).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,8 +163,13 @@ impl World {
                 let i = fleet.add(p, Fx(get("_x")), Fx(get("_y")), Angle(get("_yaw")));
                 (fleet.vx[i], fleet.vy[i], fleet.yaw_rate[i]) = (Fx(get("_vx")), Fx(get("_vy")), Fx(get("_r")));
                 (fleet.accel_long[i], fleet.tyre_lat[i]) = (Fx(get("_ax")), Fx(get("_lat")));
+                (fleet.gear[i], fleet.rpm[i], fleet.shift_cut[i]) = (get("gear").max(1), Fx(get("_rpm")), get("_cut"));
                 i
             };
+            fleet.manual[i] = get("manual") > 0;
+            fleet.shift[i] = get("shift").signum();
+            fleet.traction_control[i] = get("aids") > 0;
+            fleet.abs[i] = get("aids") > 0;
             fleet.throttle[i] = Fx::ratio(get("throttle").clamp(0, 1000), 1000);
             fleet.brake[i] = Fx::ratio(get("brake").clamp(0, 1000), 1000);
             fleet.steer[i] = Fx::ratio(get("steer").clamp(-1000, 1000), 1000);
@@ -204,6 +211,11 @@ impl World {
                 ("throttle", mm(fleet.throttle[i])),
                 ("brake", mm(fleet.brake[i])),
                 ("steer", mm(fleet.steer[i])),
+                ("rpm", fleet.rpm[i].round()),
+                ("gear", fleet.gear[i]),
+                ("shift", 0),
+                ("_rpm", fleet.rpm[i].0),
+                ("_cut", fleet.shift_cut[i]),
                 ("_on", 1),
                 ("_x", fleet.x[i].0),
                 ("_y", fleet.y[i].0),

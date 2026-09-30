@@ -9,8 +9,12 @@
 //! Layer 2 of the model (`driving-physics.md` §2): a dynamic bicycle. Each axle's tyres make a lateral force from
 //! their slip angle, linear up to the grip limit and then sliding (a friction circle shared with braking and
 //! driving), under a load that shifts with braking, acceleration, downforce and banking. Below walking pace, where
-//! slip angles mean nothing, it blends into the kinematic bicycle (layer 1). The longitudinal force is still a
-//! stand-in for the drivetrain (layer 3): first-gear torque, then the engine's peak power.
+//! slip angles mean nothing, it blends into the kinematic bicycle (layer 1).
+//!
+//! Layer 3, the drivetrain: the engine turns at the wheels' speed through the gear it is in (a slipping clutch
+//! holds it near its torque peak when pulling away), makes the torque its dyno curve gives at that rpm (none at the
+//! limiter; engine braking off the throttle), multiplied by the gear and final drive. A sequential gearbox shifts
+//! by itself (automatic) or on request, cutting the torque for a moment each shift.
 //!
 //! The car moves on a plane; a banked road enters as its slope (`bank`, `bank_dir`), which the caller reads from
 //! the track under each car: gravity pulls it downslope, and the slope presses the tyres harder into a banked
@@ -229,9 +233,38 @@ pub struct Params {
     /// N.
     pub rolling: Fx,
     pub substeps: i64,
+    // The drivetrain: each gear's ratio times the final drive (first gear first), the torque curve (rpm, Nm),
+    // idle and redline (rpm), where the torque peaks (a slipping clutch holds the engine there pulling away), the
+    // engine braking at the redline (Nm), the efficiency to the wheels and the tyre radius (m).
+    pub ratios: Vec<Fx>,
+    pub torque: Vec<(i64, i64)>,
+    pub idle: Fx,
+    pub redline: Fx,
+    pub launch: Fx,
+    pub engine_brake: Fx,
+    pub efficiency: Fx,
+    pub radius: Fx,
 }
 
 impl Params {
+    /// Engine rpm per m/s of road speed in gear `g` (1-based).
+    pub fn rpm_per_speed(&self, g: i64) -> Fx {
+        let ratio = self.ratios[(g.clamp(1, self.ratios.len() as i64) - 1) as usize];
+        ratio * 60 / (self.radius * crate::fixed::TWO_PI)
+    }
+
+    /// Force at the wheels in gear `g` at `rpm` with the throttle at `throttle` (0..1), N; negative is engine
+    /// braking.
+    pub fn wheel_force(&self, g: i64, rpm: Fx, throttle: Fx) -> Fx {
+        let ratio = self.ratios[(g.clamp(1, self.ratios.len() as i64) - 1) as usize];
+        let torque = if rpm >= self.redline {
+            Fx::ZERO
+        } else {
+            Fx::int(curve(&self.torque, rpm.floor())) * throttle - self.engine_brake * (Fx::ONE - throttle) * rpm / self.redline
+        };
+        torque * ratio * self.efficiency / self.radius
+    }
+
     pub fn new(d: &VehicleDef) -> Params {
         let mass = Fx::int(d.mass);
         let wheelbase = Fx::ratio(d.wheelbase, 1000);
@@ -280,12 +313,18 @@ impl Params {
             aero_front: Fx::ratio(d.aero_front, 100),
             rolling: weight * Fx::ratio(d.rolling, 1000),
             substeps: d.substeps.clamp(1, 64),
+            ratios: d.gears.iter().map(|&g| Fx::ratio(g, 1000) * Fx::ratio(d.final_drive, 1000)).collect(),
+            torque: d.engine.torque_curve.clone(),
+            idle: Fx::int(d.engine.idle),
+            redline: Fx::int(d.engine.redline),
+            launch: Fx::int(d.engine.torque_curve.iter().max_by_key(|&&(_, t)| t).map_or(d.engine.idle, |&(r, _)| r)),
+            engine_brake: Fx::int(peak_torque) / 10,
+            efficiency: eff,
+            radius,
         }
     }
 }
 
-/// Below this speed the power limit would divide by almost nothing; first gear's force caps it anyway (m/s).
-const CRAWL: Fx = Fx::ratio(1, 2);
 /// The share of an axle's remaining grip the driver aids let the engine or brakes use.
 const AID_MARGIN: Fx = Fx::ratio(85, 100);
 
@@ -336,6 +375,14 @@ pub struct Fleet {
     // braking has none left to steer with, and a car that loses the rear that way spins).
     pub traction_control: Vec<bool>,
     pub abs: Vec<bool>,
+    // The gearbox: the gear engaged (1-based), a shift asked for (+1 up, -1 down; taken and cleared), whether the
+    // driver shifts (else it shifts itself), and how many physics steps of the torque cut a shift has left.
+    pub gear: Vec<i64>,
+    pub shift: Vec<i64>,
+    pub manual: Vec<bool>,
+    pub shift_cut: Vec<i64>,
+    /// Engine speed, rpm (an output: the dash, the sound).
+    pub rpm: Vec<Fx>,
     // The surface under each car, written by whoever knows the track: its slope, the direction it falls, and a
     // grip factor (1 on the racing surface; grass, wet, marbles less).
     pub bank: Vec<Angle>,
@@ -383,6 +430,12 @@ impl Fleet {
         self.yaw.push(yaw);
         self.traction_control.push(false);
         self.abs.push(false);
+        self.gear.push(1);
+        self.shift.push(0);
+        self.manual.push(false);
+        self.shift_cut.push(0);
+        let idle = self.params[i].idle;
+        self.rpm.push(idle);
         self.bank.push(Angle::ZERO);
         self.bank_dir.push(Angle::ZERO);
         self.surface.push(Fx::ONE);
@@ -443,7 +496,8 @@ impl Fleet {
             let grip = p.grip * self.surface[i];
 
             // Driving and braking, each axle capped by its grip.
-            let drive = p.drive_max.min(p.power_max / vx.max(CRAWL)) * self.throttle[i];
+            // The engine through the gearbox (nothing while a shift cuts the torque).
+            let drive = if self.shift_cut[i] > 0 { Fx::ZERO } else { p.wheel_force(self.gear[i], self.rpm[i], self.throttle[i]) };
             let moving = if vx > Fx::ZERO { Fx::ONE } else { Fx::ZERO };
             let brake = p.brake_max * self.brake[i] * moving;
             let cap = |f: Fx, n: Fx| f.clamp(-(grip * n), grip * n);
@@ -516,7 +570,39 @@ impl Fleet {
             self.x[i] += (nvx * c - nvy * s) / rate;
             self.y[i] += (nvx * s + nvy * c) / rate;
             self.yaw[i] = (self.yaw[i] + Angle(Angle::radians(nr).0 / rate)).wrapped();
+            self.gearbox(i, rate);
         }
+    }
+
+    /// The gearbox and the engine's speed, after the wheels have moved.
+    fn gearbox(&mut self, i: usize, rate: i64) {
+        let p = &self.params[i];
+        let top = p.ratios.len() as i64;
+        let cut = (rate / 20).max(1); // a sequential shift: ~50 ms without torque
+        self.shift_cut[i] = (self.shift_cut[i] - 1).max(0);
+        let at = |g: i64| self.vx[i] * p.rpm_per_speed(g);
+        // The optimal shift point: up when the next gear pulls at least as hard at the wheels (or at the limiter),
+        // down when the gear below pulls a clear 10 % harder and has room under the redline (kickdown); the margin
+        // keeps it from hunting between two gears.
+        let pull = |g: i64| p.wheel_force(g, at(g), Fx::ONE);
+        let g = self.gear[i];
+        let wanted = if self.manual[i] {
+            std::mem::take(&mut self.shift[i]).signum()
+        } else if g < top && (at(g) >= p.redline * Fx::ratio(97, 100) || (at(g + 1) > p.idle && pull(g + 1) >= pull(g))) {
+            1
+        } else if g > 1 && at(g - 1) < p.redline * Fx::ratio(90, 100) && pull(g - 1) > pull(g) * Fx::ratio(110, 100) {
+            -1
+        } else {
+            0
+        };
+        if wanted != 0 && (1..=top).contains(&(g + wanted)) && self.shift_cut[i] == 0 {
+            self.gear[i] = g + wanted;
+            self.shift_cut[i] = cut;
+        }
+        // Coupled to the wheels, or, pulling away, held up by the slipping clutch toward the torque peak.
+        let coupled = at(self.gear[i]);
+        let slipping = p.idle + (p.launch - p.idle) * self.throttle[i];
+        self.rpm[i] = coupled.max(slipping).max(p.idle);
     }
 
     /// A fingerprint of every car's state: two runs agree bit for bit or they differ here (FNV-1a).
@@ -554,7 +640,9 @@ mod tests {
         let mut d = hatchback();
         d.drag = 0;
         d.rolling = 0;
-        Params::new(&d)
+        let mut p = Params::new(&d);
+        p.engine_brake = Fx::ZERO;
+        p
     }
 
     fn g() -> f64 {
@@ -714,22 +802,101 @@ mod tests {
     }
 
     #[test]
-    fn top_speed_is_where_power_meets_drag() {
+    fn top_speed_is_where_the_engine_meets_drag() {
+        // Flat out: the speed where the best gear's wheel force (the torque curve at that gear's rpm) meets drag and
+        // rolling resistance. The best gear need not be the top one (a tall sixth is an overdrive).
         let mut fleet = Fleet::default();
         let p = Params::new(&hatchback());
-        let (pw, k, roll) = (f(p.power_max), f(p.drag_k), f(p.rolling));
-        fleet.add(p, Fx::ZERO, Fx::ZERO, Angle::ZERO);
+        let gears = p.ratios.len() as i64;
+        let (k, roll) = (f(p.drag_k), f(p.rolling));
+        let force = |g: i64, v: f64| f(p.wheel_force(g, Fx((v * f(p.rpm_per_speed(g)) * 65536.0) as i64), Fx::ONE));
+        let best = |v: f64| (1..=gears).max_by(|&a, &b| force(a, v).total_cmp(&force(b, v))).unwrap_or(1);
+        let push = |v: f64| force(best(v), v);
+        let (mut lo, mut hi) = (0.0, 200.0);
+        for _ in 0..100 {
+            let v: f64 = (lo + hi) / 2.0;
+            if push(v) > roll + k * v * v { lo = v } else { hi = v }
+        }
+        fleet.add(p.clone(), Fx::ZERO, Fx::ZERO, Angle::ZERO);
         fleet.throttle[0] = Fx::ONE;
         for _ in 0..60 * 240 {
             fleet.step(60);
         }
-        // Solve P = (roll + k·v²)·v for v, by bisection.
-        let (mut lo, mut hi) = (0.0, 200.0);
-        for _ in 0..100 {
-            let v: f64 = (lo + hi) / 2.0;
-            if (roll + k * v * v) * v < pw { lo = v } else { hi = v }
-        }
+        assert_eq!(fleet.gear[0], best(lo), "flat out ends in the gear that pulls hardest there");
         assert!((f(fleet.vx[0]) - lo).abs() < 0.02 * lo, "top speed {} m/s vs {lo}", f(fleet.vx[0]));
+    }
+
+    #[test]
+    fn the_gearbox_climbs_through_every_gear_without_passing_the_redline() {
+        // Full throttle from rest: first to top, each upshift where it gains drive, the engine never past the redline.
+        let p = Params::new(&hatchback());
+        let (red, gears) = (f(p.redline), p.ratios.len() as i64);
+        let mut fleet = Fleet::default();
+        fleet.add(p, Fx::ZERO, Fx::ZERO, Angle::ZERO);
+        fleet.throttle[0] = Fx::ONE;
+        let (mut last, mut shifts, mut worst) = (1, Vec::new(), 0f64);
+        for _ in 0..60 * 60 {
+            fleet.step(60);
+            worst = worst.max(f(fleet.rpm[0]));
+            if fleet.gear[0] != last {
+                shifts.push((last, fleet.gear[0], f(fleet.vx[0])));
+                last = fleet.gear[0];
+            }
+        }
+        // It ends in the gear that pulls hardest at the speed it reached.
+        let p = &fleet.params[0];
+        let v = f(fleet.vx[0]);
+        let force = |g: i64| f(p.wheel_force(g, Fx((v * f(p.rpm_per_speed(g)) * 65536.0) as i64), Fx::ONE));
+        let best = (1..=gears).max_by(|&a, &b| force(a).total_cmp(&force(b))).unwrap_or(1);
+        assert_eq!(last, best, "{shifts:?}");
+        assert!(shifts.iter().all(|&(a, b, _)| b == a + 1), "only upshifts, one at a time: {shifts:?}");
+        assert!(worst <= red * 1.001, "the engine reached {worst} rpm (redline {red})");
+        // Each upshift where the next gear pulls at least as hard, or at the limiter: never one that loses drive.
+        for &(from, to, v) in &shifts {
+            let pull = |g: i64| f(p.wheel_force(g, Fx(((v * f(p.rpm_per_speed(g))) * 65536.0) as i64), Fx::ONE));
+            let rpm = v * f(p.rpm_per_speed(from));
+            assert!(pull(to) >= pull(from) * 0.97 || rpm >= red * 0.96, "{from}→{to} at {rpm:.0} rpm lost drive");
+        }
+    }
+
+    #[test]
+    fn off_the_throttle_the_engine_brakes() {
+        // Coasting in gear slows the car faster than drag and rolling resistance alone would.
+        let coast = |engine: bool| {
+            let mut p = Params::new(&hatchback());
+            if !engine {
+                p.engine_brake = Fx::ZERO;
+            }
+            let mut fleet = Fleet::default();
+            fleet.add(p, Fx::ZERO, Fx::ZERO, Angle::ZERO);
+            fleet.vx[0] = Fx::int(25);
+            fleet.gear[0] = 3;
+            fleet.manual[0] = true;
+            for _ in 0..60 * 3 {
+                fleet.step(60);
+            }
+            f(fleet.vx[0])
+        };
+        let (with, without) = (coast(true), coast(false));
+        assert!(with < without - 0.2, "engine braking: {with} m/s vs {without} m/s coasting free");
+    }
+
+    #[test]
+    fn a_manual_shift_happens_once_per_request() {
+        let mut fleet = Fleet::default();
+        fleet.add(Params::new(&hatchback()), Fx::ZERO, Fx::ZERO, Angle::ZERO);
+        fleet.manual[0] = true;
+        fleet.vx[0] = Fx::int(20);
+        fleet.shift[0] = 1;
+        fleet.step(60);
+        assert_eq!(fleet.gear[0], 2);
+        fleet.step(60);
+        assert_eq!(fleet.gear[0], 2, "a request is taken once, not held");
+        fleet.shift[0] = -1;
+        fleet.step(60);
+        fleet.shift[0] = -1;
+        fleet.step(60);
+        assert_eq!(fleet.gear[0], 1, "down twice from second: first, and no lower");
     }
 
     #[test]
@@ -756,6 +923,6 @@ mod tests {
         let h = run();
         assert_eq!(h, run());
         // The recorded fingerprint: a change here means every car drives differently. Say why before updating it.
-        assert_eq!(h, 0x7654_def0_1373_4482, "fleet hash {h:#x}");
+        assert_eq!(h, 0x0cfa_64f5_5ebb_cbe8, "fleet hash {h:#x}");
     }
 }

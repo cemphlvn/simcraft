@@ -30,7 +30,7 @@ Game(
         // First tick: a grid slot for everyone; the player drives, the rest get the autopilot.
         (name: "grid", for: "car", when: "tick == 0",
          then: [ Set("grid", "me.id"), Set("human", "if me.id == p.player_id { 1 } else { 0 }"),
-                 Set("pilot", "if me.id == p.player_id { 0 } else { 1 }"),
+                 Set("pilot", "if me.id == p.player_id { 0 } else { 1 }"), Set("aids", "1"),
                  Set("pace", "p.pace_top - (me.id - 2) * p.pace_step"),
                  Set("line", "(me.id % p.lines - 1) * p.line_step") ]),
         // Crossing the start/finish line: a lap, and its time.
@@ -41,8 +41,11 @@ Game(
         (name: "odometer", for: "car", when: "true", then: [ Set("last_s", "me.track_s") ]),
     ],
 
-    // Your hands and feet: throttle and brake 0..1000, steering -1000 (right)..1000 (left).
+    // Your hands and feet: throttle and brake 0..1000, steering -1000 (right)..1000 (left); paddles for the
+    // sequential gearbox (the first press takes it off automatic).
     actions: [
+        (name: "shift", for: "car", args: ["dir"], when: "me.human == 1 && (arg.dir == 1 || arg.dir == -1)",
+         then: [ Set("manual", "1"), Set("shift", "arg.dir") ]),
         (name: "drive", for: "car", args: ["throttle", "brake", "steer"], when: "me.human == 1",
          then: [ Set("throttle", "clamp(arg.throttle, 0, 1000)"), Set("brake", "clamp(arg.brake, 0, 1000)"),
                  Set("steer", "clamp(arg.steer, -1000, 1000)") ]),

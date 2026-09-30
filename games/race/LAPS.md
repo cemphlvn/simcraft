@@ -28,3 +28,5 @@ toward the real lap time is setup, not proof: say which number moved and why.
 | 6 | car: slick cornering stiffness 18 → 30 %/° (grip peaks near 5° of slip); track: dogleg radius 300 → 500 m (est) | never | 29.85 | — | — | plan 1.7 % off; the pilot now swings: Stanley's angle term asks for ~4 g per degree at 80 m/s |
 | 7 | pilot: no Stanley term (pure pursuit only) | 31.45 | 29.85 | 19.4 | 2.79 | first clean laps; the car runs wide: 1 s of look-ahead is 80 m |
 | 8 | pilot: look-ahead 0.4 s, pedal gain 1 (probed: 0.3–1 s × 0.1–1) | **30.35** | 29.85 | 4.2 | 3.25 | 3.4 % off the pole; the plan is a little conservative (pace 1.02 laps 29.95) |
+| 9 | driver aids (traction control, ABS) for the pilot; standing starts (`standing=1`) | 30.37 | 29.85 | 4.2 | 3.25 | from rest the pilot's lift was outvoted (applied before clamping) and 670 hp on the rear spun the car; with TC it launches cleanly |
+| 10 | drivetrain: torque curve at the gear's rpm, optimal-point automatic gearbox, engine braking | 30.43 | 29.85 | 4.1 | 3.23 | the stand-in (peak power at every speed) cost only 0.06 s here: an oval is flat out in 5th at ~8,500 rpm |
