@@ -24,3 +24,12 @@ up and down), 44.1 kHz or higher, at least 5 s, no talking/music.
 
 If one engine recording covers a steady sweep from idle to redline, that single file (`engine_sweep.*`) can
 replace the first three: I slice it into rpm bands.
+
+**It just works when dropped here.** The drive view looks in this folder first, then in `assets/race/audio/` (the
+copy to commit), with the names above (`squeal` is `tyre_squeal`; `games/race/drive.ron` `sound:` has the mapping).
+At load every file is mixed to mono (music and voice stay as they are), resampled to 44.1 kHz, loops made seamless
+(the last 0.1-0.2 s crossfaded into the start) and levelled, so the loops crossfade evenly. Engine loops are tagged
+with the rpm they were recorded at in drive.ron (idle 1,800, low 4,000, mid 6,200, high 8,800, off 6,000): change a
+number there if a recording sits elsewhere. A sweep is taken as linear in rpm from 2,000 to 9,500 over its length and
+cut into 6 loops of 0.6 s around each band's middle rpm (`sweep:` in drive.ron). Anything missing is synthesised (the
+engine, tyres, scrapes, hits, shifts, wind, crowd) or silent (pass-by, music); `simcraft-check games/race` lists which.

@@ -945,6 +945,26 @@ Drive(
   concrete wall, the catch fence leaning in, pit road behind its wall, grandstands with a crowd and a suite tower,
   a mowed infield, haulers, land and a tree line in the haze. Every picture is generated (`drive::geom`); cars sit on
   the surface there (height and tilt from `locate` and the ground's slope, so on the apron too).
+- **Photographs** (`look.textures`, `drive::photos`): a surface → `(file, size)` map (PNG or JPEG, next to the game or
+  in an `assets/` folder above it). Surfaces: `asphalt`, `apron`, `pit`, `grass` (tiled, `size` m a tile), `groove`
+  (the rubbered line: the asphalt's own triangles drawn again with the photo, streaked along the track, fading
+  across the line; the same vertices give the same depths, so it cannot z-fight), `safer`, `concrete`, `crowd`,
+  `suites`, `trees` (strips seamless along the wall or the ring, `size` their height, the length from the picture's
+  proportions), `sky` (a panorama as 32 cylinder slices round the eye, each quad the azimuths it covers, so it stays
+  put and tilts with the horizon; `size` degrees of horizon a copy, mirrored between copies), `dash` and `wheel`
+  (the cockpit's panel with the display and shift lights placed in its screen, `cockpit.display`/`lights`; the
+  wheel turning with the steer), `banner` (on a gantry over the track at `banner_at`), `sponsors` (`boards`: one
+  every N m on the catch fence, each the next of the picture's panels), `logo` (on the infield grass at `logos`).
+  A surface without a photo, or whose file is missing, keeps the generated picture; painted lines are plain paint
+  over either. Surfaces are sampled with 8× anisotropic filtering.
+- **Cars as a model** (`look.model: (file, forward, height)`, `look.liveries`, `drive::carmodel`): a glTF fitted once
+  into the car's frame (its nose axis named, scaled to the kind's `motion` footprint and the height given; the
+  right-handed file mirrored into the left-handed render space, winding kept) and drawn as one instance per car
+  (`skin::Instance`), in the frame and in the mirror. The livery is a per-instance tint: `tint.w` 2 paints the
+  model's white (bright, unsaturated texels) with the first colour and its rockers and two stripes (model frame)
+  with the second (`params`); glass, tyres and grilles keep theirs. Numbers are block-digit decals on a plate on
+  both doors and the roof (found on the fitted body), drawn within 150 m. Your car is hidden in the cockpit (the
+  hood through the glass takes its livery). No model, a missing file or a GPU without storage buffers: box cars.
 - **The cockpit camera** (`C`: chase): a fixed field of view (no zoom with speed); the head a spring-damper leaning
   against the felt g by millimetres (a Cup seat holds it), nodding under braking, jolted by `impact`; the horizon
   tilting with the banking, `level` of it taken back by the neck on a spring (the vestibular reflex); buzz growing
@@ -961,15 +981,41 @@ Drive(
   action once a tick when they change, like any press, so they land in the run log (`runs/`, `--replay`). Buttons are
   actions with fixed args or a `toggle` arg. The ramp takes a target in -1..1 per axis, so a gamepad or a wheel will
   set the target directly.
-- **Sound** (the host, never the simulation): the engine note synthesised from rpm and throttle (harmonics of the
-  four-stroke cycle, the firing order strongest, a V8's half order; a load-dependent rasp pulsed at the firing rate)
-  and wind with the square of speed, through `rodio`; `M` mutes.
+- **Sound** (`sound:`, the host, never the simulation; `drive::audio` decides, `drive::mixer` plays through `rodio`;
+  `M` mutes). A mixer with named buses (`buses`: engine, others, effects, voice, music) and a master `volume`;
+  recordings are looked for in `dirs` (WAV, FLAC, Ogg Vorbis, MP3) and any subset works:
+  - *your engine*: RPM-crossfaded loops (granular engine audio): each of `loops` is tagged with the rpm it was
+    recorded at and its load (`On`, `Off`, `Both`), played pitched by rpm / recorded rpm; the two loops nearest the
+    rpm crossfade at equal power, the throttle blends on-load into off-load at equal power; a loop whose file is
+    missing is played by the synthesiser with its share (harmonics of the four-stroke cycle, the firing order
+    strongest, a V8's half order, a rasp at the firing rate), so with no recordings it is the synthesised note.
+    `sweep: (file, from, to, bands, length)`: one steady recording from idle to redline, taken as linear in rpm
+    over its length, cut into `bands` loops of `length` s around the moment each band's middle rpm was reached,
+    each made seamless (its tail crossfaded into its head) and levelled to the same loudness;
+  - *the field*: every other car's engine (the same loops or the synthesiser) with distance attenuation (full within
+    `others.reference` m, falling by `rolloff`, silent past `max`), equal-power stereo pan by its bearing, and
+    Doppler from the closing speeds; `passby` (a recording) is started so its loudest moment lands at the car's
+    predicted closest approach;
+  - *effects* (a recording by role, `files`, else synthesised): tyre `squeal` from the tyres' slip (`_slip`), a
+    `scrape` while contact holds, an `impact` on a new hit (`impact` N·s), a `shift` clunk on a gear change, `wind`
+    with the square of speed, the `crowd` louder near the grandstands;
+  - *the spotter* (`voice: (dir, lines, gap, repeat, stale)`): the HUD's call (car low/high, three wide, still
+    there, clear low/high) says the first line found of its list; one line at a time, a gap after each, no repeat
+    within `repeat` s, a call that went stale waiting dropped; the green flag when the field rolls, the checkered
+    at the end, a wreck ahead (hooks for a white flag: a line named `white_flag`);
+  - *music*: `music_menu` on the grid before the green (`countdown` s in the window) and while paused,
+    `music_results` after the checkered, none while racing; faded, and ducked under your engine (`duck`).
+  `simcraft-check` lists every recording found and what plays in place of each missing one.
 - **Measured** (`simcraft-play <game> --feel [--record N]`, `drive::feel_probe`, the autopilot driving you at 60
   frames a second): `stall`, `eye_jerk` (99th percentile; `eye_jerk_max` is contact), `head_g_lag` (ms by which the
   head follows sideways g), `horizon_error` (degrees between the drawn roll and the neck's aim), `horizon_deg`,
   `head_max_mm`, `felt_g_max`, `offset` (where the car ran across the track), tick and frame cost, `p99_ms`,
-  `over_8ms`. `simcraft-check` checks the kind (moving, controllable), that the action's args are the axes, the
-  buttons' and the autopilot's actions and args.
+  `over_8ms`. `--bench N` renders N whole frames offscreen at the window's size (mirror included) and waits for the
+  GPU: sim, compose and GPU means, the frame's p99 and frames over 8 ms (8 model cars + mirror at 1440×810: p99
+  about 6 ms in the cockpit). `simcraft-check` checks the kind (moving, controllable), that the action's args are the
+  axes, the buttons' and the autopilot's actions and args, and lists the photos, the model and the recordings.
+- **Line steering** (a game's choice, `games/race`): `T` toggles a button whose `toggle` sends two given `values`;
+  `line_marker: (prop, when)` draws the line the car steers by as a faint ribbon on the road ahead from outside.
 
 ## Input: actions, schemes and contexts (`input.ron`)
 
