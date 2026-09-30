@@ -46,7 +46,8 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | Crate | Contents | Knows the game? |
 |---|---|---|
 | `sim-core` | `World` (entities + cell grid + per-kind index, mutation only via methods), `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash, snapshot/restore | No |
-| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). Plan: `docs/plans/physics-and-vehicles.md` | No |
+| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). `verlet`: points and constraints (ropes, chains, struts; see Constraints). Plan: `docs/plans/physics-and-vehicles.md` | No |
+| `sim-mobile` | The mobile core (see Mobile core): the iOS/Android shell (winit + wgpu), gestures, screen layers, haptics; a static library for Xcode and a shared library for Gradle | No |
 | `sim-state` | State charts: nested states, layers, reusable machines, remember, interrupt/back, pick; memory encoding; selectors; step distances. Guards and actions are generic (`G`, `A`) | No (not even Rhai) |
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
@@ -307,6 +308,22 @@ weighed: `docs/research/continuous-time.md`. Kinds without `motion` are untouche
   At the start, moving kinds from `[spawn]` take one cell each.
 - **Checked:** a moving kind cannot be `solid` or `cling` (it moves by velocity, not by steps), and its game
   cannot declare the engine-owned props itself.
+
+## Constraints (`sim_physics::verlet`)
+
+Physics comes in tiers, and a game uses the cheapest that gives its feel (`docs/research/mobile-types.md`): grid
+kinematics (tier 0), **constraints** (tier 1, here), rigid bodies (tier 2, growing from `contact`).
+
+- **Points:** position and previous position in `Fx` (velocity is their difference: Verlet), and an inverse weight
+  (`0` = pinned: nothing moves it). Gravity and a damping factor per step.
+- **Constraints** between two points with a rest length: `Distance` (a rod: pushes and pulls), `Max` (a rope: it
+  can go slack, it can't stretch), `Min` (a strut: it can't get shorter). A correction is split by inverse weight,
+  so a heavy load barely moves and a pinned point never does.
+- **Solving:** a fixed number of relaxation passes a step, constraints in their stored order, integer square
+  root: the same input gives the same points on every platform. Stretch left after the passes is kept; letting go
+  turns it into speed (the slingshot).
+- **Queries:** a rope's segments (for drawing and for swipe-across), its length and its tension (the largest
+  stretch left, for sound and haptics).
 
 ## Vehicles (`vehicle:` on a kind, `track:` in the game)
 
@@ -1090,7 +1107,46 @@ embedded, so the build is one self-contained artifact) and produces:
 | `macos` | `dist/<game>-macos/<Game>.app` (the layout a Steam or Epic depot takes; sign and notarize before upload) | Xcode command line tools |
 | `linux` / `windows` | native executable in `dist/<game>-<target>/` (Steam depots, Epic BuildPatchTool) | that target's toolchain |
 | `steam` | the native build plus SteamPipe scripts (`app_build.vdf`, one depot per OS) in `dist/<game>-steam/` | Steamworks app and depot ids (`--app`, `--depot`) |
-| `ios` / `android` | not yet: the same `sim-gpu` code, wrapped by Xcode / Gradle projects (IPA, AAB) | |
+| `ios` / `android` | `tools/mobile/build.sh ios\|android`: `sim-mobile` as a static library in an Xcode project (`xcodegen`; simulator, a paired iPhone over Wi-Fi with `ios phone`, and an archive for App Store Connect) or a shared library in a Gradle project (`NativeActivity`; APK for a device, AAB for Play) | Xcode 26 + iOS 26 SDK, `xcodegen`; JDK 17, Android SDK (API 36), NDK r28+ (16 KB pages), `cargo-ndk` |
+
+## Mobile core (`sim-mobile`)
+
+The phone is a host like any other: it displays, the core decides. The mobile core is designed from the types of
+casual mobile games (`docs/research/mobile-types.md`), not from any existing simcraft game.
+
+- **Shell.** winit + wgpu. iOS: `simcraft_mobile_main()` from a static library, called by the Xcode app's `main`.
+  Android: `android_main` in a shared library loaded by `NativeActivity`. On suspend the surface is dropped, on resume
+  it is recreated. Portrait.
+- **Loop.** A fixed simulation tick with interpolation between ticks; the frame rate never changes a result.
+- **Gestures** (`gesture`, pure and tested without a device): a finger's down, move and up become `Tap`, `Drag`,
+  `Swipe` and `Release` (pull and let go). The **swipe-across** test (the finger's segment this frame against a
+  shape's segments) catches or cuts a rope.
+- **Screen layers** (`layer`), back to front: `backdrop`, `board`, `pieces`, `fx`, `hud`, `overlay`. Every node has an
+  anchor (to the screen or to the safe area) and a render order. The HUD is a tree of controls bound to props and
+  actions; its art is a separate skin matched by node name (after AutoGameUI's split of UX and UI). The simulation
+  never sees a layer.
+- **Haptics** (`haptics`): `tap`, `thud`, `tick`, `rise`, `fall`, `buzz` with intensity and sharpness. No-op on the
+  desktop, Core Haptics on iOS, `VibrationEffect` on Android. Driven by bus events, never by the simulation.
+- **The player, compiled once.** A phone build (Xcode, Gradle) is slow and needs strong hardware, so it is not
+  the loop. The iOS and Android apps are one generic **simcraft player** each: all of `sim-mobile`, built once. A
+  mobile game is **data**: a scene file (board, ropes, pegs, bodies, HUD nodes, which event plays which haptic)
+  and its art, interpreted by the player. No game adds native code.
+- **Live link (development).** `simcraft serve <game>` on the developer's machine watches the game's files and
+  serves them on the local network. The player on a phone (or the iOS simulator, for anyone without a device)
+  connects (QR code or address), loads the bundle and reloads on every save. The phone sends back what happened on
+  it (touches as a replay, bus events, haptics played, frame times), so play on real hardware becomes eval data
+  next to the scripted players.
+- **Release.** The same player with the bundle embedded: publishing a game never compiles the engine.
+- **Desktop preview** (`simcraft-mobile`): the player in a phone-sized window, for quick checks; the phone is
+  where a game is judged.
+- **Mobile Capability Playground** (`playground`): where the mobile core's mechanics are tuned before a game uses
+  them, one card per capability, switched by tabs at the bottom of the safe area: `ROPE` (catch, pull, fling),
+  `TOUCH` (every finger with its id and trail; two fingers hold a rope's ends), `FEEL` (a pad for each haptic
+  kind, sliders for intensity and sharpness), `TILT` (a chain under the phone's real gravity, Core Motion). The
+  background is a workbench: a grid in world units (brighter every 4), marks where the safe area starts, and a
+  fading trail behind every finger, so distances, speeds and what the phone registered can be read by eye. Each
+  card adds its live values to the stats line. Sensors enter the simulation as whole numbers (tilt in
+  thousandths of g), so a replay includes them. Text is a 5×7 pixel font drawn with the same shapes.
 
 `simcraft-build --list` shows every target and whether this machine can build it.
 

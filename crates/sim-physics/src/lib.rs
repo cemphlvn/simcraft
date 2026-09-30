@@ -7,6 +7,7 @@ pub mod driver;
 pub mod fixed;
 pub mod track;
 pub mod vehicle;
+pub mod verlet;
 
 pub use driver::{Ahead, Pilot, Plan, ahead_of, sit_on};
 pub use fixed::{Angle, Fx, TURN, curve};

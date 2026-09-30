@@ -1,0 +1,35 @@
+[package]
+name = "sim-mobile"
+description = "The mobile core: iOS and Android shell (winit + wgpu), gestures, screen layers, haptics"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# A static library for the Xcode app, a shared library for Android's NativeActivity, and an ordinary library for
+# the desktop preview and tests (docs/architecture.md, Mobile core).
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "simcraft-mobile"
+path = "src/bin/simcraft-mobile.rs"
+
+[dependencies]
+sim-physics.workspace = true
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+# iOS: Core Haptics and Core Motion, through the same objc2 bindings wgpu already uses.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-haptics = "0.3"
+objc2-core-motion = "0.3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30", features = ["android-native-activity"] }
+
+[lints]
+workspace = true
