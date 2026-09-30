@@ -63,12 +63,30 @@ state back. Collisions stay queries (`touching`, `ahead`) plus rules until a gam
 
 ## Decided (from `docs/research/driving-physics.md`)
 
-- **Model layer:** kinematic bicycle first (a car that turns like a car), then dynamic bicycle with a linear,
-  saturating tyre and algebraic load transfer (§2 layers 2–4), plus the drivetrain (layer 6: torque curve, gears,
-  RPM), because "an engine simulator that builds any car" needs it. Not built: suspension springs (the only stiff
-  part, and the reason Assetto Corsa runs at 333+ Hz), tyre heat and wear, lab-fitted Pacejka, soft bodies.
-- **Step rate: 60 Hz, no sub-steps.** Nothing we build is stiff. If suspension is ever added, it sub-steps inside
-  the physics pass, and the game's tick stays 60 Hz.
+- **Model layers, in order, each measured before the next:**
+  1. Kinematic bicycle: a car that turns like a car.
+  2. Dynamic bicycle: a linear, saturating tyre with algebraic load transfer. The car can slide.
+  3. Drivetrain (layer 6): torque curve, gears, clutch, RPM, differential, brakes. Throttle and gears matter.
+  4. Four wheels with suspension (layer 5, the designer's call, 2026-09-30: "we are building a full car and
+     engine simulator"). Each corner gets a spring and a damper, plus anti-roll bars. The body gains heave, pitch
+     and roll, and each tyre's load comes from its spring instead of from the algebraic formula.
+
+  Not built: tyre heat and wear, lab-fitted Pacejka coefficients, soft bodies.
+- **Step rate: the game ticks at 60 Hz; suspension sub-steps inside the physics pass.** Suspension is the one
+  stiff part. The wheel mass bouncing on the tyre's stiffness (about 40 kg on 200 kN/m) oscillates near 11 Hz,
+  which is too close to 60 Hz for explicit integration. The pass therefore runs `substeps` per tick: vehicle
+  data, default 8 (480 Hz, inside Assetto Corsa's 333–1000 Hz). Sub-steps stay integers and deterministic, and
+  are invisible to rules, the hash cadence and replays. The number is measured, not guessed: the lowest one at
+  which a bump test settles the same way. If fixed point starts drifting at small sub-steps (Q16 of a metre per
+  1/480 s is coarse at walking speed), the energy and settling tests will show it, and the fix is more
+  fractional bits.
+- **Tests that keep the layers honest:**
+  - at low lateral acceleration, the four-wheel car's steady-state turn matches the bicycle model's;
+  - a car dropped on its springs settles at the static sag, `m·g/k`;
+  - an undamped spring conserves energy over a long run;
+  - the damping ratio from the data matches the measured decay.
+- **Road surface:** flat for now, so suspension shows through dive, squat, roll and their settling. Bumps and
+  kerbs need a surface height the physics can query, added with spline tracks.
 - **Numbers:** positions keep `FINE`. Inside `sim-physics`, a Q48.16 fixed-point type (Photon Quantum's format)
   with i128 intermediates. Angles are binary angles (a full turn is a power of two, so wraparound is free), and
   sin/cos come from a quarter-wave table generated at compile time with integer maths, interpolated. The slip
@@ -77,5 +95,8 @@ state back. Collisions stay queries (`touching`, `ahead`) plus rules until a gam
   gears, final drive, differential, drivetrain, brakes, tyre, steer lock, aero), with `0` meaning "derive it"
   (§6.3's rules of thumb, e.g. yaw inertia = mass × (0.45 × wheelbase)²). Trucks, buses and sports cars are just
   different numbers. A motorbike is not (lean is a missing state), so it is deferred.
+- **The schema gains** per-axle `spring_rate`, `damper_bump`, `damper_rebound`, `antiroll`, `ride_height`,
+  `unsprung_mass`, `tyre_rate`, and the vehicle-level `substeps`. As with the other fields, `0` means "derive it"
+  (e.g. spring rate from a target ride frequency).
 - **After the car:** analog input axes (in parallel with the vehicle), oriented-box SAT on top of the sweep and
   prune, and spline tracks with `track_dist`/`track_offset` later.
