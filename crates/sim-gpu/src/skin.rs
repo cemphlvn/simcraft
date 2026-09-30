@@ -52,10 +52,27 @@ struct VOut {
     @location(2) uv: vec2<f32>,
     @location(3) tint: vec4<f32>,
     @location(4) fog: f32,
+    // A livery (tint.w > 1.5): the second colour, and the point in the model's own frame (where the stripes go).
+    @location(5) second: vec3<f32>,
+    @location(6) local: vec3<f32>,
 };
 
 fn apply(r0: vec4<f32>, r1: vec4<f32>, r2: vec4<f32>, p: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(dot(r0, p), dot(r1, p), dot(r2, p));
+}
+
+fn skinned_local(v: VIn) -> vec3<f32> {
+    var p = vec3<f32>(0.0);
+    let t = v.params.x;
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        let w = v.weights[k];
+        if (w > 0.0) {
+            let a = v.frames.x + v.joints[k] * 3u;
+            let b = v.frames.y + v.joints[k] * 3u;
+            p = p + w * apply(mix(palette[a], palette[b], t), mix(palette[a + 1u], palette[b + 1u], t), mix(palette[a + 2u], palette[b + 2u], t), vec4<f32>(v.pos, 1.0));
+        }
+    }
+    return p;
 }
 
 fn skinned(v: VIn) -> array<vec3<f32>, 2> {
@@ -93,6 +110,8 @@ fn vs(v: VIn) -> VOut {
     o.uv = v.uv;
     o.tint = v.tint;
     o.fog = select(0.0, clamp((distance(world, g.eye.xyz) - g.range.x) / g.range.y, 0.0, 1.0), g.range.y > 0.0);
+    o.second = v.params.yzw;
+    o.local = select(vec3<f32>(0.0), skinned_local(v), v.tint.w > 1.5);
     return o;
 }
 
@@ -130,10 +149,29 @@ fn sunlit(p: vec3<f32>) -> f32 {
     return sum / 9.0;
 }
 
+// A livery on a white car (tint.w > 1.5): the paint (bright, unsaturated texels) takes the first colour, and the
+// second on the rockers and on two stripes over the hood, roof and deck (the model's frame: x right, y up, metres).
+// Glass, tyres, grilles and decals keep their own colours.
+fn livery(texel: vec3<f32>, first: vec3<f32>, second: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
+    let lum = dot(texel, vec3<f32>(0.299, 0.587, 0.114));
+    let hi = max(texel.r, max(texel.g, texel.b));
+    let sat = (hi - min(texel.r, min(texel.g, texel.b))) / max(hi, 1e-3);
+    let paint = smoothstep(0.35, 0.55, lum) * (1.0 - smoothstep(0.12, 0.3, sat));
+    let rocker = 1.0 - smoothstep(0.40, 0.42, p.y);
+    let ax = abs(p.x);
+    let stripes = smoothstep(0.08, 0.1, ax) * (1.0 - smoothstep(0.26, 0.28, ax)) * smoothstep(0.66, 0.7, p.y);
+    let col = mix(first, second, max(rocker, stripes));
+    // The paint keeps the photograph's shading (its brightness over white).
+    return mix(texel, col * min(lum / 0.75, 1.2), paint);
+}
+
 @fragment
 fn fs(v: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let texel = textureSample(base_t, samp, v.uv);
-    let base = texel.rgb * mat.base.rgb * v.tint.rgb;
+    var base = texel.rgb * mat.base.rgb * v.tint.rgb;
+    if (v.tint.w > 1.5) {
+        base = livery(texel.rgb * mat.base.rgb, v.tint.rgb, v.second, v.local);
+    }
     var n = normalize(v.normal);
     if (!front) {
         n = -n;
@@ -182,7 +220,8 @@ fn fs(v: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
 "#;
 
 /// One character: its world transform (the top three rows of an affine matrix), the palette offsets of the two
-/// frames it blends (in vec4s), the blend, and a tint (rgb, 1 = none).
+/// frames it blends (in vec4s), the blend, and a tint (rgb, 1 = none). A livery: `tint.w` 2 paints the model's
+/// white paint with `tint.rgb`, and its rockers and stripes with `params[1..4]` (linear colours).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Instance {

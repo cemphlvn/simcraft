@@ -12,6 +12,7 @@
 //! Render space: X = the track's x, Y = up, Z = the track's y (metres; see `scene`).
 
 pub mod car;
+pub mod carmodel;
 pub mod geom;
 pub mod photos;
 pub mod scene;
@@ -29,6 +30,7 @@ use crate::gpu::{Gpu, Mesh, World3};
 use crate::math::{Eye, V3};
 use crate::stage::{BLOB, Quad, WHITE, Wrap};
 use car::{CarLook, Dash, Parts};
+use carmodel::{CAR_MODEL, CarModel, Livery, ModelLook};
 use geom::{Frame, MIRROR, rect, rgb, text};
 use photos::Photos;
 use scene::{Centre, Ground, Scene, centre, fl, fx};
@@ -380,6 +382,11 @@ pub struct Look {
     pub logos: Vec<(f32, f32)>,
     /// The banner (`banner`) over the track on a gantry: where (m along the track from the start line).
     pub banner_at: f32,
+    /// The cars' model (a `.glb`, fitted to the kind's footprint); none, or missing: the view's own box cars.
+    pub model: Option<ModelLook>,
+    /// Paint schemes, in order of the cars' numbers: `((r, g, b), (r, g, b))`, the body and the second colour
+    /// (rockers, stripes, number plates). None: `car_colors`.
+    pub liveries: Vec<Livery>,
 }
 
 impl Default for Look {
@@ -414,6 +421,8 @@ impl Default for Look {
             boards: (45.0, 6),
             logos: Vec::new(),
             banner_at: 0.0,
+            model: None,
+            liveries: Vec::new(),
         }
     }
 }
@@ -715,6 +724,8 @@ pub struct Composer<'a> {
     pub track: &'a Track,
     pub ground: &'a Ground,
     pub photos: &'a Photos,
+    /// The cars' model, when the game has one (and the GPU can draw models).
+    pub car: Option<&'a CarModel>,
     pub sun: V3,
     pub w: f32,
     pub h: f32,
@@ -733,20 +744,28 @@ pub struct DriveFrame {
     pub meshes: Vec<Mesh>,
     /// How many of `meshes` (from the start) the mirror shows.
     pub mirror_meshes: usize,
+    /// Cars drawn with the model (instances), in the frame and the mirror.
+    pub models: Vec<crate::skin::ModelDraw>,
+    /// The sky and the ground's light on the models (linear).
+    pub ambient: ([f32; 3], [f32; 3]),
     pub front: Vec<Quad>,
     pub mirror: Option<(Eye, Vec<Quad>, (u32, u32))>,
 }
 
 impl DriveFrame {
     /// The 3D part for `eye`: the kept scene and `meshes`.
-    pub fn world3<'a>(&self, eye: &Eye, meshes: &'a [Mesh], w: f32, h: f32) -> World3<'a> {
+    pub fn world3<'a>(&'a self, eye: &Eye, meshes: &'a [Mesh], w: f32, h: f32) -> World3<'a> {
         let mut world = World3::new(eye.view_proj(w, h), self.fog, meshes);
         world.eye = [eye.pos.0, eye.pos.1, eye.pos.2];
         world.fog_range = self.fog_range;
         world.kept = &[SCENE_SLOT];
         world.haze = self.haze;
         world.light.sun_dir = [self.sun.0, self.sun.1, self.sun.2];
-        world.light.sun = self.sun_color;
+        world.models = &self.models;
+        // The models are lit in linear light (the scene's vertex light is sRGB): the sun a little over white.
+        world.light.sun = self.sun_color.map(|c| c.powf(2.2) * 2.4);
+        world.light.sky = self.ambient.0;
+        world.light.ground = self.ambient.1;
         world
     }
 }
@@ -1027,12 +1046,21 @@ impl Composer<'_> {
         })
     }
 
-    fn car_look(&self, c: &CarView) -> CarLook {
-        let colors = &self.look().car_colors;
+    /// A car's paint: its livery (by number), else two of the look's colours.
+    fn livery(&self, c: &CarView) -> Livery {
+        let look = self.look();
         let i = c.number.unsigned_abs() as usize;
-        let paint = colors.get(i % colors.len().max(1)).map_or([0.8, 0.1, 0.1], |c| rgb(*c));
-        let accent = colors.get((i + 3) % colors.len().max(1)).map_or([1.0; 3], |c| rgb(*c));
-        CarLook { paint, accent, number: c.number }
+        if !look.liveries.is_empty() {
+            return look.liveries[i % look.liveries.len()];
+        }
+        let colors = &look.car_colors;
+        let pick = |k: usize| colors.get(k % colors.len().max(1)).copied();
+        Livery(pick(i).unwrap_or((200, 25, 25)), pick(i + 3).unwrap_or((255, 255, 255)))
+    }
+
+    fn car_look(&self, c: &CarView) -> CarLook {
+        let l = self.livery(c);
+        CarLook { paint: rgb(l.0), accent: rgb(l.1), number: c.number }
     }
 
     /// The whole frame.
@@ -1047,6 +1075,7 @@ impl Composer<'_> {
             None => (Eye { pos: V3(0.0, 30.0, -60.0), target: V3(0.0, 0.0, 0.0), roll: 0.0, fov: 50.0, near: 0.1, far: 6000.0 }, None),
         };
         let mut parts = Parts::new(self.sun, self.photos);
+        let mut instances = Vec::new();
         for c in cars {
             let mine = c.you && you_frame.is_some();
             let fr = if mine { you_frame.expect("checked") } else { seat(self.track, self.ground, c, c.body.unwrap_or((0.0, 0.0))) };
@@ -1062,10 +1091,22 @@ impl Composer<'_> {
                     continue;
                 }
                 car::shadow(&mut parts.shadows, &fr);
-                car::body(&mut parts.bodies, &mut parts.text, &fr, &cl, c.steer, false);
+                match self.car {
+                    // The model: one instance; the number as decals while it can be read (and before depth
+                    // precision runs out for a decal a centimetre off the body).
+                    Some(m) => {
+                        let livery = self.livery(c);
+                        instances.push(m.instance(&fr, &livery));
+                        if d.dot(d) < 150.0 * 150.0 {
+                            m.decals(&mut parts.bodies, &fr, c.number, &livery);
+                        }
+                    }
+                    None => car::body(&mut parts.bodies, &mut parts.text, &fr, &cl, c.steer, false),
+                }
             }
         }
         let (meshes, mirror_meshes) = parts.meshes();
+        let models = if instances.is_empty() { Vec::new() } else { vec![crate::skin::ModelDraw { model: CAR_MODEL.into(), instances }] };
         let (w, h) = (self.w, self.h);
         let mut back = self.sky(&eye, w, h);
         let mirror = match (&self.drive.cockpit.mirror, you_frame, rig.view) {
@@ -1091,6 +1132,8 @@ impl Composer<'_> {
             haze: look.haze,
             meshes,
             mirror_meshes,
+            models,
+            ambient: (rgb(look.sky).map(|c| c.powf(2.2) * 0.9), rgb(look.ground).map(|c| c.powf(2.2) * 0.6)),
             front,
             mirror,
         }
@@ -1258,6 +1301,8 @@ pub struct DrivePlay {
     pub scene: Scene,
     /// The game's photographs (found when the view starts, decoded when uploaded).
     pub photos: Photos,
+    /// The cars' model, fitted (none: box cars).
+    pub car_model: Option<CarModel>,
     pub rig: Rig,
     pub time: f32,
     /// How far into the current tick the frame is (0..1).
@@ -1287,12 +1332,20 @@ impl DrivePlay {
         let photos = Photos::resolve(&drive.dir, &drive.look.textures);
         let scene = scene::build(&track, &drive.look, &photos);
         let rate = engine.rules().cfg.run.tick_rate.max(1) as f32;
+        let car_model = match load_car_model(&drive, engine.rules()) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("drive.ron: {e} (box cars instead)");
+                None
+            }
+        };
         let mut p = DrivePlay {
             engine,
             drive,
             track,
             scene,
             photos,
+            car_model,
             rig: Rig::default(),
             time: 0.0,
             alpha: 1.0,
@@ -1586,6 +1639,7 @@ impl DrivePlay {
             track: &self.track,
             ground: &self.scene.ground,
             photos: &self.photos,
+            car: self.car_model.as_ref(),
             sun: self.scene.sun,
             w,
             h,
@@ -1734,11 +1788,30 @@ pub fn upload_textures(gpu: &mut Gpu) {
 }
 
 impl DrivePlay {
-    /// Everything the view draws with onto the GPU: its own pictures and the game's photographs.
-    pub fn upload(&self, gpu: &mut Gpu) {
+    /// Everything the view draws with onto the GPU: its own pictures, the game's photographs, the cars' model (a
+    /// GPU without storage buffers draws box cars instead).
+    pub fn upload(&mut self, gpu: &mut Gpu) {
         upload_textures(gpu);
         self.photos.upload(gpu);
+        match &self.car_model {
+            Some(m) if gpu.models_supported() => gpu.upload_model(CAR_MODEL, &m.model, &BTreeMap::new()),
+            Some(_) => self.car_model = None,
+            None => {}
+        }
     }
+}
+
+/// The cars' model from `look.model`, fitted to the kind's footprint (its `motion` size: mm in a 1 m cell world).
+pub fn load_car_model(drive: &Drive, game: &Game) -> Result<Option<CarModel>, String> {
+    let Some(m) = &drive.look.model else { return Ok(None) };
+    let path = photos::find(&drive.dir, &m.file).ok_or_else(|| format!("look.model: {} not found", m.file))?;
+    let size = game
+        .def
+        .kinds
+        .get(&drive.cars)
+        .and_then(|k| k.motion.as_ref())
+        .map_or((2.0, 4.9), |mo| (mo.size.0 as f32 / 1000.0, mo.size.1 as f32 / 1000.0));
+    CarModel::load(&path, m, size).map(Some)
 }
 
 // ---------------------------------------------------------------- feel, measured

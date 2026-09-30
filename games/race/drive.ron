@@ -61,6 +61,19 @@ Drive(
         // backstretch infield.
         boards: (45.0, 6),
         logos: [ (-30.0, 14.0), (1207.0, 8.0) ],
+        // Every car is this model (its nose along -x in the file), fitted to the kind's 1,996 × 4,912 mm and a Cup
+        // car's 1.3 m; its white paint takes each car's livery: (body, rockers and stripes), by car number.
+        model: (file: "race/stock_car.glb", forward: "-x", height: 1.3),
+        liveries: [
+            ((20, 22, 26), (250, 196, 30)),     // 8, 16, ...: black and yellow
+            ((30, 80, 190), (245, 245, 245)),   // 1 (you): blue and white
+            ((200, 28, 34), (245, 245, 245)),   // 2: red and white
+            ((250, 196, 30), (30, 30, 34)),     // 3: yellow and black
+            ((240, 110, 20), (25, 40, 90)),     // 4: orange and navy
+            ((245, 245, 245), (200, 28, 34)),   // 5: white and red
+            ((30, 150, 70), (245, 245, 245)),   // 6: green and white
+            ((120, 40, 150), (250, 196, 30)),   // 7: purple and gold
+        ],
     ),
     units: "mph",
     screen: (1440, 810),

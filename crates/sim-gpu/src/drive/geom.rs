@@ -155,7 +155,7 @@ impl Builder {
 pub const CHARS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.:-+/# ";
 
 /// 5 × 7 glyphs, one byte a row, the high bit of the five on the left.
-fn glyph(c: char) -> [u8; 7] {
+pub fn glyph(c: char) -> [u8; 7] {
     match c {
         '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
         '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],

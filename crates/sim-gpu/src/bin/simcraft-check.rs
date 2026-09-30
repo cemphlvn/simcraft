@@ -188,6 +188,19 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
     if let Some(a) = &d.autopilot {
         want("autopilot".into(), &a.action, vec![&a.arg]);
     }
+    // The cars' model: loads and fits, or the view falls back to box cars (a mistake worth a warning).
+    match sim_gpu::drive::load_car_model(d, game) {
+        Ok(Some(m)) => r.notes.push(format!(
+            "drive model: {} triangles, fitted to {:.2} × {:.2} × {:.2} m, {} liveries",
+            m.model.triangles(),
+            m.size.0,
+            m.size.2,
+            m.size.1,
+            d.look.liveries.len()
+        )),
+        Ok(None) => r.notes.push("drive model: none (box cars)".into()),
+        Err(e) => r.warn(format!("drive.ron: {e} (box cars are drawn instead)")),
+    }
     // Pictures: a named one that is not there is a mistake (the surface quietly goes plain); the rest is listed.
     let photos = sim_gpu::drive::photos::Photos::resolve(&d.dir, &d.look.textures);
     for (k, why) in &photos.missing {
