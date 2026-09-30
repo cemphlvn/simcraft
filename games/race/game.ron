@@ -35,7 +35,9 @@ Game(
                  Set("line", "(me.id % p.lines - 1) * p.line_step") ]),
         // Crossing the start/finish line: a lap, and its time.
         (name: "lap", for: "car", when: "tick > 1 && me.track_s + p.half_lap < me.last_s",
-         then: [ Add("lap", "1"), Set("lap_ms", "(tick - me.lap_start) * 1000 / 60"), Set("lap_start", "tick"),
+         then: [ Add("lap", "1"),
+                 // The first crossing ends the run from the grid, not a lap: no time for it.
+                 Set("lap_ms", "if me.lap >= 1 { (tick - me.lap_start) * 1000 / 60 } else { 0 }"), Set("lap_start", "tick"),
                  Set("best_ms", "if me.lap > 0 && (me.best_ms == 0 || (tick - me.lap_start) * 1000 / 60 < me.best_ms) { (tick - me.lap_start) * 1000 / 60 } else { me.best_ms }"),
                  Emit("lap") ]),
         (name: "odometer", for: "car", when: "true", then: [ Set("last_s", "me.track_s") ]),

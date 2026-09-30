@@ -235,8 +235,7 @@ impl Pilot {
         } else {
             fleet.stuck[i] = 0;
         }
-        let backing = fleet.stuck[i] < 0;
-        fleet.reverse[i] = backing;
+        let mut backing = fleet.stuck[i] < 0;
         let edge = track.width / 2 - DODGE_EDGE;
         let (line, follow) = match ahead {
             Some(a) if (a.offset - plan.offset).abs() < DODGE_WIDTH && a.gap < LOOK => {
@@ -260,6 +259,14 @@ impl Pilot {
         let alpha = (Angle::atan2(dy, dx) - fleet.yaw[i]).signed();
         // Facing away from the line (after a spin), pure pursuit's sin α is near zero: turn at full lock instead.
         let behind = alpha.0.abs() > Angle::QUARTER.0;
+        // Backing out ends once the nose points within 60° of the line (it can drive on), or when time runs out.
+        if backing && alpha.0.abs() < Angle::turns(1, 6).0 {
+            fleet.stuck[i] = 0;
+            backing = false;
+        }
+        fleet.reverse[i] = backing;
+        // Still rolling the wrong way (just out of reverse, or pushed): stop first, then drive.
+        let rolling_back = !backing && v < -Fx::HALF;
         let dist = (dx * dx + dy * dy).sqrt().max(Fx::ONE);
         let pursue = p.wheelbase * alpha.sin() * 2 / dist;
         // Stanley's cross-track term (Thrun et al. 2006): steer back toward the line in proportion to how far
@@ -289,10 +296,23 @@ impl Pilot {
         let peak = p.grip / p.cornering;
         let used = driven.abs() / peak;
         let lift = ((Fx::ONE - used) * 10 / 3).clamp(Fx::ZERO, Fx::ONE);
-        fleet.throttle[i] = if backing { Fx::ratio(6, 10) } else { pedal.clamp(Fx::ZERO, Fx::ONE) * lift };
+        // Gently in reverse: 670 hp backwards across a track is its own accident (measured: 8 m/s).
+        fleet.throttle[i] = if backing {
+            Fx::ratio(3, 10)
+        } else if rolling_back {
+            Fx::ZERO
+        } else {
+            pedal.clamp(Fx::ZERO, Fx::ONE) * lift
+        };
         // The pilot drives with the aids on (a racing driver's feet do what they do).
         fleet.traction_control[i] = true;
         fleet.abs[i] = true;
-        fleet.brake[i] = if backing { Fx::ZERO } else { (-(error + Fx::ONE) * self.gain).clamp(Fx::ZERO, Fx::ONE) };
+        fleet.brake[i] = if backing {
+            Fx::ZERO
+        } else if rolling_back {
+            Fx::ONE
+        } else {
+            (-(error + Fx::ONE) * self.gain).clamp(Fx::ZERO, Fx::ONE)
+        };
     }
 }
