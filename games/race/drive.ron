@@ -22,6 +22,9 @@ Drive(
             "brake": (key: "down", rise_ms: 160.0, fall_ms: 100.0),
             // At 60 m/s and over only a tenth of the lock is left: an oval is taken with the wheel nearly straight.
             "steer": (neg: "right", pos: "left", rise_ms: 240.0, fall_ms: 180.0, speed_sensitive: (60.0, 0.1)),
+            // The same keys for line steering: how fast your line moves, the same at any speed (the steering
+            // wheel's speed sensitivity would slow the line to a crawl at racing speed).
+            "stick": (neg: "right", pos: "left", rise_ms: 120.0, fall_ms: 60.0),
         },
         buttons: [
             (key: "a", action: "shift", args: { "dir": 1 }),

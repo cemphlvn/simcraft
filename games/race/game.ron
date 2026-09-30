@@ -62,9 +62,9 @@ Game(
     actions: [
         (name: "shift", for: "car", args: ["dir"], when: "me.human == 1 && (arg.dir == 1 || arg.dir == -1)",
          then: [ Set("manual", "1"), Set("shift", "arg.dir") ]),
-        (name: "drive", for: "car", args: ["throttle", "brake", "steer"], when: "me.human == 1",
+        (name: "drive", for: "car", args: ["throttle", "brake", "steer", "stick"], when: "me.human == 1",
          then: [ Set("throttle", "clamp(arg.throttle, 0, 1000)"), Set("brake", "clamp(arg.brake, 0, 1000)"),
-                 Set("steer", "clamp(arg.steer, -1000, 1000)"), Set("stick", "clamp(arg.steer, -1000, 1000)") ]),
+                 Set("steer", "clamp(arg.steer, -1000, 1000)"), Set("stick", "clamp(arg.stick, -1000, 1000)") ]),
         // Reverse in (1) or out (0); and handing your car to the autopilot (1) or taking it back (0), aids on.
         (name: "reverse", for: "car", args: ["on"], when: "me.human == 1 && (arg.on == 0 || arg.on == 1)",
          then: [ Set("reverse", "arg.on") ]),
