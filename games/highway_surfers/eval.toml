@@ -1,0 +1,41 @@
+# What "better" means for highway_surfers (docs/evals.md). A scripted player (bot.py) plays every seed, so these
+# measure the game as played. Lengths are in seconds of game time: they survive a change of tick rate.
+# The feel (motion on screen, camera) is measured separately: FEEL.md.
+
+seeds = [1, 2, 3, 4, 5]
+max_seconds = 60
+sample_every = 30
+
+[player]
+module = "bot.py"
+args = { skill = 80 }       # notices a danger in time 80% of the time: a good player, not a perfect one
+every = 2                   # decides 30 times a second at 60 ticks a second
+near = 45                   # observes 45 cells around the surfer
+
+[metrics.survived_s]
+expr = "seconds"
+goal = "max"                # the score: how long a good player lasts (60 = the whole minute)
+
+[metrics.hits]
+expr = "events['crashed']"
+goal = "info"               # risk: how often the good player is hit (0 = no danger, too many = unfair)
+
+[metrics.landings_per_min]
+expr = "events['landed'] * 60 / seconds"
+goal = "max"                # surfing: roof-to-roof moves a minute
+
+[metrics.falls]
+expr = "events['fell'] + events['bonked']"
+goal = "info"               # moves that missed
+
+[metrics.coins]
+expr = "events['coin']"
+goal = "info"
+
+[metrics.points]
+expr = "last('sum.surfer.points')"
+goal = "info"               # distance weighted by lane speed
+
+[metrics.vehicles]
+expr = "mean('count.car') + mean('count.van') + mean('count.truck')"
+goal = "min"                # cost: vehicles simulated to show a few dozen

@@ -1,0 +1,17 @@
+---
+source: test/tests/all/scenarios.rs
+assertion_line: 27
+description: "highway_surfers: fall, run over, wobble"
+expression: text
+---
+tick 72
+bridge: 105
+car: 57
+coin: 617
+director: 8
+ramp: 15
+surfer: 1 (Body.Ground|Guard.Wobbly 1)
+truck: 15
+van: 19
+surfer props: best=0 coins=0 combo=0 guard=87 lane_to=4 lives=2 mount=0 over=0 ph=0 points=4843 px=4500 py=710887 started=1 timer=0 vh=0 vx=0 vy=62
+events: crashed 1, fell 1, hopped 1

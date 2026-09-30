@@ -1,0 +1,20 @@
+#![enable(implicit_some)]
+// Savanna Stampede theme for highway_surfers: ride the herd at golden hour. Higgsfield nano_banana_pro, objects cut with its background remover (assets/src/README.md, Themes).
+Assets(
+    images: {
+        "savanna_acacia": "themes/savanna_acacia.png",
+        "savanna_elephant_front": "themes/savanna_elephant_front.png",
+        "savanna_elephant_rear": "themes/savanna_elephant_rear.png",
+        "savanna_grass": "themes/savanna_grass.png",
+        "savanna_horizon": "themes/savanna_horizon.png",
+        "savanna_medal": "themes/savanna_medal.png",
+        "savanna_mound": "themes/savanna_mound.png",
+        "savanna_rhino_front": "themes/savanna_rhino_front.png",
+        "savanna_rhino_rear": "themes/savanna_rhino_rear.png",
+        "savanna_rider": "themes/savanna_rider.png",
+        "savanna_sky": "themes/savanna_sky.png",
+        "savanna_trail": "themes/savanna_trail.png",
+        "savanna_zebra_front": "themes/savanna_zebra_front.png",
+        "savanna_zebra_rear": "themes/savanna_zebra_rear.png",
+    },
+)

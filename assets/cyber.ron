@@ -1,0 +1,20 @@
+#![enable(implicit_some)]
+// Cyberrun theme for highway_surfers: inside a computer. Higgsfield nano_banana_pro, objects cut with its background remover (prompts and job ids: assets/src/README.md, Themes).
+Assets(
+    images: {
+        "cyber_bit": "themes/cyber_bit.png",
+        "cyber_capacitor": "themes/cyber_capacitor.png",
+        "cyber_lane": "themes/cyber_lane.png",
+        "cyber_packet_front": "themes/cyber_packet_front.png",
+        "cyber_packet_rear": "themes/cyber_packet_rear.png",
+        "cyber_pylon": "themes/cyber_pylon.png",
+        "cyber_rack_front": "themes/cyber_rack_front.png",
+        "cyber_rack_rear": "themes/cyber_rack_rear.png",
+        "cyber_runner": "themes/cyber_runner.png",
+        "cyber_shoulder": "themes/cyber_shoulder.png",
+        "cyber_sky": "themes/cyber_sky.png",
+        "cyber_skyline": "themes/cyber_skyline.png",
+        "cyber_transport_front": "themes/cyber_transport_front.png",
+        "cyber_transport_rear": "themes/cyber_transport_rear.png",
+    },
+)

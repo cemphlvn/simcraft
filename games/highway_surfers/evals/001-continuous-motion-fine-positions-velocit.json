@@ -1,0 +1,89 @@
+{
+ "step": 1,
+ "change": "continuous motion: fine positions, velocities, physics landings",
+ "seeds": {
+  "1": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 47.0,
+   "falls": 0,
+   "coins": 28,
+   "points": 591242,
+   "vehicles": 1157.5737704918033
+  },
+  "2": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 48.0,
+   "falls": 0,
+   "coins": 14,
+   "points": 349520,
+   "vehicles": 1153.8852459016393
+  },
+  "3": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 48.0,
+   "falls": 0,
+   "coins": 14,
+   "points": 611142,
+   "vehicles": 1150.7049180327867
+  },
+  "4": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 53.0,
+   "falls": 0,
+   "coins": 24,
+   "points": 564216,
+   "vehicles": 1154.0655737704917
+  },
+  "5": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 46.0,
+   "falls": 0,
+   "coins": 21,
+   "points": 924150,
+   "vehicles": 1156.8688524590164
+  }
+ },
+ "metrics": {
+  "survived_s": {
+   "mean": 60.0,
+   "min": 60.0,
+   "max": 60.0
+  },
+  "hits": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "landings_per_min": {
+   "mean": 48.4,
+   "min": 46.0,
+   "max": 53.0
+  },
+  "falls": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "coins": {
+   "mean": 20.2,
+   "min": 14,
+   "max": 28
+  },
+  "points": {
+   "mean": 608054.0,
+   "min": 349520,
+   "max": 924150
+  },
+  "vehicles": {
+   "mean": 1154.62,
+   "min": 1150.7049180327867,
+   "max": 1157.5737704918033
+  }
+ },
+ "errors": {}
+}

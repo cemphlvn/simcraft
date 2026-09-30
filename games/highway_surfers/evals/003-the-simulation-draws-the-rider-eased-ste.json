@@ -1,0 +1,89 @@
+{
+ "step": 3,
+ "change": "the simulation draws the rider: eased steering, no snaps",
+ "seeds": {
+  "1": {
+   "survived_s": 60.0,
+   "hits": 1,
+   "landings_per_min": 48.0,
+   "falls": 0,
+   "coins": 22,
+   "points": 751295,
+   "vehicles": 1164.396694214876
+  },
+  "2": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 51.0,
+   "falls": 0,
+   "coins": 14,
+   "points": 372305,
+   "vehicles": 1156.314049586777
+  },
+  "3": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 49.0,
+   "falls": 0,
+   "coins": 18,
+   "points": 738465,
+   "vehicles": 1155.5702479338843
+  },
+  "4": {
+   "survived_s": 60.0,
+   "hits": 1,
+   "landings_per_min": 55.0,
+   "falls": 0,
+   "coins": 22,
+   "points": 639732,
+   "vehicles": 1155.1404958677685
+  },
+  "5": {
+   "survived_s": 60.0,
+   "hits": 1,
+   "landings_per_min": 53.0,
+   "falls": 0,
+   "coins": 14,
+   "points": 338212,
+   "vehicles": 1157.5123966942149
+  }
+ },
+ "metrics": {
+  "survived_s": {
+   "mean": 60.0,
+   "min": 60.0,
+   "max": 60.0
+  },
+  "hits": {
+   "mean": 0.6,
+   "min": 0,
+   "max": 1
+  },
+  "landings_per_min": {
+   "mean": 51.2,
+   "min": 48.0,
+   "max": 55.0
+  },
+  "falls": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "coins": {
+   "mean": 18.0,
+   "min": 14,
+   "max": 22
+  },
+  "points": {
+   "mean": 568001.8,
+   "min": 338212,
+   "max": 751295
+  },
+  "vehicles": {
+   "mean": 1157.79,
+   "min": 1155.1404958677685,
+   "max": 1164.396694214876
+  }
+ },
+ "errors": {}
+}

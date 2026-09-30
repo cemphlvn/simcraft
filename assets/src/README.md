@@ -109,3 +109,24 @@ Textures (`assets/mound/`, pack `assets/mound.ron`): Higgsfield `gpt_image_2_5`,
   rounded quartz pebbles and dust, ...".
 - `mud.png` (job `01a34889-d9a5-48b7-ac26-620b7aa8d37d`): "... a termite mound wall built from packed moist clay
   pellets: rounded mud balls pressed together, dark red-brown laterite with a faint wet sheen ...".
+
+## Themes (`assets/themes/`, `assets/cyber.ron`, `assets/ocean.ron`, `assets/savanna.ron`) — 2026-09-29
+
+Three worlds for `games/highway_surfers` (CYBERRUN, BLUE OCEAN, SAVANNA STAMPEDE). Higgsfield `nano_banana_pro`
+(reported back as `nano_banana_2`) in the project "Highway Surfers themes"; objects cut with Higgsfield's image
+background remover; skies `simcraft-import --max 2048`; horizon bands `--white --bottom --tile 20 --max 2048` (the
+island band came out as two copies stacked: the upper half was kept); surfaces `tools/tileable.py --size 1024`;
+cut objects `--crop --max 512`. Music: Higgsfield `sonilo_music`, 60 s loops, converted to MP3 (`ffmpeg -c:a
+libmp3lame -q:a 5`).
+
+Style in every prompt: *stylized 3D mobile game art, clean vivid colors, no text*; objects *isolated on a plain flat
+pure white background, no shadow*; vehicles *straight-on rear view* / *straight-on front view*.
+
+| Theme | Sky, horizon, lane, shoulder | Pickup, props, rider | Low / mid / tall (rear, front) | Music |
+|---|---|---|---|---|
+| cyber | 0d5ee6a5, 1d22ee83, 727de61d, d538176b | 8e5d2ed7, d17f08f1, dd3711fa, 94c1dcfe | packet 9fa60d13 / c50ed6b9, transport 1de422bf / 3211f5fd, rack 7a7b72db / 5031afb8 | b3888f8a (synthwave, 128 bpm) |
+| ocean | 1b0db8fd, d5958192, 467ed617, 2e166ac8 | 430fdea7, 0c5457a2, 33079129, c6266cc9 | jet ski 436d4fb3 / f59bf759, speedboat 935898cf / 6e4cf4e7, ferry eba49104 / 10c850de | ce8247b9 (marimba, steel drums, 115 bpm) |
+| savanna | 27c7001a, ae73c1ca, 4f5515f9, a42b0ebb | e46d321b, 6eace251, 8299ba76, ecf2d27f | zebra 3c0d9c33 / ba6fb9f2, rhino 85b70346 / dd20a3a2, elephant e7a52520 / 96f7b172 | 605d3181 (djembe, kalimba, 124 bpm) |
+
+Known weak spots: the CYBERRUN runner is dark on a dark road (hard to see); the front elephant is cartoon-coloured
+while its rear is realistic; the riders are side-on, not from behind.

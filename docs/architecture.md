@@ -253,6 +253,46 @@ A world has `width × height × depth` voxels; 2D games have depth 1 and behave 
   `ClimbField(name)` steps to the open neighbour with the most `name`.
 - `around` and `near` count and measure in 3D.
 
+## Continuous motion (`motion:` on a kind)
+
+Cells are fine for herds and colonies; an action game needs things that glide, brake and drift. A kind with
+`motion` moves continuously: a position finer than a cell and a velocity, integrated by the engine every tick
+(Fiedler's fixed step; the renderer draws between ticks, so nothing teleports). Research and the alternatives
+weighed: `docs/research/continuous-time.md`. Kinds without `motion` are untouched (same hashes).
+
+```ron
+"car": (glyph: 'c', motion: (size: (620, 1700))),              // footprint: across, along (fine units)
+"surfer": (glyph: 'S', motion: (size: (300, 500), gravity: 9)), // falls: height loses 9 fine units/tick² of speed
+```
+
+- **Units.** `FINE = 1000` fine units to a cell. Integer throughout (deterministic, no floats).
+- **Engine-owned props** of a moving kind (created at spawn, readable and writable like any prop):
+  `px`, `py` (its centre, absolute, fine units; starts at its cell's centre), `vx`, `vy` (fine units per tick),
+  `ph`, `vh` (height above the ground and its speed: a jump), `mount` (the id of the entity it rides, 0 = none).
+  The cell (`x`, `y`) follows: `x = px / FINE` (floored), so every cell-based query still works.
+- **Integration**, after `apply`, before fields: every free mover `px += vx`, `py += vy`; in the air
+  (`ph > 0` or `vh > 0`) `vh -= gravity`, `ph += vh`, and the ground (0) stops it (`ph = 0`, `vh = 0`). A
+  **mounted** entity is carried: it moves by its mount's displacement this tick plus its own velocity, and cannot
+  sink below its mount's `top` prop (a roof); if its mount is gone it moves freely. Riders are integrated after
+  the free movers, so a rider sees where its mount got to.
+- **Flows** (hybrid automata, research §8): a state's motion is its velocity; write it with state rules
+  (`Set("vx", ...)` while `Changing`). Discrete moves (`Move`, `MoveBy`) shift `px`/`py` by whole cells.
+- **Footprint queries** (fine units; boxes of `size` about `px`, `py`; "ahead" is the way the entity faces, the
+  sign of its `vy`, +y when standing):
+
+| Function | Returns |
+|---|---|
+| `ahead(kind)` / `ahead(kind, dx)` | Gap from my front to the back of the nearest `kind` ahead whose extent across overlaps mine (shifted `dx` across: the next lane), `FAR` (999999) if none |
+| `behind(kind)` / `behind(kind, dx)` | The same, behind me |
+| `touching(kind)` | How many `kind` footprints overlap mine |
+| `under(kind)` | The id of the `kind` whose footprint holds my centre (0 if none) |
+| `prop_of(id, prop, default)` | A prop of that entity |
+
+- **`SpawnAt(kind, dx, dy)`** spawns `kind` at my cell offset by (`dx`, `dy`) cells (expressions): traffic
+  made ahead of and behind a player instead of a whole road laid out at the start.
+- **Checked:** a moving kind cannot be `solid` or `cling` (it moves by velocity, not by steps), and its game
+  cannot declare the engine-owned props itself.
+
 ## Renderer (`sim-render`)
 
 A framework for game interfaces, in this workspace, with its own terminal renderer.
@@ -753,8 +793,9 @@ Track(
 - **Record** as for stages (`--shot out.png --record N --press KEY@FRAME`, `--view N`); effects of warm-up ticks are
   dropped before the first frame.
 - **Replay**: every accepted press is kept as (tick, action, args); the simulation is deterministic, so the presses
-  from the same start are the run. A finished run is saved to `runs/<game>-<unix time>.jsonl`; in the window `R`
-  watches the last run again (a red dot pulses), `N` starts a new one; `--replay FILE` plays a saved run in a window
+  from the same start are the run. A finished run is saved to `runs/<game>-<unix time>.jsonl`. In the window `R`
+  or `N` (or any game key once the run is over) starts a new run; `V` watches the run just ended again (red edges
+  and a pulsing dot on screen; any game key leaves it). Nothing replays unless asked (`TrackPlay::intent`, tested); `--replay FILE` plays a saved run in a window
   or into `--shot` / `--record` (a video of a real run). A replay ignores the player's keys.
 - **Gone things** (`kinds.X.gone`): when an entity of that kind vanishes near the camera (smashed, picked up), it
   keeps playing an animation where it was: `x` (sideways, away from the followed entity), `y`, `rot`, `scale`,
@@ -762,6 +803,40 @@ Track(
 - **Meters animate**: a new icon pops in, a lost one bursts off (grows, spins, fades) while the rest shake.
   `blink: "Wobbly"` blinks the followed entity's body while it is in that state (invulnerable after a hit). The
   `hurt` effect channel reds the edges of the screen.
+- **Moving kinds** (`motion`) are drawn from their fine positions between ticks (`Tween::place`): they glide at
+  their velocity. A moving followed entity is drawn where the simulation has it, across and in height (its arcs
+  are physics); `switch` then only plays its effects.
+- **Feel, measured** (`--feel --replay RUN`): the run replayed headless at 60 frames a second through this code;
+  `stall` (frames a moving thing near the camera did not move), `step_ratio` (largest step over average step),
+  `eye_jerk`, `rider_jerk`, tick and frame cost (`sim_gpu::track::feel_probe`, `games/highway_surfers/FEEL.md`).
+- **Themes** (`themes: [(name, assets, sky, skyline, road, fog, kinds, rider, scenery, music)]`): the same game in
+  another world; a theme names only what it changes (`Track::themed`). `t` switches in the window, `--theme NAME`
+  picks one for shots and feel runs; every theme's packs load at the start and every picture is checked then.
+  **Music** (`music`: an MP3 next to the game or under `assets/`) loops with `rodio`; `m` mutes; no sound device, no
+  error. A kind can be a **picture over an invisible block** (`block: (.., invisible: true)`: the rider stands on the
+  block, the player sees the picture), facing the way it drives (`oncoming` frames when its `vy` is below 0), drawn
+  `face` in front of its middle. The rider can be a picture too (`rider.image`).
+- **Road**: `median: (lane, width, height, color)` makes one lane a barrier between two directions (solid lines both
+  sides); blocks can be `wedge` (a ramp) and `pulse` (a glow).
+- **Swipes** (`swipes: { "left": [(action, args), ...], ..., "tap": [...] }`): eight directions and a tap, each a
+  list of moves tried in order (the first the game takes is made, as a key tries its buttons). A mouse drag is the
+  same code as a finger (`sim_gpu::track::swipe_dir`). Buttons can be `hidden` (keys only) and have a `release`
+  action (hold to crouch, hold to walk).
+- **From outside** (`rider`, third person; `highway_surfers`): the followed entity drawn as a stack of greybox
+  `parts`, standing on the top of whatever `block` is under it (drawn positions, between ticks). In an `air` state
+  (selector → apex) it flies an arc from where it took off to what is under it, lasting as long as its `timer` prop
+  counts down, so it lands on the tick the game does; when the ground drops away it falls with `gravity`. `poses`
+  scale it by state (a crouch), fx channels `squash` and `tilt` act on it, and in its `ground` states it stands on
+  the road whatever is in its cell: the picture follows the rules. Blocks between it and the camera fade to ghosts.
+- **Blocks** (`kinds.X.block: (size, color, lift, surface)`): a kind drawn as a shaded box instead of a picture
+  (greybox before assets); its top is a surface unless `surface: false` (a bridge deck). `lift_by: (prop, k)` raises
+  a standing picture by a prop (a coin at height `h`).
+- **Chase camera**: `follow_height` (how much of the rider's height the eye rises with, on the `rise` spring), `lag`
+  (the eye trails the rider across on a spring), `follow_x` (how much of the move across it follows: the road stays
+  framed from an outside lane), `speed_fov` (degrees per unit a second), `speed_streaks` (speed lines from this speed).
+- **Hitstop** (`hitstop: { event: (secs, scale, recover) }`): the world runs at `scale` for `secs`, then eases back;
+  the camera's effects keep playing. **Screen**: `screen: (w, h)` shapes the window and shots (portrait for a phone);
+  `--size` overrides it. Arrow keys are `left right up down`.
 
 ## Input: actions, schemes and contexts (`input.ron`)
 

@@ -1,0 +1,17 @@
+// highway_surfers: a hop onto an empty lane drops you on the asphalt, where the traffic from behind runs you over.
+// One hit costs one life: you are untouchable for a moment after it.
+Scenario(
+    name: "highway_surfers: fall, run over, wobble",
+    game: "games/highway_surfers",
+    steps: [
+        Step(30),
+        Act((kind: "surfer", do: "leap", args: { "dx": 1, "dy": 0 })),
+        Until("events.fell >= 1", 40),
+        Expect("states.surfer.Ground == 1 && sum.surfer.ph == 0 && sum.surfer.mount == 0"),
+        Refused((kind: "surfer", do: "crouch"), "needs"),
+        Until("events.crashed >= 1", 600),
+        Step(3),
+        Expect("sum.surfer.lives == 2 && states.surfer.Wobbly == 1"),
+        Snapshot("run over"),
+    ],
+)

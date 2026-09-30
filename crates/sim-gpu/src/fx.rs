@@ -5,7 +5,9 @@
 //!
 //! Channels: `fov` (degrees added), `shake` (world units of jitter), `lift` (camera height added), `roll` (degrees),
 //! `pitch` (degrees, looking down is positive), `streaks` (0..1 speed lines), `flash` (0..1 white), `vignette`
-//! (0..1 extra darkening at the edges), `hurt` (0..1 red at the edges: damage).
+//! (0..1 extra darkening at the edges), `hurt` (0..1 red at the edges: damage). A track's `rider` (the followed
+//! entity seen from outside) also reads `squash` (height scale added: -0.3 squashes, +0.2 stretches; the width
+//! keeps the volume) and `tilt` (degrees the body leans, added to the bank).
 
 use std::collections::BTreeMap;
 
@@ -13,7 +15,7 @@ use sim_render::anim::{Anim, Ease, Key};
 
 use crate::stage::{Quad, WHITE, Wrap};
 
-pub const CHANNELS: [&str; 9] = ["fov", "shake", "lift", "roll", "pitch", "streaks", "flash", "vignette", "hurt"];
+pub const CHANNELS: [&str; 11] = ["fov", "shake", "lift", "roll", "pitch", "streaks", "flash", "vignette", "hurt", "squash", "tilt"];
 
 /// The camera's offsets at one instant (sums over the running effects).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -27,6 +29,8 @@ pub struct Fx {
     pub flash: f32,
     pub vignette: f32,
     pub hurt: f32,
+    pub squash: f32,
+    pub tilt: f32,
 }
 
 /// A key as written in code: (time, value, ease).
@@ -140,6 +144,8 @@ impl FxState {
             fx.flash += c("flash");
             fx.vignette += c("vignette");
             fx.hurt += c("hurt");
+            fx.squash += c("squash");
+            fx.tilt += c("tilt");
         }
         fx
     }

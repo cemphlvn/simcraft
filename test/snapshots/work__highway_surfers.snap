@@ -1,0 +1,16 @@
+---
+source: test/tests/all/work.rs
+assertion_line: 75
+expression: profile(&dir)
+---
+ticks 60, entities per tick 835.5
+per tick:        evals     186.5  queries    266.1  maps    108.5
+per entity-tick: evals      0.22  queries     0.32  maps     0.13
+hottest rules (checks per tick, % that fired):
+  drive_car                     55.5    2.0%
+  exit_car                      55.5    0.2%
+  drive_van                     19.0    1.7%
+  exit_van                      19.0    0.0%
+  drive_truck                   15.0    1.7%
+  exit_truck                    15.0    0.0%
+checked but never fired: exit_van, exit_truck, send_truck, best_combo, bridge_hit, coin, count_down, finish, guard_down, settle_across, steer_across, wreck

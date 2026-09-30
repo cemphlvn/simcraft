@@ -117,6 +117,12 @@ pub struct Button {
     /// "idle" (loops), "hover" (held while the pointer is over it), "press", "denied" (defaults provided).
     #[serde(default)]
     pub anims: BTreeMap<String, Anim>,
+    /// Not drawn and not clickable: only its key works (a phone game whose moves are swipes, played on a keyboard).
+    #[serde(default)]
+    pub hidden: bool,
+    /// When its key is let go: this action (and args) too (hold to crouch, hold to walk).
+    #[serde(default)]
+    pub release: Option<(String, BTreeMap<String, i64>)>,
 }
 
 fn button_size() -> f32 {
@@ -888,6 +894,9 @@ impl Button {
     }
 
     pub fn hit(&self, w: f32, h: f32, x: f32, y: f32) -> bool {
+        if self.hidden {
+            return false;
+        }
         let (cx, cy, r) = self.circle(w, h);
         (x - cx).powi(2) + (y - cy).powi(2) <= r * r
     }
@@ -909,6 +918,9 @@ impl Button {
 
     /// The button's quads: a soft shadow, then the icon, posed; greyed and faded when the action is not possible.
     pub fn quads(&self, st: &mut ButtonState, w: f32, h: f32, now: f32) -> Vec<Quad> {
+        if self.hidden {
+            return Vec::new();
+        }
         let pose = self.pose(st, now);
         // A press always shows at full colour (the action may already be in effect and so unavailable); otherwise the
         // look eases towards enabled / disabled.

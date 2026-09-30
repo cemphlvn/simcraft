@@ -9,7 +9,7 @@
 //! go), shift runs, space jumps, walking into a wall climbs it, left click drops, right click digs, f smells.
 //! `--shot` there looks at the tallest thing built after `--ticks`; `--feel` prints how moving feels (FEEL.md).
 //! A game with a `track.ron` plays in first person (keys: its buttons', e.g. 1–4, space, Enter; c camera view;
-//! p pauses; R replays the run, N starts a new one; `--view N` starts a shot in view N; `--replay runs/X.jsonl`
+//! p pauses; R or N starts a new run, V watches the run just ended again; `--view N` starts a shot in view N; `--replay runs/X.jsonl`
 //! plays a saved run, in a window or into `--shot`/`--record`). Runs are saved to `runs/<game>-<time>.jsonl`.
 //! Keys: space pause · +/- speed · tab next entity · c camera (close → wide → nest) · ←/→ pan · esc quit; the
 //! stage's buttons by mouse or by their own keys. The panel is `play.toml` when the game has one (the player's
@@ -27,7 +27,7 @@ use sim_gpu::gpu::World3;
 use sim_gpu::math::V3;
 use sim_gpu::roam::{Roam, RoamPlay, face_the_work};
 use sim_gpu::stage::{ButtonState, PileMemory, Quad, card, season_of};
-use sim_gpu::track::{Track, TrackPlay, load_run, save_run};
+use sim_gpu::track::{KeyIntent, Track, TrackPlay, load_run, save_run};
 use sim_gpu::walker::feel_probe;
 use sim_gpu::{Camera, Composer, Stage, load_roam, load_stage, load_track};
 use sim_render::Assets;
@@ -373,6 +373,8 @@ struct Args {
     shot: Option<PathBuf>,
     ticks: u32,
     size: (u32, u32),
+    /// `--size` was given (else a track's `screen` shapes shots and the window).
+    sized: bool,
     camera: Shot,
     time: f32,
     bench: u32,
@@ -381,6 +383,8 @@ struct Args {
     press: Vec<String>,
     record: u32,
     view: usize,
+    /// A track's theme to start in (its name; `t` switches in the window).
+    theme: String,
     replay: Option<PathBuf>,
     feel: bool,
     /// Roam shots: close to a crawler instead of facing the work; or a camera placed by hand.
@@ -404,6 +408,7 @@ fn args() -> Args {
         shot: None,
         ticks: 0,
         size: (1600, 900),
+        sized: false,
         camera: Shot::Close,
         time: 0.0,
         bench: 0,
@@ -411,6 +416,7 @@ fn args() -> Args {
         press: Vec::new(),
         record: 0,
         view: 0,
+        theme: String::new(),
         replay: None,
         feel: false,
         closeup: false,
@@ -439,6 +445,7 @@ fn args() -> Args {
             "--repro" => a.repro = it.next().map(PathBuf::from),
             "--times" => a.times = it.next().and_then(|s| s.parse().ok()).unwrap_or(30),
             "--view" => a.view = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--theme" => a.theme = it.next().unwrap_or_default(),
             "--record" => a.record = it.next().and_then(|s| s.parse().ok()).unwrap_or(60),
             "--panel" => a.panel = it.next().map(PathBuf::from),
             "--press" => a.press.extend(it.next()),
@@ -447,6 +454,7 @@ fn args() -> Args {
             "--size" => {
                 if let Some((w, h)) = it.next().and_then(|s| s.split_once('x').map(|(w, h)| (w.parse().ok(), h.parse().ok()))) {
                     a.size = (w.unwrap_or(1600), h.unwrap_or(900));
+                    a.sized = true;
                 }
             }
             "--camera" => {
@@ -529,6 +537,10 @@ fn main() {
             script: None,
             saved: false,
             grabbed: false,
+            theme: 0,
+            music: None,
+            swipe_from: None,
+            window_size: a.sized.then_some(a.size),
             watch: None,
         };
         el.run_app(&mut app).map_err(|e| e.to_string())
@@ -545,17 +557,44 @@ type Reboot = Box<dyn Fn() -> Result<Engine<Running, Game>, String>>;
 
 fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Args, reboot: Reboot) -> Result<(), String> {
     let script = a.replay.as_deref().map(load_run).transpose()?;
+    let theme = match a.theme.as_str() {
+        "" => 0,
+        name => {
+            1 + track
+                .themes
+                .iter()
+                .position(|t| t.name == name)
+                .ok_or_else(|| format!("no theme '{name}' (themes: {:?})", track.themes.iter().map(|t| &t.name).collect::<Vec<_>>()))?
+        }
+    };
+    // How it feels, measured (FEEL.md): the run replayed headless at 60 frames a second, `--record` frames (600).
+    if a.feel {
+        let assets_sizes = assets.loaded.iter().map(|(n, i)| (n.clone(), (i.w as u32, i.h as u32))).collect();
+        let mut play = TrackPlay::new(engine, track, assets_sizes);
+        play.set_theme(theme);
+        play.script = script;
+        let frames = if a.record > 0 { a.record } else { 600 };
+        let report = sim_gpu::track::feel_probe(&mut play, frames, 60.0);
+        println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
     if let Some(out) = &a.shot {
         let instance = wgpu::Instance::default();
         let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
         upload_all(&mut gpu, &assets);
         let mut play = TrackPlay::new(engine, track, gpu.sizes.clone());
+        play.set_theme(theme);
         play.script = script;
+        play.replay_marks = false; // a recording of a run is the run, not a replay in a window
         play.step(a.ticks);
         // Effects of the warm-up ticks are over by the time the shot starts.
         play.rig.fx = Default::default();
         play.rig.view = a.view;
-        let (w, h) = a.size;
+        // A track shaped like a phone is shot like one (twice its logical size), unless `--size` says otherwise.
+        let (w, h) = match play.track.screen {
+            Some((sw, sh)) if !a.sized => (sw * 2, sh * 2),
+            _ => a.size,
+        };
         let presses: Vec<(String, u32)> = a
             .press
             .iter()
@@ -573,7 +612,7 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
                 }
             }
             if a.record > 0 {
-                clock += dt * rate * a.speed;
+                clock += dt * rate * a.speed * play.time_scale();
                 let n = clock.floor() as u32;
                 clock -= n as f32;
                 play.step(n);
@@ -594,6 +633,7 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
     let rate = engine.rules().cfg.run.tick_rate as f32;
     let el = EventLoop::new().map_err(|e| e.to_string())?;
     el.set_control_flow(ControlFlow::Poll);
+    let window_size = if a.sized { Some(a.size) } else { track.screen };
     let mut app = App {
         play: Some(Start::Track(Box::new((engine, track)))),
         assets,
@@ -607,6 +647,10 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
         script,
         saved: false,
         grabbed: false,
+        theme,
+        music: Some(Music::new(&a.dir)),
+        swipe_from: None,
+        window_size,
         watch: None,
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
@@ -680,6 +724,10 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args,
         script: None,
         saved: false,
         grabbed: false,
+        theme: 0,
+        music: None,
+        swipe_from: None,
+        window_size: None,
         watch: Some((
             sim_gpu::perf::Watch::new(a.budget, Some(PathBuf::from("runs/spikes"))),
             0,
@@ -924,6 +972,54 @@ enum Start {
     Roam(Box<(Engine<Running, Game>, Roam)>),
 }
 
+/// A track's music: its current loop, found next to the game or in an `assets/` folder above it. No sound device,
+/// no music, no error: the game plays silently.
+struct Music {
+    sink: Option<rodio::MixerDeviceSink>,
+    player: Option<rodio::Player>,
+    playing: Option<String>,
+    muted: bool,
+    dir: PathBuf,
+}
+
+impl Music {
+    fn new(dir: &Path) -> Music {
+        let sink = rodio::DeviceSinkBuilder::open_default_sink().ok().map(|mut s| {
+            s.log_on_drop(false);
+            s
+        });
+        Music { sink, player: None, playing: None, muted: false, dir: dir.to_path_buf() }
+    }
+
+    /// Plays `want` on loop if it is not playing already (none = silence).
+    fn follow(&mut self, want: Option<&str>) {
+        let want = want.filter(|_| !self.muted);
+        if want == self.playing.as_deref() {
+            return;
+        }
+        if let Some(p) = self.player.take() {
+            p.stop();
+        }
+        self.playing = want.map(str::to_string);
+        let (Some(sink), Some(file)) = (&self.sink, want) else { return };
+        let path =
+            std::iter::once(self.dir.join(file)).chain(self.dir.ancestors().map(|a| a.join("assets").join(file))).find(|p| p.exists());
+        let Some(Ok(f)) = path.map(std::fs::File::open) else {
+            eprintln!("music: '{file}' not found next to the game or in an assets/ folder above it");
+            return;
+        };
+        match rodio::Decoder::new_looped(std::io::BufReader::new(f)) {
+            Ok(src) => {
+                let player = rodio::Player::connect_new(sink.mixer());
+                player.set_volume(0.6);
+                player.append(src);
+                self.player = Some(player);
+            }
+            Err(e) => eprintln!("music: {file}: {e}"),
+        }
+    }
+}
+
 /// What a window plays: a stage (side view) or a track (first person).
 enum Session {
     Stage(Box<Play>),
@@ -933,8 +1029,10 @@ enum Session {
 
 impl Session {
     fn advance(&mut self, dt: f32, paused: bool, clock: &mut f32, speed: f32) {
+        // A hitstop slows the world, not the camera.
+        let warp = if let Session::Track(p) = self { p.time_scale() } else { 1.0 };
         let (time, n) = {
-            *clock += if paused { 0.0 } else { dt * speed };
+            *clock += if paused { 0.0 } else { dt * speed * warp };
             let n = clock.floor() as u32;
             *clock -= n as f32;
             (dt, n.min(200))
@@ -1012,6 +1110,14 @@ struct App {
     saved: bool,
     /// Roam: the mouse is captured (looking), else free (click to capture).
     grabbed: bool,
+    /// A track's theme to start in.
+    theme: usize,
+    /// A track's music (a theme's loop).
+    music: Option<Music>,
+    /// Where a press (mouse or finger) started: its release decides the swipe.
+    swipe_from: Option<(f32, f32)>,
+    /// The window's logical size (a track's `screen`, or `--size`); none = the default.
+    window_size: Option<(u32, u32)>,
     /// Roam: every frame measured against the budget; spike reports to `runs/spikes/` (game, panel, seed).
     watch: Option<FrameWatch>,
 }
@@ -1053,9 +1159,10 @@ impl ApplicationHandler for App {
         }
         let Some(start) = self.play.take() else { return };
         let window = Arc::new(
-            el.create_window(
-                Window::default_attributes().with_title("simcraft").with_inner_size(winit::dpi::LogicalSize::new(1440.0, 810.0)),
-            )
+            el.create_window(Window::default_attributes().with_title("simcraft").with_inner_size({
+                let (w, h) = self.window_size.unwrap_or((1440, 810));
+                winit::dpi::LogicalSize::new(w as f64, h as f64)
+            }))
             .expect("a window"),
         );
         let instance = wgpu::Instance::default();
@@ -1084,6 +1191,7 @@ impl ApplicationHandler for App {
             Start::Track(b) => {
                 let (engine, track) = *b;
                 let mut p = TrackPlay::new(engine, track, gpu.sizes.clone());
+                p.set_theme(self.theme);
                 p.script = self.script.take();
                 Session::Track(Box::new(p))
             }
@@ -1173,9 +1281,52 @@ impl ApplicationHandler for App {
                             p.press(b);
                         }
                     }
-                    Session::Track(p) => p.click(cw, ch, self.cursor.0, self.cursor.1),
+                    // A track: a press on a button is a click; anywhere else it may become a swipe (on release).
+                    Session::Track(p) => {
+                        if p.track.buttons.iter().any(|b| b.hit(cw, ch, self.cursor.0, self.cursor.1)) {
+                            p.click(cw, ch, self.cursor.0, self.cursor.1);
+                        } else {
+                            self.swipe_from = Some(self.cursor);
+                        }
+                    }
                     Session::Roam(_) => {}
                 }
+            }
+            // A mouse drag is a swipe (the same code as a finger): its direction picks the move, a short one is a tap.
+            WindowEvent::MouseInput { state: ElementState::Released, button: winit::event::MouseButton::Left, .. } => {
+                if let (Session::Track(p), Some((x0, y0))) = (&mut w.play, self.swipe_from.take()) {
+                    let min = w.config.height as f32 * 0.035;
+                    p.swipe(sim_gpu::track::swipe_dir(self.cursor.0 - x0, self.cursor.1 - y0, min));
+                }
+            }
+            WindowEvent::Touch(t) => {
+                if let Session::Track(p) = &mut w.play {
+                    let at = (t.location.x as f32, t.location.y as f32);
+                    match t.phase {
+                        winit::event::TouchPhase::Started => self.swipe_from = Some(at),
+                        winit::event::TouchPhase::Ended => {
+                            if let Some((x0, y0)) = self.swipe_from.take() {
+                                let min = w.config.height as f32 * 0.035;
+                                p.swipe(sim_gpu::track::swipe_dir(at.0 - x0, at.1 - y0, min));
+                            }
+                        }
+                        winit::event::TouchPhase::Cancelled => self.swipe_from = None,
+                        winit::event::TouchPhase::Moved => {}
+                    }
+                }
+            }
+            // A key let go: its buttons' release actions (hold to crouch, hold to walk).
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released && matches!(w.play, Session::Track(_)) => {
+                let Session::Track(p) = &mut w.play else { return };
+                let name = match event.logical_key.as_ref() {
+                    Key::Named(NamedKey::Shift) => "shift".to_string(),
+                    Key::Named(NamedKey::Space) => "space".to_string(),
+                    Key::Named(NamedKey::ArrowUp) => "up".to_string(),
+                    Key::Named(NamedKey::ArrowDown) => "down".to_string(),
+                    Key::Character(c) => c.to_lowercase(),
+                    _ => return,
+                };
+                p.key_up(&name);
             }
             // First person: the track's keys go to its buttons (1–4, space, Enter...); p pauses, esc quits.
             WindowEvent::KeyboardInput { event, .. }
@@ -1188,6 +1339,9 @@ impl ApplicationHandler for App {
                     Key::Named(NamedKey::Enter) => "enter".to_string(),
                     Key::Named(NamedKey::ArrowLeft) => "left".to_string(),
                     Key::Named(NamedKey::ArrowRight) => "right".to_string(),
+                    Key::Named(NamedKey::ArrowUp) => "up".to_string(),
+                    Key::Named(NamedKey::ArrowDown) => "down".to_string(),
+                    Key::Named(NamedKey::Shift) => "shift".to_string(),
                     Key::Character("p") => {
                         self.paused = !self.paused;
                         return;
@@ -1196,29 +1350,40 @@ impl ApplicationHandler for App {
                         p.cycle_view();
                         return;
                     }
-                    // R: watch this run again from the start. N: a new run.
-                    Key::Character("r") | Key::Character("n") => {
-                        let replay = event.logical_key == Key::Character("r".into());
+                    // T: the next theme (the same run, another world). M: music off / on.
+                    Key::Character("t") => {
+                        let next = p.theme + 1;
+                        p.set_theme(next);
+                        return;
+                    }
+                    Key::Character("m") => {
+                        if let Some(m) = &mut self.music {
+                            m.muted = !m.muted;
+                        }
+                        return;
+                    }
+                    Key::Character(c) => c.to_lowercase(), // Shift+R is still R
+                    _ => return,
+                };
+                // What the key means is decided by the play (tested there): R and N start a new run, V watches the
+                // run just ended again, any game key after the end or during a replay plays.
+                match p.intent(&name) {
+                    KeyIntent::Press(k) => {
+                        p.key(&k);
+                    }
+                    KeyIntent::NewRun | KeyIntent::WatchAgain => {
+                        let watch = p.intent(&name) == KeyIntent::WatchAgain;
                         let Some(reboot) = &self.reboot else { return };
                         let Ok(engine) = reboot() else { return };
-                        let presses = p.script.clone().unwrap_or_else(|| p.log.clone());
                         if !self.saved && p.script.is_none() && !p.log.is_empty() {
                             let _ = save_run(&run_path(&p.engine.rules().def.name), &p.log);
                         }
                         self.saved = false;
-                        let mut fresh = TrackPlay::new(engine, p.track.clone(), p.sizes.clone());
-                        fresh.rig.view = p.rig.view;
-                        if replay {
-                            fresh.script = Some(presses);
-                        }
-                        **p = fresh;
+                        **p = p.restart(engine, watch);
                         self.clock = 0.0;
-                        return;
                     }
-                    Key::Character(c) => c.to_string(),
-                    _ => return,
-                };
-                p.key(&name);
+                    KeyIntent::None => {}
+                }
             }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
@@ -1258,6 +1423,9 @@ impl ApplicationHandler for App {
                 }
                 let t = Instant::now();
                 w.play.advance(dt, self.paused, &mut self.clock, self.speed);
+                if let (Session::Track(p), Some(m)) = (&w.play, &mut self.music) {
+                    m.follow(p.track.music.as_deref());
+                }
                 let advance_ms = t.elapsed().as_secs_f64() * 1000.0;
                 // A run that just ended is kept, so it can be replayed later (`--replay`).
                 if let Session::Track(p) = &w.play

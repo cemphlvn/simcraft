@@ -1,0 +1,12 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (highway_surfers)
+#  60 ticks a second (an action game): speeds are fine units a tick, so they halve when the rate doubles.
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 12000
+tick_rate = 60
+
+[agent]
+controllable = ["surfer"]

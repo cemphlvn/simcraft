@@ -1,0 +1,199 @@
+#![enable(implicit_some)]
+// highway_surfers seen from behind the surfer (sim-gpu). The track's own look is greybox (boxes, measured in FEEL.md);
+// `themes` are the same game in three worlds made with Higgsfield (CYBERRUN, BLUE OCEAN, SAVANNA STAMPEDE). Keys: ← → leap a lane
+// (steer a jump), ↑ ↓ leap forward / back, space jumps, shift (hold) crouches, w / s (hold) walk the roof;
+// a mouse drag is a swipe in any of eight directions. `t` changes the theme, `m` the music, `c` the camera.
+// Heights match the rules: car roof 0.5, van 0.8, truck 1.15; bridges from 1.4 up (a standing truck rider's head
+// reaches them, a ducking one's does not).
+Track(
+    assets: ["road"],
+    follow: "surfer",
+    screen: (450, 800),
+    sky: "sky",
+    // Five columns: two oncoming lanes, the median barrier, two lanes with you.
+    road: (image: "asphalt", lanes: 5, repeat: 2.5, shoulder: "sand", shoulder_width: 40.0, shoulder_repeat: 5.0,
+           paint: (240, 236, 222), median: (lane: 2, width: 0.28, height: 0.22, color: (196, 190, 178))),
+    // Chase camera: behind and above, rising with the surfer (less than it, so a jump reads as a jump), trailing
+    // its hops on a spring, the view widening with speed.
+    camera: (height: 1.55, back: 2.7, fov: 72.0, pitch: 17.0, rumble: 0.003, bank: 0.5, max_bank: 5.0,
+             lane: (stiffness: 120.0, damping: 1.0),
+             follow_height: 0.75, rise: (stiffness: 28.0, damping: 1.0),
+             lag: (stiffness: 70.0, damping: 0.9), follow_x: 0.55,
+             speed_fov: 0.45, speed_streaks: 11.0),
+    views: [ (name: "low", height: 0.9, back: 1.7, fov: 78.0, pitch: 8.0),
+             (name: "high", height: 3.2, back: 3.6, fov: 64.0, pitch: 34.0) ],
+    view: 60.0,
+    fog: ((236, 150, 118), 22.0, 58.0),
+    kinds: {
+        "car":    (block: (size: (0.62, 0.5, 0.82), color: (214, 72, 58))),
+        "van":    (block: (size: (0.66, 0.8, 0.88), color: (226, 224, 212))),
+        "truck":  (block: (size: (0.72, 1.15, 0.96), color: (58, 112, 196))),
+        "bridge": (block: (size: (1.02, 0.35, 0.7), color: (150, 146, 140), lift: 1.4, surface: false)),
+        // A ramp on the median, glowing: beside it, the BIG JUMP.
+        "ramp":   (block: (size: (0.6, 0.55, 1.6), color: (255, 196, 40), lift: 0.0, surface: false, wedge: true, pulse: 0.5)),
+        "coin":   (frames: ["coin"], height: 0.3, lift: 0.25, lift_by: ("h", 0.45), spin: 0.8, bob: 0.04, push: 1.0,
+                   gone: (tracks: { "y": [(0.0, 0.0), (0.25, 0.6, quad_out)], "scale": [(0.0, 1.0), (0.25, 0.0, quad_in)] })),
+    },
+    rider: (
+        // Board, body, head.
+        parts: [ ((0.36, 0.05, 0.62), (255, 138, 36)), ((0.22, 0.3, 0.16), (38, 186, 196)), ((0.16, 0.14, 0.14), (250, 222, 190)) ],
+        // Its height and every arc come from the simulation (motion: gravity, roofs); only the crouch is drawn here.
+        poses: { "Ducking": 0.5 },
+    ),
+    scenery: [
+        (images: ["post"], height: (0.75, 0.85), every: 2.5, side: (0.3, 0.4), seed: 1),
+        (images: ["cactus", "rock"], height: (1.2, 2.8), every: 3.0, side: (2.0, 12.0), seed: 2),
+    ],
+    // The hop: the move across is the simulation's (physics); the switch plays its effects when the lane changes.
+    switch: (
+        prop: "lane_to",
+        positions: [-2.0, -1.0, 0.0, 1.0, 2.0],
+        base: 0.38, per_lane: 0.0, ease: sine_in_out, hop: 0.0,
+        start: (tracks: { "fov": [(0.0, 0.0), (0.05, 1.5, quad_out), (0.3, 0.0, sine_in_out)],
+                          "tilt": [(0.0, 0.0), (0.08, 10.0, quad_out), (0.33, 0.0, sine_in_out)] }),
+    ),
+    fx: {
+        // Take-off: crouch, then stretch into the air.
+        "hopped": (tracks: { "squash": [(0.0, -0.22), (0.07, 0.18, quad_out), (0.25, 0.0, quad_in)] }),
+        "jumped": (tracks: { "squash": [(0.0, -0.3), (0.08, 0.3, quad_out), (0.4, 0.0, quad_in)],
+                             "pitch": [(0.0, 0.0), (0.2, -3.0, quad_out), (0.6, 0.0, sine_in_out)] }),
+        // Touch-down on a roof: squash, a dip of the camera, a small jolt.
+        "landed": (tracks: { "squash": [(0.0, -0.32), (0.24, 0.0, back_out)],
+                             "lift": [(0.0, -0.05), (0.25, 0.0, back_out)],
+                             "shake": [(0.0, 0.015), (0.15, 0.0, quad_out)] }),
+        // Missed: the road comes up hard.
+        "fell": (tracks: { "squash": [(0.0, -0.45), (0.3, 0.0, back_out)],
+                           "shake": [(0.0, 0.04), (0.3, 0.0, quad_out)],
+                           "vignette": [(0.0, 0.45), (0.8, 0.0, quad_in)] }),
+        // Hopped into a side too tall: knocked back down.
+        "bonked": (tracks: { "tilt": [(0.0, -25.0), (0.4, 0.0, back_out)],
+                             "roll": [(0.0, 0.0), (0.06, -5.0, quad_out), (0.4, 0.0, sine_in_out)],
+                             "shake": [(0.0, 0.05), (0.3, 0.0, quad_out)],
+                             "flash": [(0.0, 0.1), (0.15, 0.0, quad_out)] }),
+        "ducked": (tracks: { "lift": [(0.0, 0.0), (0.08, -0.12, quad_out), (0.5, 0.0, sine_in_out)] }),
+        "steered": (tracks: { "tilt": [(0.0, 0.0), (0.08, 12.0, quad_out), (0.35, 0.0, sine_in_out)] }),
+        // The BIG JUMP: the view pulls back and widens, a flash; at the apex time slows (hitstop below).
+        "big_jump": (tracks: { "fov": [(0.0, 0.0), (0.25, 14.0, quad_out), (0.9, 0.0, sine_in_out)],
+                               "lift": [(0.0, 0.0), (0.35, 0.5, quad_out), (0.9, 0.0, sine_in_out)],
+                               "squash": [(0.0, -0.35), (0.1, 0.35, quad_out), (0.45, 0.0, quad_in)],
+                               "streaks": [(0.0, 0.0), (0.1, 0.7, quad_out), (0.7, 0.0, quad_in)],
+                               "flash": [(0.0, 0.15), (0.2, 0.0, quad_out)] }),
+        "apex": (tracks: { "vignette": [(0.0, 0.0), (0.15, 0.35, quad_out), (0.6, 0.0, quad_in)] }),
+    },
+    hitstop: {
+        "crashed": (secs: 0.09, scale: 0.0, recover: 0.35),
+        "bonked": (secs: 0.05, scale: 0.1, recover: 0.2),
+        "apex": (secs: 0.3, scale: 0.3, recover: 0.3),
+    },
+    // Swipes (a finger, or a mouse drag): each direction tries its moves in order. Tap: jump straight up.
+    swipes: {
+        "left":       [("big_jump", { "dir": -1 }), ("leap", { "dx": -1, "dy": 0 }), ("steer", { "dir": -1 })],
+        "right":      [("big_jump", { "dir": 1 }), ("leap", { "dx": 1, "dy": 0 }), ("steer", { "dir": 1 })],
+        "up":         [("vault", { "dy": 1 })],
+        "down":       [("vault", { "dy": -1 })],
+        "up_left":    [("big_jump", { "dir": -1 }), ("leap", { "dx": -1, "dy": 1 })],
+        "up_right":   [("big_jump", { "dir": 1 }), ("leap", { "dx": 1, "dy": 1 })],
+        "down_left":  [("leap", { "dx": -1, "dy": -1 })],
+        "down_right": [("leap", { "dx": 1, "dy": -1 })],
+        "tap":        [("jump", {})],
+    },
+    // Keys for the desktop (no buttons on screen: the phone has none). Arrows are swipes; space jumps; hold shift to
+    // crouch, hold w / s to walk along the roof. A key tries its buttons in order, like a swipe.
+    buttons: [
+        (action: "big_jump", args: { "dir": -1 }, on: "surfer", icon: "btn_left", key: "left", at: (0.1, 0.9), hidden: true),
+        (action: "leap", args: { "dx": -1, "dy": 0 }, on: "surfer", icon: "btn_left", key: "left", at: (0.1, 0.9), hidden: true),
+        (action: "steer", args: { "dir": -1 }, on: "surfer", icon: "btn_left", key: "left", at: (0.1, 0.9), hidden: true),
+        (action: "big_jump", args: { "dir": 1 }, on: "surfer", icon: "btn_right", key: "right", at: (0.9, 0.9), hidden: true),
+        (action: "leap", args: { "dx": 1, "dy": 0 }, on: "surfer", icon: "btn_right", key: "right", at: (0.9, 0.9), hidden: true),
+        (action: "steer", args: { "dir": 1 }, on: "surfer", icon: "btn_right", key: "right", at: (0.9, 0.9), hidden: true),
+        (action: "vault", args: { "dy": 1 }, on: "surfer", icon: "btn_jump", key: "up", at: (0.5, 0.8), hidden: true),
+        (action: "vault", args: { "dy": -1 }, on: "surfer", icon: "btn_jump", key: "down", at: (0.5, 0.95), hidden: true),
+        (action: "jump", on: "surfer", icon: "btn_jump", key: "space", at: (0.5, 0.88), hidden: true),
+        (action: "crouch", on: "surfer", icon: "btn_brake", key: "shift", at: (0.3, 0.95), hidden: true,
+         release: ("stand", {})),
+        (action: "walk", args: { "dy": 1 }, on: "surfer", icon: "btn_jump", key: "w", at: (0.7, 0.95), hidden: true,
+         release: ("walk", { "dy": 0 })),
+        (action: "walk", args: { "dy": -1 }, on: "surfer", icon: "btn_jump", key: "s", at: (0.7, 0.98), hidden: true,
+         release: ("walk", { "dy": 0 })),
+    ],
+    // Themes (`t` switches): the same game in another world. Each names only what it changes.
+    themes: [
+        (
+            name: "cyberrun", assets: ["cyber"], sky: "cyber_sky", skyline: (image: "cyber_skyline", height: 0.24, drift: 0.3),
+            road: (image: "cyber_lane", shoulder: "cyber_shoulder", paint: (90, 240, 255), median: (255, 40, 110), repeat: 3.0, shoulder_repeat: 6.0),
+            fog: ((24, 10, 56), 16.0, 52.0),
+            kinds: {
+                // Pictures facing the way they drive, standing on an invisible block the rider lands on.
+                "car":    (frames: ["cyber_packet_rear"], oncoming: ["cyber_packet_front"], height: 0.62, face: 0.12,
+                           block: (size: (0.62, 0.5, 0.82), color: (0, 0, 0), invisible: true)),
+                "van":    (frames: ["cyber_transport_rear"], oncoming: ["cyber_transport_front"], height: 0.95, face: 0.12,
+                           block: (size: (0.66, 0.8, 0.88), color: (0, 0, 0), invisible: true)),
+                "truck":  (frames: ["cyber_rack_rear"], oncoming: ["cyber_rack_front"], height: 1.35, face: 0.12,
+                           block: (size: (0.72, 1.15, 0.96), color: (0, 0, 0), invisible: true)),
+                "coin":   (frames: ["cyber_bit"], height: 0.32, lift: 0.25, lift_by: ("h", 0.45), spin: 0.8, bob: 0.04, push: 1.0,
+                           gone: (tracks: { "y": [(0.0, 0.0), (0.25, 0.6, quad_out)], "scale": [(0.0, 1.0), (0.25, 0.0, quad_in)] })),
+                "ramp":   (block: (size: (0.6, 0.55, 1.6), color: (0, 255, 200), surface: false, wedge: true, pulse: 0.5)),
+                "bridge": (block: (size: (1.02, 0.35, 0.7), color: (160, 40, 255), lift: 1.4, surface: false)),
+            },
+            rider: (image: ("cyber_runner", 0.62), poses: { "Ducking": 0.5 }),
+            scenery: [
+                (images: ["cyber_pylon"], height: (1.4, 2.0), every: 3.0, side: (0.3, 0.6), seed: 1),
+                (images: ["cyber_capacitor"], height: (1.5, 3.5), every: 4.0, side: (2.0, 12.0), seed: 2),
+            ],
+            music: "themes/cyber_music.mp3",
+        ),
+        (
+            name: "blue ocean", assets: ["ocean"], sky: "ocean_sky", skyline: (image: "ocean_islands", height: 0.14, drift: 0.3),
+            road: (image: "ocean_lane", shoulder: "ocean_deep", paint: (255, 255, 255), median: (255, 120, 90), repeat: 3.0, shoulder_repeat: 6.0),
+            fog: ((170, 225, 240), 24.0, 62.0),
+            kinds: {
+                // Pictures facing the way they drive, standing on an invisible block the rider lands on.
+                "car":    (frames: ["ocean_jetski_rear"], oncoming: ["ocean_jetski_front"], height: 0.6, face: 0.12,
+                           block: (size: (0.62, 0.5, 0.82), color: (0, 0, 0), invisible: true)),
+                "van":    (frames: ["ocean_speedboat_rear"], oncoming: ["ocean_speedboat_front"], height: 0.95, face: 0.12,
+                           block: (size: (0.66, 0.8, 0.88), color: (0, 0, 0), invisible: true)),
+                "truck":  (frames: ["ocean_ferry_rear"], oncoming: ["ocean_ferry_front"], height: 1.35, face: 0.12,
+                           block: (size: (0.72, 1.15, 0.96), color: (0, 0, 0), invisible: true)),
+                "coin":   (frames: ["ocean_shell"], height: 0.32, lift: 0.25, lift_by: ("h", 0.45), spin: 0.8, bob: 0.04, push: 1.0,
+                           gone: (tracks: { "y": [(0.0, 0.0), (0.25, 0.6, quad_out)], "scale": [(0.0, 1.0), (0.25, 0.0, quad_in)] })),
+                "ramp":   (block: (size: (0.6, 0.55, 1.6), color: (255, 220, 90), surface: false, wedge: true, pulse: 0.5)),
+                "bridge": (block: (size: (1.02, 0.35, 0.7), color: (250, 250, 245), lift: 1.4, surface: false)),
+            },
+            rider: (image: ("ocean_surfer", 0.62), poses: { "Ducking": 0.5 }),
+            scenery: [
+                (images: ["ocean_buoy"], height: (0.6, 0.8), every: 3.0, side: (0.3, 0.6), seed: 1),
+                (images: ["ocean_palm"], height: (1.6, 3.2), every: 4.0, side: (2.0, 12.0), seed: 2),
+            ],
+            music: "themes/ocean_music.mp3",
+        ),
+        (
+            name: "savanna stampede", assets: ["savanna"], sky: "savanna_sky", skyline: (image: "savanna_horizon", height: 0.2, drift: 0.3),
+            road: (image: "savanna_trail", shoulder: "savanna_grass", paint: (250, 235, 200), median: (150, 90, 50), repeat: 3.0, shoulder_repeat: 6.0),
+            fog: ((240, 170, 100), 20.0, 58.0),
+            kinds: {
+                // Pictures facing the way they drive, standing on an invisible block the rider lands on.
+                "car":    (frames: ["savanna_zebra_rear"], oncoming: ["savanna_zebra_front"], height: 0.75, face: 0.12,
+                           block: (size: (0.62, 0.5, 0.82), color: (0, 0, 0), invisible: true)),
+                "van":    (frames: ["savanna_rhino_rear"], oncoming: ["savanna_rhino_front"], height: 1.0, face: 0.12,
+                           block: (size: (0.66, 0.8, 0.88), color: (0, 0, 0), invisible: true)),
+                "truck":  (frames: ["savanna_elephant_rear"], oncoming: ["savanna_elephant_front"], height: 1.45, face: 0.12,
+                           block: (size: (0.72, 1.15, 0.96), color: (0, 0, 0), invisible: true)),
+                "coin":   (frames: ["savanna_medal"], height: 0.32, lift: 0.25, lift_by: ("h", 0.45), spin: 0.8, bob: 0.04, push: 1.0,
+                           gone: (tracks: { "y": [(0.0, 0.0), (0.25, 0.6, quad_out)], "scale": [(0.0, 1.0), (0.25, 0.0, quad_in)] })),
+                "ramp":   (block: (size: (0.6, 0.55, 1.6), color: (200, 90, 40), surface: false, wedge: true, pulse: 0.5)),
+                "bridge": (block: (size: (1.02, 0.35, 0.7), color: (120, 80, 50), lift: 1.4, surface: false)),
+            },
+            rider: (image: ("savanna_rider", 0.62), poses: { "Ducking": 0.5 }),
+            scenery: [
+                (images: ["savanna_mound"], height: (0.9, 1.6), every: 3.0, side: (0.4, 1.0), seed: 1),
+                (images: ["savanna_acacia"], height: (1.6, 3.4), every: 4.0, side: (2.0, 12.0), seed: 2),
+            ],
+            music: "themes/savanna_music.mp3",
+        ),
+    ],
+    blink: "Wobbly",
+    meters: [
+        (prop: "lives", icon: "car_rear", max: 3, at: (0.04, 0.03), size: 0.04),
+        (prop: "coins", icon: "coin", max: 40, at: (0.04, 0.08), size: 0.025),
+    ],
+)

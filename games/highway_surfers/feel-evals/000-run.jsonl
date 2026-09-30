@@ -1,0 +1,53 @@
+{"tick": 0, "action": "hop", "args": {"dir": -1}}
+{"tick": 12, "action": "hop", "args": {"dir": -1}}
+{"tick": 36, "action": "hop", "args": {"dir": 1}}
+{"tick": 60, "action": "hop", "args": {"dir": 1}}
+{"tick": 100, "action": "jump", "args": {}}
+{"tick": 140, "action": "jump", "args": {}}
+{"tick": 180, "action": "jump", "args": {}}
+{"tick": 220, "action": "jump", "args": {}}
+{"tick": 260, "action": "jump", "args": {}}
+{"tick": 300, "action": "jump", "args": {}}
+{"tick": 340, "action": "jump", "args": {}}
+{"tick": 380, "action": "jump", "args": {}}
+{"tick": 408, "action": "hop", "args": {"dir": -1}}
+{"tick": 420, "action": "jump", "args": {}}
+{"tick": 460, "action": "jump", "args": {}}
+{"tick": 480, "action": "hop", "args": {"dir": -1}}
+{"tick": 500, "action": "jump", "args": {}}
+{"tick": 540, "action": "hop", "args": {"dir": -1}}
+{"tick": 564, "action": "hop", "args": {"dir": 1}}
+{"tick": 580, "action": "jump", "args": {}}
+{"tick": 620, "action": "jump", "args": {}}
+{"tick": 660, "action": "jump", "args": {}}
+{"tick": 732, "action": "hop", "args": {"dir": 1}}
+{"tick": 780, "action": "jump", "args": {}}
+{"tick": 820, "action": "jump", "args": {}}
+{"tick": 840, "action": "hop", "args": {"dir": -1}}
+{"tick": 860, "action": "jump", "args": {}}
+{"tick": 900, "action": "jump", "args": {}}
+{"tick": 936, "action": "hop", "args": {"dir": -1}}
+{"tick": 980, "action": "jump", "args": {}}
+{"tick": 1020, "action": "jump", "args": {}}
+{"tick": 1060, "action": "jump", "args": {}}
+{"tick": 1100, "action": "jump", "args": {}}
+{"tick": 1140, "action": "jump", "args": {}}
+{"tick": 1164, "action": "hop", "args": {"dir": 1}}
+{"tick": 1180, "action": "jump", "args": {}}
+{"tick": 1220, "action": "jump", "args": {}}
+{"tick": 1260, "action": "hop", "args": {"dir": 1}}
+{"tick": 1296, "action": "hop", "args": {"dir": 1}}
+{"tick": 1340, "action": "jump", "args": {}}
+{"tick": 1380, "action": "jump", "args": {}}
+{"tick": 1420, "action": "jump", "args": {}}
+{"tick": 1460, "action": "jump", "args": {}}
+{"tick": 1500, "action": "hop", "args": {"dir": -1}}
+{"tick": 1524, "action": "hop", "args": {"dir": -1}}
+{"tick": 1580, "action": "jump", "args": {}}
+{"tick": 1620, "action": "hop", "args": {"dir": 1}}
+{"tick": 1632, "action": "hop", "args": {"dir": 1}}
+{"tick": 1660, "action": "jump", "args": {}}
+{"tick": 1700, "action": "jump", "args": {}}
+{"tick": 1740, "action": "hop", "args": {"dir": -1}}
+{"tick": 1752, "action": "hop", "args": {"dir": 1}}
+{"tick": 1780, "action": "jump", "args": {}}

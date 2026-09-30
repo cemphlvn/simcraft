@@ -1,0 +1,55 @@
+{"tick": 24, "action": "hop", "args": {"dir": -1}}
+{"tick": 120, "action": "hop", "args": {"dir": 1}}
+{"tick": 143, "action": "duck", "args": {}}
+{"tick": 171, "action": "jump", "args": {}}
+{"tick": 280, "action": "jump", "args": {}}
+{"tick": 360, "action": "jump", "args": {}}
+{"tick": 440, "action": "jump", "args": {}}
+{"tick": 480, "action": "hop", "args": {"dir": 1}}
+{"tick": 504, "action": "hop", "args": {"dir": -1}}
+{"tick": 600, "action": "hop", "args": {"dir": -1}}
+{"tick": 680, "action": "jump", "args": {}}
+{"tick": 840, "action": "jump", "args": {}}
+{"tick": 920, "action": "jump", "args": {}}
+{"tick": 1000, "action": "jump", "args": {}}
+{"tick": 1080, "action": "jump", "args": {}}
+{"tick": 1128, "action": "hop", "args": {"dir": -1}}
+{"tick": 1160, "action": "jump", "args": {}}
+{"tick": 1240, "action": "jump", "args": {}}
+{"tick": 1320, "action": "hop", "args": {"dir": 1}}
+{"tick": 1400, "action": "jump", "args": {}}
+{"tick": 1480, "action": "jump", "args": {}}
+{"tick": 1536, "action": "hop", "args": {"dir": 1}}
+{"tick": 1560, "action": "jump", "args": {}}
+{"tick": 1632, "action": "hop", "args": {"dir": 1}}
+{"tick": 1656, "action": "hop", "args": {"dir": -1}}
+{"tick": 1680, "action": "hop", "args": {"dir": 1}}
+{"tick": 1720, "action": "jump", "args": {}}
+{"tick": 1800, "action": "jump", "args": {}}
+{"tick": 1880, "action": "jump", "args": {}}
+{"tick": 1920, "action": "hop", "args": {"dir": -1}}
+{"tick": 1960, "action": "jump", "args": {}}
+{"tick": 2016, "action": "hop", "args": {"dir": -1}}
+{"tick": 2040, "action": "jump", "args": {}}
+{"tick": 2112, "action": "hop", "args": {"dir": -1}}
+{"tick": 2184, "action": "hop", "args": {"dir": 1}}
+{"tick": 2280, "action": "jump", "args": {}}
+{"tick": 2360, "action": "jump", "args": {}}
+{"tick": 2440, "action": "jump", "args": {}}
+{"tick": 2496, "action": "hop", "args": {"dir": -1}}
+{"tick": 2520, "action": "jump", "args": {}}
+{"tick": 2568, "action": "hop", "args": {"dir": 1}}
+{"tick": 2600, "action": "jump", "args": {}}
+{"tick": 2664, "action": "hop", "args": {"dir": -1}}
+{"tick": 2760, "action": "jump", "args": {}}
+{"tick": 2840, "action": "jump", "args": {}}
+{"tick": 2920, "action": "jump", "args": {}}
+{"tick": 3000, "action": "jump", "args": {}}
+{"tick": 3080, "action": "jump", "args": {}}
+{"tick": 3144, "action": "hop", "args": {"dir": 1}}
+{"tick": 3240, "action": "jump", "args": {}}
+{"tick": 3320, "action": "jump", "args": {}}
+{"tick": 3400, "action": "jump", "args": {}}
+{"tick": 3480, "action": "jump", "args": {}}
+{"tick": 3528, "action": "hop", "args": {"dir": -1}}
+{"tick": 3560, "action": "jump", "args": {}}

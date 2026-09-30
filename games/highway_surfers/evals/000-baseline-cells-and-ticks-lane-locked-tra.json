@@ -1,0 +1,89 @@
+{
+ "step": 0,
+ "change": "baseline: cells and ticks, lane-locked traffic",
+ "seeds": {
+  "1": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 53.0,
+   "falls": 0,
+   "coins": 15,
+   "points": 551,
+   "vehicles": 1157.934426229508
+  },
+  "2": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 50.0,
+   "falls": 0,
+   "coins": 35,
+   "points": 809,
+   "vehicles": 1157.2131147540986
+  },
+  "3": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 52.0,
+   "falls": 0,
+   "coins": 16,
+   "points": 288,
+   "vehicles": 1151.688524590164
+  },
+  "4": {
+   "survived_s": 60.0,
+   "hits": 1,
+   "landings_per_min": 56.0,
+   "falls": 0,
+   "coins": 39,
+   "points": 713,
+   "vehicles": 1152.4754098360654
+  },
+  "5": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 56.0,
+   "falls": 0,
+   "coins": 33,
+   "points": 878,
+   "vehicles": 1153.5245901639346
+  }
+ },
+ "metrics": {
+  "survived_s": {
+   "mean": 60.0,
+   "min": 60.0,
+   "max": 60.0
+  },
+  "hits": {
+   "mean": 0.2,
+   "min": 0,
+   "max": 1
+  },
+  "landings_per_min": {
+   "mean": 53.4,
+   "min": 50.0,
+   "max": 56.0
+  },
+  "falls": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "coins": {
+   "mean": 27.6,
+   "min": 15,
+   "max": 39
+  },
+  "points": {
+   "mean": 647.8,
+   "min": 288,
+   "max": 878
+  },
+  "vehicles": {
+   "mean": 1154.57,
+   "min": 1151.688524590164,
+   "max": 1157.934426229508
+  }
+ },
+ "errors": {}
+}

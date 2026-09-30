@@ -1,0 +1,20 @@
+#![enable(implicit_some)]
+// Blue Ocean theme for highway_surfers: a clean Caribbean sea. Higgsfield nano_banana_pro, objects cut with its background remover (assets/src/README.md, Themes).
+Assets(
+    images: {
+        "ocean_buoy": "themes/ocean_buoy.png",
+        "ocean_deep": "themes/ocean_deep.png",
+        "ocean_ferry_front": "themes/ocean_ferry_front.png",
+        "ocean_ferry_rear": "themes/ocean_ferry_rear.png",
+        "ocean_islands": "themes/ocean_islands.png",
+        "ocean_jetski_front": "themes/ocean_jetski_front.png",
+        "ocean_jetski_rear": "themes/ocean_jetski_rear.png",
+        "ocean_lane": "themes/ocean_lane.png",
+        "ocean_palm": "themes/ocean_palm.png",
+        "ocean_shell": "themes/ocean_shell.png",
+        "ocean_sky": "themes/ocean_sky.png",
+        "ocean_speedboat_front": "themes/ocean_speedboat_front.png",
+        "ocean_speedboat_rear": "themes/ocean_speedboat_rear.png",
+        "ocean_surfer": "themes/ocean_surfer.png",
+    },
+)

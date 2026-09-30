@@ -1,0 +1,89 @@
+{
+ "step": 4,
+ "change": "traffic only around the surfer (directors), 80 rows laid out",
+ "seeds": {
+  "1": {
+   "survived_s": 31.75,
+   "hits": 3,
+   "landings_per_min": 49.13385826771653,
+   "falls": 0,
+   "coins": 7,
+   "points": 130874,
+   "vehicles": 81.44615384615385
+  },
+  "2": {
+   "survived_s": 60.0,
+   "hits": 2,
+   "landings_per_min": 49.0,
+   "falls": 0,
+   "coins": 32,
+   "points": 813678,
+   "vehicles": 82.66115702479338
+  },
+  "3": {
+   "survived_s": 60.0,
+   "hits": 2,
+   "landings_per_min": 51.0,
+   "falls": 0,
+   "coins": 14,
+   "points": 766139,
+   "vehicles": 86.32231404958678
+  },
+  "4": {
+   "survived_s": 60.0,
+   "hits": 1,
+   "landings_per_min": 49.0,
+   "falls": 0,
+   "coins": 34,
+   "points": 619047,
+   "vehicles": 85.85950413223141
+  },
+  "5": {
+   "survived_s": 60.0,
+   "hits": 0,
+   "landings_per_min": 49.0,
+   "falls": 0,
+   "coins": 38,
+   "points": 678411,
+   "vehicles": 81.28925619834712
+  }
+ },
+ "metrics": {
+  "survived_s": {
+   "mean": 54.35,
+   "min": 31.75,
+   "max": 60.0
+  },
+  "hits": {
+   "mean": 1.6,
+   "min": 0,
+   "max": 3
+  },
+  "landings_per_min": {
+   "mean": 49.43,
+   "min": 49.0,
+   "max": 51.0
+  },
+  "falls": {
+   "mean": 0.0,
+   "min": 0,
+   "max": 0
+  },
+  "coins": {
+   "mean": 25.0,
+   "min": 7,
+   "max": 38
+  },
+  "points": {
+   "mean": 601629.8,
+   "min": 130874,
+   "max": 813678
+  },
+  "vehicles": {
+   "mean": 83.52,
+   "min": 81.28925619834712,
+   "max": 86.32231404958678
+  }
+ },
+ "errors": {}
+}

@@ -71,7 +71,10 @@ pub fn load_track(dir: &Path) -> Result<(track::Track, Assets), String> {
         .from_str(&src)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let mut assets = Assets::default();
-    for pack in &track.assets {
+    // Every theme's packs load at the start: switching themes never waits, and a missing picture is said now.
+    let mut packs: Vec<&String> = track.assets.iter().chain(track.themes.iter().flat_map(|t| t.assets.iter())).collect();
+    packs.dedup();
+    for pack in packs {
         let p = find(dir, "assets", pack).ok_or_else(|| format!("asset pack '{pack}' not found (assets/{pack}.ron)"))?;
         let src = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
         let mut a: Assets = ron::from_str(&src).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -86,8 +89,22 @@ pub fn load_track(dir: &Path) -> Result<(track::Track, Assets), String> {
     names.extend(track.scenery.iter().flat_map(|s| s.images.iter()));
     names.extend(track.buttons.iter().map(|b| &b.icon));
     names.extend(track.meters.iter().map(|m| &m.icon));
+    names.extend(track.kinds.values().flat_map(|k| k.oncoming.iter()));
+    names.extend(track.rider.iter().filter_map(|r| r.image.as_ref().map(|i| &i.0)));
+    for t in &track.themes {
+        names.extend(t.sky.iter().chain(t.skyline.iter().map(|s| &s.image)));
+        names.extend(t.road.iter().flat_map(|r| [&r.image, &r.shoulder]));
+        names.extend(t.kinds.values().flat_map(|k| k.frames.iter().chain(k.states.values().flatten()).chain(k.oncoming.iter())));
+        names.extend(t.rider.iter().filter_map(|r| r.image.as_ref().map(|i| &i.0)));
+        names.extend(t.scenery.iter().flatten().flat_map(|s| s.images.iter()));
+    }
     if let Some(n) = names.into_iter().find(|n| !assets.loaded.contains_key(*n) && !n.starts_with("__")) {
         return Err(format!("track: no image '{n}' in its asset packs"));
+    }
+    for t in &track.themes {
+        if let Some(k) = t.kinds.keys().find(|k| !track.kinds.contains_key(*k)) {
+            return Err(format!("track theme '{}': kind '{k}' is not drawn by the track (add it to `kinds` first)", t.name));
+        }
     }
     for (event, a) in &track.fx {
         let bad: Vec<&String> = a.tracks.keys().filter(|k| !fx::CHANNELS.contains(&k.as_str())).collect();

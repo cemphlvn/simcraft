@@ -1,0 +1,18 @@
+// highway_surfers: the barrier stops a sideways leap onto the median; beside a ramp the same move is the BIG JUMP,
+// over the median onto a roof on the oncoming side, where the roof carries you back toward the camera.
+Scenario(
+    name: "highway_surfers: the BIG JUMP",
+    game: "games/highway_surfers",
+    steps: [
+        Step(20),
+        Refused((kind: "surfer", do: "leap", args: { "dx": -1, "dy": 0 }), "needs"),
+        Refused((kind: "surfer", do: "big_jump", args: { "dir": -1 }), "needs"),
+        Step(116),
+        Act((kind: "surfer", do: "big_jump", args: { "dir": -1 })),
+        Until("events.apex >= 1", 40),
+        Until("events.landed >= 1", 60),
+        Expect("sum.surfer.lane_to == 1 && states.surfer.Riding == 1 && events.fell == 0 && events.bonked == 0"),
+        Step(120),
+        Expect("sum.surfer.lives == 3 && states.surfer.Riding == 1"),
+    ],
+)

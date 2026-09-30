@@ -1,0 +1,47 @@
+{"tick": 40, "action": "jump", "args": {}}
+{"tick": 120, "action": "jump", "args": {}}
+{"tick": 200, "action": "jump", "args": {}}
+{"tick": 264, "action": "hop", "args": {"dir": 1}}
+{"tick": 336, "action": "hop", "args": {"dir": -1}}
+{"tick": 360, "action": "jump", "args": {}}
+{"tick": 440, "action": "jump", "args": {}}
+{"tick": 520, "action": "jump", "args": {}}
+{"tick": 600, "action": "jump", "args": {}}
+{"tick": 680, "action": "jump", "args": {}}
+{"tick": 760, "action": "jump", "args": {}}
+{"tick": 816, "action": "hop", "args": {"dir": 1}}
+{"tick": 840, "action": "jump", "args": {}}
+{"tick": 920, "action": "jump", "args": {}}
+{"tick": 1000, "action": "jump", "args": {}}
+{"tick": 1080, "action": "jump", "args": {}}
+{"tick": 1160, "action": "jump", "args": {}}
+{"tick": 1224, "action": "hop", "args": {"dir": -1}}
+{"tick": 1320, "action": "jump", "args": {}}
+{"tick": 1368, "action": "hop", "args": {"dir": 1}}
+{"tick": 1400, "action": "jump", "args": {}}
+{"tick": 1480, "action": "jump", "args": {}}
+{"tick": 1560, "action": "jump", "args": {}}
+{"tick": 1640, "action": "jump", "args": {}}
+{"tick": 1720, "action": "jump", "args": {}}
+{"tick": 1800, "action": "jump", "args": {}}
+{"tick": 1880, "action": "jump", "args": {}}
+{"tick": 1960, "action": "jump", "args": {}}
+{"tick": 2040, "action": "jump", "args": {}}
+{"tick": 2120, "action": "jump", "args": {}}
+{"tick": 2200, "action": "jump", "args": {}}
+{"tick": 2280, "action": "jump", "args": {}}
+{"tick": 2360, "action": "jump", "args": {}}
+{"tick": 2424, "action": "hop", "args": {"dir": -1}}
+{"tick": 2526, "action": "duck", "args": {}}
+{"tick": 2652, "action": "jump", "args": {}}
+{"tick": 2760, "action": "jump", "args": {}}
+{"tick": 2832, "action": "hop", "args": {"dir": -1}}
+{"tick": 2856, "action": "hop", "args": {"dir": -1}}
+{"tick": 2920, "action": "jump", "args": {}}
+{"tick": 3080, "action": "jump", "args": {}}
+{"tick": 3160, "action": "jump", "args": {}}
+{"tick": 3288, "action": "hop", "args": {"dir": 1}}
+{"tick": 3320, "action": "jump", "args": {}}
+{"tick": 3400, "action": "jump", "args": {}}
+{"tick": 3456, "action": "hop", "args": {"dir": -1}}
+{"tick": 3560, "action": "jump", "args": {}}

@@ -1,0 +1,23 @@
+// highway_surfers: you ride with your roof. A leap right lands on the roof in the next lane (where the falling height
+// crosses its roof), a jump straight up lands back on the car you took off from (it kept its speed, so did you), and
+// a whole run of riding costs nothing.
+Scenario(
+    name: "highway_surfers: ride, hop, jump",
+    game: "games/highway_surfers",
+    steps: [
+        Step(6),
+        Expect("states.surfer.Riding == 1 && sum.surfer.ph == 500 && sum.surfer.mount > 0"),
+        Act((kind: "surfer", do: "leap", args: { "dx": 1, "dy": 0 })),
+        Until("events.landed >= 1", 40),
+        Expect("sum.surfer.lane_to == 4 && sum.surfer.ph == 500 && events.fell == 0"),
+        Act((kind: "surfer", do: "jump")),
+        Step(2),
+        Expect("states.surfer.Jumping == 1 && sum.surfer.ph > 500"),
+        Refused((kind: "surfer", do: "jump"), "needs"),
+        Until("events.landed >= 2", 60),
+        Expect("states.surfer.Riding == 1 && sum.surfer.lives == 3 && events.fell == 0"),
+        Step(1800),
+        Expect("sum.surfer.lives == 3 && states.surfer.Riding == 1"),
+        SaveLoad(60),
+    ],
+)
