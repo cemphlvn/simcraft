@@ -46,7 +46,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | Crate | Contents | Knows the game? |
 |---|---|---|
 | `sim-core` | `World` (entities + cell grid + per-kind index, mutation only via methods), `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash, snapshot/restore | No |
-| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). Plan: `docs/plans/physics-and-vehicles.md` | No |
+| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). `verlet`: points and constraints (ropes, chains, struts; see Constraints). Plan: `docs/plans/physics-and-vehicles.md` | No |
 | `sim-state` | State charts: nested states, layers, reusable machines, remember, interrupt/back, pick; memory encoding; selectors; step distances. Guards and actions are generic (`G`, `A`) | No (not even Rhai) |
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
@@ -307,6 +307,22 @@ weighed: `docs/research/continuous-time.md`. Kinds without `motion` are untouche
   At the start, moving kinds from `[spawn]` take one cell each.
 - **Checked:** a moving kind cannot be `solid` or `cling` (it moves by velocity, not by steps), and its game
   cannot declare the engine-owned props itself.
+
+## Constraints (`sim_physics::verlet`)
+
+Physics comes in tiers, and a game uses the cheapest that gives its feel (`docs/research/mobile-types.md`): grid
+kinematics (tier 0), **constraints** (tier 1, here), rigid bodies (tier 2, growing from `contact`).
+
+- **Points:** position and previous position in `Fx` (velocity is their difference: Verlet), and an inverse weight
+  (`0` = pinned: nothing moves it). Gravity and a damping factor per step.
+- **Constraints** between two points with a rest length: `Distance` (a rod: pushes and pulls), `Max` (a rope: it
+  can go slack, it can't stretch), `Min` (a strut: it can't get shorter). A correction is split by inverse weight,
+  so a heavy load barely moves and a pinned point never does.
+- **Solving:** a fixed number of relaxation passes a step, constraints in their stored order, integer square
+  root: the same input gives the same points on every platform. Stretch left after the passes is kept; letting go
+  turns it into speed (the slingshot).
+- **Queries:** a rope's segments (for drawing and for swipe-across), its length and its tension (the largest
+  stretch left, for sound and haptics).
 
 ## Vehicles (`vehicle:` on a kind, `track:` in the game)
 
