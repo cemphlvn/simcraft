@@ -24,3 +24,5 @@ tools/build/
 # Generated 3D sources (large; regenerate or fetch by job id: assets/src/README.md)
 assets/src/**/*.glb
 assets/src/**/*.png
+# Generated audio sources (the game uses the MP3s in assets/themes/)
+assets/src/**/*.m4a

@@ -136,7 +136,8 @@ impl<R: Rules> Engine<Running, R> {
         let mut groups = std::mem::take(&mut self.pending);
         groups.extend(self.rules.eval(&self.world)); // 1) read
         let events = apply(&mut self.world, groups); // 2) write
-        self.rules.physics(&mut self.world); // 3) the world's own physics
+        self.world.integrate_motion(); // 3) continuous motion (kinds with `motion`)
+        self.rules.physics(&mut self.world); // 4) the world's own physics
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
         let (tick, hash) = (self.world.tick, self.world.hash());

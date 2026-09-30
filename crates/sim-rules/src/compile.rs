@@ -142,6 +142,29 @@ impl QueryCtx {
         Ok(w.field(name, x + dx, y + dy, z + dz).unwrap_or(0))
     }
 
+    /// Footprint gap to the nearest moving `kind` ahead (`dir` 1) or behind (-1), my extent shifted `dx` across.
+    fn gap(&self, kind: &str, dx: i64, dir: i64) -> i64 {
+        self.counted();
+        self.world().map_or(sim_core::FAR, |w| w.gap(self.me, kind, dx, dir))
+    }
+
+    fn touching(&self, kind: &str) -> i64 {
+        self.counted();
+        self.world().map_or(0, |w| w.touching(self.me, kind))
+    }
+
+    fn under(&self, kind: &str) -> i64 {
+        self.counted();
+        self.world().map_or(0, |w| w.under(self.me, kind))
+    }
+
+    /// A prop of any entity by id (`under(...)` gives one); `default` if it is gone or has no such prop.
+    fn prop_of(&self, id: i64, prop: &str, default: i64) -> i64 {
+        self.counted();
+        let Some(w) = self.world() else { return default };
+        w.get(id.max(0) as EntityId).and_then(|e| e.props.get(prop).copied()).unwrap_or(default)
+    }
+
     /// A prop of the nearest `kind` within `r`; `default` if there is none that close.
     fn nearest_prop(&self, kind: &str, prop: &str, r: i64, default: i64) -> i64 {
         self.counted();
@@ -341,6 +364,7 @@ enum CDo {
     Emit(String),
     Despawn(Target),
     Spawn(String),
+    SpawnAt(String, AST, AST),
     MoveToward(String),
     MoveAway(String),
     Climb(String, String),
@@ -366,7 +390,7 @@ impl CDo {
             CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
             CDo::Move(dx, dy) => out.extend([dx, dy]),
             CDo::Move3(dx, dy, dz) => out.extend([dx, dy, dz]),
-            CDo::MoveBy(dx, dy) => out.extend([dx, dy]),
+            CDo::MoveBy(dx, dy) | CDo::SpawnAt(_, dx, dy) => out.extend([dx, dy]),
             CDo::SetField(_, a) | CDo::AddField(_, a) => out.push(a),
             CDo::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx, dy, dz, v]),
             CDo::On(_, ds) => ds.iter().for_each(|d| d.int_exprs(out)),
@@ -407,6 +431,7 @@ impl Compiler<'_> {
             Do::Emit(n) => CDo::Emit(n.clone()),
             Do::Despawn(t) => CDo::Despawn(t.clone()),
             Do::Spawn(k) => CDo::Spawn(k.clone()),
+            Do::SpawnAt(k, dx, dy) => CDo::SpawnAt(k.clone(), self.expr(dx, ctx), self.expr(dy, ctx)),
             Do::MoveToward(k) => CDo::MoveToward(k.clone()),
             Do::MoveAway(k) => CDo::MoveAway(k.clone()),
             Do::Climb(k, prop) => CDo::Climb(k.clone(), prop.clone()),
@@ -616,7 +641,7 @@ fn do_sources<'a>(d: &'a Do, out: &mut Vec<&'a str>) {
         Do::Set(_, e) | Do::Add(_, e) | Do::Need(_, e) => out.push(e),
         Do::Move(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
         Do::Move3(dx, dy, dz) => out.extend([dx.as_str(), dy.as_str(), dz.as_str()]),
-        Do::MoveBy(dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
+        Do::MoveBy(dx, dy) | Do::SpawnAt(_, dx, dy) => out.extend([dx.as_str(), dy.as_str()]),
         Do::SetField(_, e) | Do::AddField(_, e) => out.push(e),
         Do::SetFieldAt(_, dx, dy, dz, v) => out.extend([dx.as_str(), dy.as_str(), dz.as_str(), v.as_str()]),
         Do::On(_, ds) => ds.iter().for_each(|d| do_sources(d, out)),
@@ -834,6 +859,13 @@ impl Game {
         rhai.register_fn("toward_x", |kind: &str, sel: &str| CTX.with(|c| c.borrow().toward(kind, Some(sel), 0)));
         rhai.register_fn("toward_y", |kind: &str, sel: &str| CTX.with(|c| c.borrow().toward(kind, Some(sel), 1)));
         rhai.register_fn("near_in", |kind: &str, sel: &str| CTX.with(|c| c.borrow().near_in(kind, sel)));
+        rhai.register_fn("ahead", |kind: &str| CTX.with(|c| c.borrow().gap(kind, 0, 1)));
+        rhai.register_fn("ahead", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap(kind, dx, 1)));
+        rhai.register_fn("behind", |kind: &str| CTX.with(|c| c.borrow().gap(kind, 0, -1)));
+        rhai.register_fn("behind", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap(kind, dx, -1)));
+        rhai.register_fn("touching", |kind: &str| CTX.with(|c| c.borrow().touching(kind)));
+        rhai.register_fn("under", |kind: &str| CTX.with(|c| c.borrow().under(kind)));
+        rhai.register_fn("prop_of", |id: i64, prop: &str, default: i64| CTX.with(|c| c.borrow().prop_of(id, prop, default)));
         rhai.register_fn("field", |name: &str| -> Result<i64, Box<rhai::EvalAltResult>> {
             CTX.with(|c| c.borrow().field(name, 0, 0, 0)).map_err(Into::into)
         });
@@ -1035,6 +1067,7 @@ impl Game {
         let mut world = World::new3(self.cfg.run.seed, w, h, d);
         world.set_solid(self.def.kinds.iter().filter(|(_, k)| k.solid).map(|(n, _)| n.clone()).collect());
         world.set_cling(self.def.kinds.iter().filter(|(_, k)| k.cling).map(|(n, _)| n.clone()).collect());
+        world.set_motion(self.def.kinds.iter().filter_map(|(n, k)| k.motion.map(|m| (n.clone(), m))).collect());
         for (name, f) in &self.def.fields {
             world.add_field(name, f.init);
             if let Some(from) = f.from_level {
@@ -1874,6 +1907,15 @@ impl Game {
                 });
                 out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x, y: subj.y, z: subj.z, props, genome });
             }
+            CDo::SpawnAt(k, dx, dy) => {
+                let (state, props) = self.template(k);
+                let (dx, dy) = (self.eval_int(scope, dx)?, self.eval_int(scope, dy)?);
+                // Outside the world: nothing (a spawn is clamped into the world by the core otherwise).
+                if !world.in_bounds3(subj.x + dx, subj.y + dy, subj.z) {
+                    return Ok(false);
+                }
+                out.push(Effect::Spawn { kind: k.clone(), state, x: subj.x + dx, y: subj.y + dy, z: subj.z, props, genome: Vec::new() });
+            }
             CDo::MoveToward(k) => {
                 if let Some((t, _)) = world.nearest(subj, k) {
                     out.push(Effect::Move { e: subj.id, dx: t.x - subj.x, dy: t.y - subj.y, dz: t.z - subj.z });
@@ -1989,7 +2031,7 @@ impl Game {
             Do::Despawn(t) => {
                 self.target_kinds(name, target, me, t, errs);
             }
-            Do::Spawn(k) | Do::MoveToward(k) | Do::MoveAway(k) if !self.def.kinds.contains_key(k) => {
+            Do::Spawn(k) | Do::SpawnAt(k, _, _) | Do::MoveToward(k) | Do::MoveAway(k) if !self.def.kinds.contains_key(k) => {
                 errs.push(format!("'{name}': unknown kind '{k}'"));
             }
             Do::Climb(k, prop) => match self.def.kinds.get(k) {
@@ -2044,6 +2086,19 @@ impl Game {
 
     fn check_refs(&self, errs: &mut Vec<String>) {
         let known = |k: &str| self.def.kinds.contains_key(k);
+        for (name, k) in self.def.kinds.iter().filter(|(_, k)| k.motion.is_some()) {
+            if k.solid || k.cling {
+                errs.push(format!("kind '{name}' has `motion`: it moves by velocity, so it cannot be `solid` or `cling`"));
+            }
+            for p in sim_core::MOTION_PROPS.iter().filter(|p| k.props.contains_key(**p)) {
+                errs.push(format!("kind '{name}' declares prop '{p}': the engine owns it on a moving kind (set it in a rule)"));
+            }
+            if let Some(m) = k.motion
+                && (m.size.0 <= 0 || m.size.1 <= 0)
+            {
+                errs.push(format!("kind '{name}' motion: size must be positive (fine units, {} a cell)", sim_core::FINE));
+            }
+        }
         for k in self.cfg.spawn.keys().filter(|k| !known(k)) {
             errs.push(format!("engine.toml [spawn]: unknown kind '{k}'"));
         }
@@ -2206,7 +2261,10 @@ impl Game {
         let counts = self.counts(world);
         let bound = self.bind_world(world);
         let synthetic = |kind: &str| {
-            let (state, props) = self.template(kind);
+            let (state, mut props) = self.template(kind);
+            if self.def.kinds.get(kind).is_some_and(|k| k.motion.is_some()) {
+                props.extend(sim_core::MOTION_PROPS.iter().map(|p| ((*p).to_string(), 0)));
+            }
             Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, z: 0, props, genome: Vec::new() }
         };
         for kind in self.def.kinds.keys() {

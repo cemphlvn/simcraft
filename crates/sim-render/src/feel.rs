@@ -73,13 +73,38 @@ impl Spring {
 #[derive(Clone, Debug, Default)]
 pub struct Tween {
     pub prev: BTreeMap<EntityId, (i64, i64, i64)>,
+    /// Moving kinds (continuous motion): their fine position and height at the previous tick.
+    pub prev_fine: BTreeMap<EntityId, (i64, i64, i64)>,
     pub alpha: f32,
 }
+
+/// Fine units in a cell (sim_core::FINE, as a float for drawing).
+const FINE: f32 = sim_core::FINE as f32;
 
 impl Tween {
     /// Call just before ticking: remember where everything is now.
     pub fn remember(&mut self, world: &World) {
         self.prev = world.entities().values().map(|e| (e.id, (e.x, e.y, e.z))).collect();
+        self.prev_fine = world.entities().values().filter_map(|e| fine(e).map(|f| (e.id, f))).collect();
+    }
+
+    /// Where to draw an entity between the last two ticks: (x, y, z) in cells, as `at` gives them, and its height
+    /// above the ground in cells. A moving kind is drawn from its fine position (`px`, `py`, `ph`), so it glides at
+    /// its velocity; anything else from its cell.
+    pub fn place(&self, e: &sim_core::Entity) -> (f32, f32, f32, f32) {
+        let Some(now) = fine(e) else {
+            let (x, y, z) = self.at(e.id, (e.x, e.y, e.z));
+            return (x, y, z, 0.0);
+        };
+        let a = self.alpha.clamp(0.0, 1.0);
+        let from = match self.prev_fine.get(&e.id) {
+            // A long jump (a respawn, a teleport) is not interpolated.
+            Some(&p) if (p.0 - now.0).abs() <= 2 * sim_core::FINE && (p.1 - now.1).abs() <= 2 * sim_core::FINE => p,
+            _ => now,
+        };
+        let lerp = |a0: i64, a1: i64| a0 as f32 + (a1 - a0) as f32 * a;
+        // A cell index's centre is at +0.5: a fine position of 1500 is drawn where cell 1 is.
+        (lerp(from.0, now.0) / FINE - 0.5, lerp(from.1, now.1) / FINE - 0.5, e.z as f32, lerp(from.2, now.2) / FINE)
     }
 
     /// An entity's position between the last two ticks (new entities are where they are).
@@ -97,6 +122,11 @@ impl Tween {
     pub fn moving(&self, id: EntityId, now: (i64, i64, i64)) -> bool {
         self.prev.get(&id).is_some_and(|p| *p != now)
     }
+}
+
+/// A moving entity's fine position and height, if it has them.
+fn fine(e: &sim_core::Entity) -> Option<(i64, i64, i64)> {
+    Some((*e.props.get("px")?, *e.props.get("py")?, e.props.get("ph").copied().unwrap_or(0)))
 }
 
 #[cfg(test)]

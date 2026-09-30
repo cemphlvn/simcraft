@@ -42,6 +42,27 @@ pub struct WorldSnapshot {
     pub terrain: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub cling: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub motion: BTreeMap<String, Motion>,
+}
+
+/// Fine units in a cell: continuous positions are integers too (docs/architecture.md, Continuous motion).
+pub const FINE: i64 = 1000;
+
+/// The props the engine owns on a moving kind: centre, velocity, height and its speed, the entity it rides.
+pub const MOTION_PROPS: [&str; 7] = ["px", "py", "vx", "vy", "ph", "vh", "mount"];
+
+/// Returned by the footprint queries when nothing is there.
+pub const FAR: i64 = 999_999;
+
+/// How a kind moves continuously: its footprint (across, along; fine units) and how fast its height falls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    pub size: (i64, i64),
+    /// Fine units per tick² taken from the upward speed while in the air.
+    #[serde(default)]
+    pub gravity: i64,
 }
 
 /// All game state. BTreeMap: iteration order is fixed by id → determinism.
@@ -68,6 +89,8 @@ pub struct World {
     terrain: Option<String>,
     /// Kinds that crawl: they only enter voxels touching terrain (walls, floors, ceilings), so they never float.
     cling: BTreeSet<String>,
+    /// Kinds that move continuously (fine positions, velocities), integrated every tick.
+    motion: BTreeMap<String, Motion>,
 }
 
 impl World {
@@ -91,6 +114,7 @@ impl World {
             fields: BTreeMap::new(),
             terrain: None,
             cling: BTreeSet::new(),
+            motion: BTreeMap::new(),
         }
     }
 
@@ -107,6 +131,7 @@ impl World {
             fields: self.fields.clone(),
             terrain: self.terrain.clone(),
             cling: self.cling.clone(),
+            motion: self.motion.clone(),
         }
     }
 
@@ -126,6 +151,7 @@ impl World {
         w.fields = s.fields;
         w.terrain = s.terrain;
         w.cling = s.cling;
+        w.motion = s.motion;
         for e in s.entities {
             if !w.in_bounds3(e.x, e.y, e.z) {
                 return Err(format!("entity {} at ({}, {}, {}) is outside the world", e.id, e.x, e.y, e.z));
@@ -160,6 +186,15 @@ impl World {
 
     pub fn clings(&self, kind: &str) -> bool {
         self.cling.contains(kind)
+    }
+
+    pub fn set_motion(&mut self, kinds: BTreeMap<String, Motion>) {
+        self.motion = kinds;
+    }
+
+    /// How a kind moves continuously, if it does.
+    pub fn motion(&self, kind: &str) -> Option<Motion> {
+        self.motion.get(kind).copied()
     }
 
     /// Does a face of this voxel touch terrain (a floor below, a wall beside, a ceiling above)?
@@ -277,6 +312,15 @@ impl World {
         }
         let id = self.next_id;
         self.next_id += 1;
+        let mut props = props;
+        if self.motion.contains_key(kind) {
+            // A moving thing starts at its cell's centre, still, on the ground, riding nothing.
+            props.entry("px".into()).or_insert(x * FINE + FINE / 2);
+            props.entry("py".into()).or_insert(y * FINE + FINE / 2);
+            for p in &MOTION_PROPS[2..] {
+                props.entry((*p).into()).or_insert(0);
+            }
+        }
         let e = Entity { id, kind: kind.into(), state: state.into(), x, y, z, props, genome: Vec::new() };
         self.entities.insert(id, e);
         let c = self.cell(x, y, z);
@@ -318,15 +362,29 @@ impl World {
             open(want).then_some(want)
         };
         let Some((x, y, z)) = target else { return false };
+        self.relocate(id, x, y, z, true);
+        true
+    }
+
+    /// Moves an entity to a voxel (the grid follows). `shift_fine`: a moving kind's fine position moves by the
+    /// same whole cells (a discrete move); off when the fine position is what moved.
+    fn relocate(&mut self, id: EntityId, x: i64, y: i64, z: i64, shift_fine: bool) {
+        let Some(e) = self.entities.get(&id) else { return };
+        let (ox, oy) = (e.x, e.y);
         let from = self.cell(e.x, e.y, e.z);
         let to = self.cell(x, y, z);
-        self.grid[from].retain(|&i| i != id);
-        let cell = &mut self.grid[to];
-        let pos = cell.partition_point(|&i| i < id);
-        cell.insert(pos, id);
+        if from != to {
+            self.grid[from].retain(|&i| i != id);
+            let cell = &mut self.grid[to];
+            let pos = cell.partition_point(|&i| i < id);
+            cell.insert(pos, id);
+        }
         let e = self.entities.get_mut(&id).expect("checked above");
         (e.x, e.y, e.z) = (x, y, z);
-        true
+        if shift_fine && let (Some(px), Some(py)) = (e.props.get("px").copied(), e.props.get("py").copied()) {
+            e.props.insert("px".into(), px + (x - ox) * FINE);
+            e.props.insert("py".into(), py + (y - oy) * FINE);
+        }
     }
 
     /// Exactly (dx, dy, dz) cells in one go (a dash, a leap): if the destination is inside the world and the kind
@@ -337,15 +395,130 @@ impl World {
         if (x, y, z) == (e.x, e.y, e.z) || !self.can_enter(&e.kind, x, y, z) {
             return false;
         }
-        let from = self.cell(e.x, e.y, e.z);
-        let to = self.cell(x, y, z);
-        self.grid[from].retain(|&i| i != id);
-        let cell = &mut self.grid[to];
-        let pos = cell.partition_point(|&i| i < id);
-        cell.insert(pos, id);
-        let e = self.entities.get_mut(&id).expect("checked above");
-        (e.x, e.y, e.z) = (x, y, z);
+        self.relocate(id, x, y, z, true);
         true
+    }
+
+    // ---------------------------------------------------------------- continuous motion
+
+    /// Moves every moving kind by its velocity (docs/architecture.md, Continuous motion): free movers first, in id
+    /// order, then riders, carried by their mount's displacement this tick plus their own velocity. Height: gravity
+    /// in the air, stopped by the ground (0) or, for a rider, its mount's `top`. Cells follow the fine positions.
+    pub fn integrate_motion(&mut self) {
+        if self.motion.is_empty() {
+            return;
+        }
+        let ids: Vec<EntityId> =
+            self.motion.keys().filter_map(|k| self.by_kind.get(k)).flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
+        let mut moved: BTreeMap<EntityId, (i64, i64)> = BTreeMap::new();
+        let mut riders = Vec::new();
+        for id in ids {
+            match self.mount_of(id) {
+                Some(m) => riders.push((id, m)),
+                None => {
+                    let d = self.glide(id, (0, 0), 0);
+                    moved.insert(id, d);
+                }
+            }
+        }
+        for (id, m) in riders {
+            let carry = moved.get(&m).copied().unwrap_or((0, 0));
+            let top = self.entities.get(&m).and_then(|e| e.props.get("top").copied()).unwrap_or(0);
+            let d = self.glide(id, carry, top);
+            moved.insert(id, d);
+        }
+    }
+
+    /// The live entity this one rides (its `mount` prop), if any; never itself.
+    fn mount_of(&self, id: EntityId) -> Option<EntityId> {
+        let m = self.entities.get(&id)?.props.get("mount").copied().unwrap_or(0);
+        (m > 0 && m as EntityId != id && self.entities.contains_key(&(m as EntityId))).then_some(m as EntityId)
+    }
+
+    /// One tick of one mover: returns how far it moved (fine units).
+    fn glide(&mut self, id: EntityId, carry: (i64, i64), floor: i64) -> (i64, i64) {
+        let (w, h) = (self.width * FINE - 1, self.height * FINE - 1);
+        let Some(e) = self.entities.get_mut(&id) else { return (0, 0) };
+        let gravity = self.motion.get(&e.kind).map_or(0, |m| m.gravity);
+        let p = &mut e.props;
+        let get = |p: &BTreeMap<String, i64>, k: &str| p.get(k).copied().unwrap_or(0);
+        let (px, py) = (get(p, "px"), get(p, "py"));
+        let (nx, ny) = ((px + get(p, "vx") + carry.0).clamp(0, w), (py + get(p, "vy") + carry.1).clamp(0, h));
+        let (mut ph, mut vh) = (get(p, "ph"), get(p, "vh"));
+        let floor = floor.max(0);
+        if ph > floor || vh > 0 {
+            vh -= gravity;
+            ph += vh;
+        }
+        if ph <= floor && vh <= 0 {
+            (ph, vh) = (floor, 0);
+        }
+        p.insert("px".into(), nx);
+        p.insert("py".into(), ny);
+        p.insert("ph".into(), ph);
+        p.insert("vh".into(), vh);
+        let (cx, cy, z) = (nx.div_euclid(FINE), ny.div_euclid(FINE), e.z);
+        if (cx, cy) != (e.x, e.y) {
+            self.relocate(id, cx, cy, z, false);
+        }
+        (nx - px, ny - py)
+    }
+
+    /// A moving entity's footprint: (left, right, back, front) in fine units, and the way it faces (+1 or -1).
+    fn footprint(&self, e: &Entity) -> Option<([i64; 4], i64)> {
+        let m = self.motion.get(&e.kind)?;
+        let (px, py) = (e.props.get("px").copied()?, e.props.get("py").copied()?);
+        let facing = if e.props.get("vy").copied().unwrap_or(0) < 0 { -1 } else { 1 };
+        Some(([px - m.size.0 / 2, px + m.size.0 / 2, py - m.size.1 / 2, py + m.size.1 / 2], facing))
+    }
+
+    /// Gap along the road from `me` to the nearest moving `kind` in front (`dir` +1) or behind (-1) of it, relative to
+    /// the way it faces, whose extent across overlaps its own shifted by `dx`. FAR if none; negative if they overlap.
+    pub fn gap(&self, me: EntityId, kind: &str, dx: i64, dir: i64) -> i64 {
+        let Some(e) = self.entities.get(&me) else { return FAR };
+        let Some(([l, r, b, f], facing)) = self.footprint(e) else { return FAR };
+        let way = facing * dir;
+        let mut best = FAR;
+        for id in self.by_kind.get(kind).into_iter().flatten() {
+            if *id == me {
+                continue;
+            }
+            let Some(([ol, or, ob, of], _)) = self.footprint(&self.entities[id]) else { continue };
+            if or <= l + dx || ol >= r + dx {
+                continue;
+            }
+            let g = if way > 0 { ob - f } else { b - of };
+            // Ahead means its middle is ahead of mine.
+            let ahead = if way > 0 { ob + of > b + f } else { ob + of < b + f };
+            if ahead && g < best {
+                best = g;
+            }
+        }
+        best
+    }
+
+    /// How many moving `kind` footprints overlap `me`'s.
+    pub fn touching(&self, me: EntityId, kind: &str) -> i64 {
+        let Some(e) = self.entities.get(&me) else { return 0 };
+        let Some(([l, r, b, f], _)) = self.footprint(e) else { return 0 };
+        let over = |id: &EntityId| {
+            *id != me && self.footprint(&self.entities[id]).is_some_and(|([ol, or, ob, of], _)| or > l && ol < r && of > b && ob < f)
+        };
+        self.by_kind.get(kind).into_iter().flatten().filter(|id| over(id)).count() as i64
+    }
+
+    /// The moving `kind` whose footprint holds `me`'s centre (the lowest id if several); 0 if none.
+    pub fn under(&self, me: EntityId, kind: &str) -> i64 {
+        let Some(e) = self.entities.get(&me) else { return 0 };
+        let (Some(px), Some(py)) = (e.props.get("px").copied(), e.props.get("py").copied()) else { return 0 };
+        self.by_kind
+            .get(kind)
+            .into_iter()
+            .flatten()
+            .find(|id| {
+                **id != me && self.footprint(&self.entities[id]).is_some_and(|([l, r, b, f], _)| px >= l && px < r && py >= b && py < f)
+            })
+            .map_or(0, |id| *id as i64)
     }
 
     pub fn props_mut(&mut self, id: EntityId) -> Option<&mut BTreeMap<String, i64>> {
@@ -599,5 +772,101 @@ impl Fnv {
     fn str(&mut self, s: &str) {
         self.u64(s.len() as u64);
         self.bytes(s.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    fn road() -> World {
+        let mut w = World::new(1, 4, 100);
+        let car = Motion { size: (600, 1600), gravity: 0 };
+        let rider = Motion { size: (300, 400), gravity: 10 };
+        w.set_motion([("car".to_string(), car), ("rider".to_string(), rider)].into_iter().collect());
+        w
+    }
+
+    fn p(w: &World, id: EntityId, k: &str) -> i64 {
+        w.get(id).unwrap().props[k]
+    }
+
+    fn set(w: &mut World, id: EntityId, k: &str, v: i64) {
+        w.props_mut(id).unwrap().insert(k.into(), v);
+    }
+
+    #[test]
+    fn a_moving_thing_glides_by_its_velocity_and_its_cell_follows() {
+        let mut w = road();
+        let car = w.spawn("car", "-", 1, 2, BTreeMap::new()).unwrap();
+        assert_eq!((p(&w, car, "px"), p(&w, car, "py"), p(&w, car, "vy")), (1500, 2500, 0), "starts at its cell's centre");
+        set(&mut w, car, "vy", 300);
+        let mut ys = Vec::new();
+        for _ in 0..5 {
+            w.integrate_motion();
+            ys.push(p(&w, car, "py"));
+        }
+        assert_eq!(ys, vec![2800, 3100, 3400, 3700, 4000], "every tick, not a cell every few ticks");
+        assert_eq!((w.get(car).unwrap().x, w.get(car).unwrap().y), (1, 4), "the cell follows the fine position");
+        assert!(w.at(1, 4).contains(&car) && !w.at(1, 2).contains(&car), "and so does the grid");
+    }
+
+    #[test]
+    fn a_rider_is_carried_by_its_mount_and_lands_back_on_its_roof() {
+        let mut w = road();
+        let car = w.spawn("car", "-", 1, 2, BTreeMap::new()).unwrap();
+        let me = w.spawn("rider", "-", 1, 2, BTreeMap::new()).unwrap();
+        set(&mut w, car, "vy", 250);
+        set(&mut w, car, "top", 500);
+        set(&mut w, me, "mount", car as i64);
+        set(&mut w, me, "ph", 500);
+        w.integrate_motion();
+        assert_eq!(p(&w, me, "py") - p(&w, car, "py"), 0, "moves with the car");
+        // A jump straight up on a moving car comes down on the same car.
+        set(&mut w, me, "vh", 60);
+        let mut top = 0;
+        for _ in 0..30 {
+            w.integrate_motion();
+            top = top.max(p(&w, me, "ph"));
+        }
+        assert!(top > 600, "it flew: {top}");
+        assert_eq!((p(&w, me, "ph"), p(&w, me, "vh")), (500, 0), "stopped by the roof, not the road");
+        assert_eq!(p(&w, me, "py"), p(&w, car, "py"), "still over the car it left");
+        // Its mount gone, it falls to the road.
+        w.despawn(car);
+        for _ in 0..30 {
+            w.integrate_motion();
+        }
+        assert_eq!(p(&w, me, "ph"), 0);
+    }
+
+    #[test]
+    fn footprints_answer_what_is_ahead_behind_beside_and_under() {
+        let mut w = road();
+        let me = w.spawn("car", "-", 1, 10, BTreeMap::new()).unwrap();
+        let front = w.spawn("car", "-", 1, 14, BTreeMap::new()).unwrap();
+        let back = w.spawn("car", "-", 1, 7, BTreeMap::new()).unwrap();
+        let beside = w.spawn("car", "-", 2, 12, BTreeMap::new()).unwrap();
+        // Centres 4 cells apart, each 1.6 cells long: a gap of 2.4 cells.
+        assert_eq!(w.gap(me, "car", 0, 1), 2400);
+        assert_eq!(w.gap(me, "car", 0, -1), 1400);
+        assert_eq!(w.gap(me, "car", 1000, 1), 400, "one lane over, the car beside is nearer");
+        // Facing the other way (driving towards -y), ahead and behind swap.
+        set(&mut w, me, "vy", -100);
+        assert_eq!(w.gap(me, "car", 0, 1), 1400);
+        assert_eq!(w.touching(me, "car"), 0);
+        set(&mut w, front, "py", 11_000);
+        assert_eq!(w.touching(me, "car"), 1, "footprints overlap");
+        let rider = w.spawn("rider", "-", 2, 12, BTreeMap::new()).unwrap();
+        assert_eq!(w.under(rider, "car"), beside as i64);
+        let _ = back;
+    }
+
+    #[test]
+    fn a_discrete_move_carries_the_fine_position() {
+        let mut w = road();
+        let car = w.spawn("car", "-", 1, 2, BTreeMap::new()).unwrap();
+        assert!(w.leap(car, 1, 3, 0));
+        assert_eq!((p(&w, car, "px"), p(&w, car, "py")), (2500, 5500));
     }
 }

@@ -115,6 +115,7 @@ impl GameDef {
                     fsm: env.fsm.clone(),
                     solid: false,
                     cling: false,
+                    motion: None,
                     hidden: true,
                     glyphs: BTreeMap::new(),
                     senses: BTreeMap::new(),
@@ -228,6 +229,10 @@ pub struct KindDef {
     /// Not drawn (environments).
     #[serde(default)]
     pub hidden: bool,
+    /// Moves continuously: fine positions and velocities integrated every tick (docs/architecture.md,
+    /// Continuous motion). `size` is its footprint (across, along; fine units).
+    #[serde(default)]
+    pub motion: Option<sim_core::Motion>,
     /// Glyph per state (else `glyph`).
     #[serde(default)]
     pub glyphs: BTreeMap<String, char>,
@@ -387,6 +392,8 @@ pub enum Do {
     Despawn(Target),
     /// Spawns a new kind at its own position.
     Spawn(String),
+    /// Spawns a kind at its own cell offset by (dx, dy) cells (expressions): traffic ahead of or behind a player.
+    SpawnAt(String, String, String),
     MoveToward(String),
     MoveAway(String),
     /// One step up a gradient: to the neighbouring cell whose `kind` has the highest `prop`.
