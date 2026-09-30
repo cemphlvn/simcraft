@@ -37,6 +37,7 @@ fn lap(track_path: &str, car_path: &str) {
     // SIMCRAFT_PILOT="reach=0.5,pace=0.98,gain=0.1,cross=0,offset=0": probe the pilot's knobs (seconds, shares).
     let mut pilot = Pilot::default();
     let mut offset = offset;
+    let mut standing = false;
     let milli = |v: &str| Fx::ratio((v.parse::<f64>().expect("a number") * 1000.0).round() as i64, 1000);
     for kv in std::env::var("SIMCRAFT_PILOT").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
         let (k, v) = kv.split_once('=').expect("key=value");
@@ -46,10 +47,17 @@ fn lap(track_path: &str, car_path: &str) {
             "gain" => pilot.gain = milli(v),
             "cross" => pilot.cross = milli(v),
             "offset" => offset = milli(v),
+            "standing" => standing = v == "1",
             other => panic!("unknown pilot knob {other}"),
         }
     }
     let plan = if offset == Fx::ZERO { plan } else { Plan::new(&track, &fleet.params[0], offset) };
+    if standing {
+        // From rest, 9 m behind the line (a grid slot).
+        let grid = track.pose(-Fx::int(9), offset);
+        (fleet.x[0], fleet.y[0], fleet.yaw[0]) = (grid.x, grid.y, grid.heading);
+        (fleet.vx[0], fleet.yaw_rate[0]) = (Fx::ZERO, Fx::ZERO);
+    }
     let (mut hint, mut last_s, mut laps, mut lap_start) = (None, Fx::ZERO, 0, 0usize);
     let (mut worst_off, mut max_g, mut min_v, mut max_v) = (0f64, 0f64, f64::MAX, 0f64);
     let f = |x: Fx| x.0 as f64 / 65536.0;

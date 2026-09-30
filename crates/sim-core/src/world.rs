@@ -44,6 +44,16 @@ pub struct WorldSnapshot {
     pub cling: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub motion: BTreeMap<String, Motion>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vehicles: BTreeMap<String, sim_physics::VehicleDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<crate::drive::Surface>,
+    #[serde(default = "sixty")]
+    pub tick_rate: i64,
+}
+
+fn sixty() -> i64 {
+    60
 }
 
 /// Fine units in a cell: continuous positions are integers too (docs/architecture.md, Continuous motion).
@@ -75,11 +85,11 @@ pub struct World {
     pub height: i64,
     /// Levels (z). 1 for 2D worlds.
     pub depth: i64,
-    entities: BTreeMap<EntityId, Entity>,
+    pub(crate) entities: BTreeMap<EntityId, Entity>,
     /// Entity ids per cell (ascending). Derived data; not part of the hash.
     grid: Vec<Vec<EntityId>>,
     /// Entity ids per kind. Makes lookups cheap for sparse kinds (8 wolves, 2000 sheep).
-    by_kind: BTreeMap<String, BTreeSet<EntityId>>,
+    pub(crate) by_kind: BTreeMap<String, BTreeSet<EntityId>>,
     /// A cell cannot hold a second solid (wall, tree, hero).
     solid: BTreeSet<String>,
     next_id: EntityId,
@@ -94,6 +104,12 @@ pub struct World {
     /// The broadphase for moving kinds (derived, not hashed): per kind and column, (py, id) sorted along the road.
     /// Built after a tick's motion; any change to the world drops it, and queries scan until it is built again.
     index: Option<MotionIndex>,
+    /// Vehicle kinds and the car each drives (`drive.rs`), the surface they drive on, and ticks a second.
+    pub(crate) vehicles: BTreeMap<String, sim_physics::VehicleDef>,
+    pub(crate) surface: Option<crate::drive::Surface>,
+    pub(crate) tick_rate: i64,
+    /// Derived from the vehicle data (physics parameters, the built track, autopilot plans): not hashed.
+    pub(crate) drive_cache: Option<Box<crate::drive::Cache>>,
 }
 
 /// Sweep and prune along one axis: for each moving kind, its entities by column (the cell their centre is in, across)
@@ -131,6 +147,10 @@ impl World {
             cling: BTreeSet::new(),
             motion: BTreeMap::new(),
             index: None,
+            vehicles: BTreeMap::new(),
+            surface: None,
+            tick_rate: 60,
+            drive_cache: None,
         }
     }
 
@@ -148,6 +168,9 @@ impl World {
             terrain: self.terrain.clone(),
             cling: self.cling.clone(),
             motion: self.motion.clone(),
+            vehicles: self.vehicles.clone(),
+            surface: self.surface.clone(),
+            tick_rate: self.tick_rate,
         }
     }
 
@@ -168,6 +191,9 @@ impl World {
         w.terrain = s.terrain;
         w.cling = s.cling;
         w.motion = s.motion;
+        w.vehicles = s.vehicles;
+        w.surface = s.surface;
+        w.tick_rate = s.tick_rate.max(1);
         for e in s.entities {
             if !w.in_bounds3(e.x, e.y, e.z) {
                 return Err(format!("entity {} at ({}, {}, {}) is outside the world", e.id, e.x, e.y, e.z));
@@ -337,6 +363,11 @@ impl World {
             for p in &MOTION_PROPS[2..] {
                 props.entry((*p).into()).or_insert(0);
             }
+            if self.vehicles.contains_key(kind) {
+                for p in crate::drive::VEHICLE_PROPS.iter().chain(&crate::drive::VEHICLE_INPUTS) {
+                    props.entry((*p).into()).or_insert(0);
+                }
+            }
         }
         let e = Entity { id, kind: kind.into(), state: state.into(), x, y, z, props, genome: Vec::new() };
         self.entities.insert(id, e);
@@ -386,7 +417,7 @@ impl World {
 
     /// Moves an entity to a voxel (the grid follows). `shift_fine`: a moving kind's fine position moves by the
     /// same whole cells (a discrete move); off when the fine position is what moved.
-    fn relocate(&mut self, id: EntityId, x: i64, y: i64, z: i64, shift_fine: bool) {
+    pub(crate) fn relocate(&mut self, id: EntityId, x: i64, y: i64, z: i64, shift_fine: bool) {
         self.index = None;
         let Some(e) = self.entities.get(&id) else { return };
         let (ox, oy) = (e.x, e.y);
@@ -428,8 +459,18 @@ impl World {
             return;
         }
         self.index = None;
-        let ids: Vec<EntityId> =
-            self.motion.keys().filter_map(|k| self.by_kind.get(k)).flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
+        // Vehicles drive themselves (`drive.rs`): the physics layer moves them.
+        self.drive_vehicles();
+        let ids: Vec<EntityId> = self
+            .motion
+            .keys()
+            .filter(|k| !self.vehicles.contains_key(*k))
+            .filter_map(|k| self.by_kind.get(k))
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let mut moved: BTreeMap<EntityId, (i64, i64)> = BTreeMap::new();
         let mut riders = Vec::new();
         for id in ids {

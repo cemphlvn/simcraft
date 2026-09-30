@@ -205,13 +205,16 @@ impl Pilot {
         let engine = p.drive_max.min(p.power_max / v.max(Fx::ONE)).max(Fx::ONE);
         let error = want - v;
         let pedal = hold / engine + error * self.gain;
-        // Lift as the driven tyres near their limit (what a driver feels through the seat, and what traction
+        // Lift as the driven tyres near their limit (clamped first: a big deficit must not outvote the lift) (what a driver feels through the seat, and what traction
         // control does): full throttle below 70 % of the slip where grip peaks, none at the peak.
         let driven = if p.drive_front > Fx::HALF { fleet.slip_front[i] } else { fleet.slip_rear[i] };
         let peak = p.grip / p.cornering;
         let used = driven.abs() / peak;
         let lift = ((Fx::ONE - used) * 10 / 3).clamp(Fx::ZERO, Fx::ONE);
-        fleet.throttle[i] = (pedal * lift).clamp(Fx::ZERO, Fx::ONE);
+        fleet.throttle[i] = pedal.clamp(Fx::ZERO, Fx::ONE) * lift;
+        // The pilot drives with the aids on (a racing driver's feet do what they do).
+        fleet.traction_control[i] = true;
+        fleet.abs[i] = true;
         fleet.brake[i] = (-(error + Fx::ONE) * self.gain).clamp(Fx::ZERO, Fx::ONE);
     }
 }

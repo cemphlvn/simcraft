@@ -308,6 +308,53 @@ weighed: `docs/research/continuous-time.md`. Kinds without `motion` are untouche
 - **Checked:** a moving kind cannot be `solid` or `cling` (it moves by velocity, not by steps), and its game
   cannot declare the engine-owned props itself.
 
+## Vehicles (`vehicle:` on a kind, `track:` in the game)
+
+A moving kind with `vehicle: "stock_car"` is a car, and the physics layer (`sim-physics`) drives it every tick,
+straight after the rules (tick step 3, before other motion). Cars are data: `vehicles/<name>.ron` next to or above
+the game, else `assets/vehicles/<name>.ron` (`VehicleDef`: mass, geometry, torque curve as dyno points, gears,
+brakes, tyres, aero, sub-steps; a missing number with a rule of thumb derives itself). Vehicle worlds use 1 m cells,
+so fine units are millimetres.
+
+```ron
+kinds: { "car": (motion: (size: (1996, 4912)), vehicle: "stock_car", props: { ... }) },
+track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9000, columns: 2, gap: 5000)),
+```
+
+- **Intent (props the car reads; rules, actions or the autopilot write them):**
+  - `throttle` and `brake`, 0..1000;
+  - `steer`, -1000 (right) to 1000 (left);
+  - `pilot` 1 hands the car to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰
+    of its planned limit;
+  - `grid` N puts the car in grid slot N on its first tick.
+- **State (props the engine writes; a game may read them, never declare them):**
+  - `px`, `py`, and `vx`, `vy` in mm per tick;
+  - `yaw`, 65536 a turn, counterclockwise from +x;
+  - `speed` (mm/s), `g_long` and `g_lat` (mm/s², what the driver feels);
+  - `track_s` and `track_off` (mm along the track and left of its centreline);
+  - the full-precision physics state in hidden props (`_x`, `_vx`, `_yaw`, ...), so hashes, snapshots and replays
+    cover cars without anything new.
+- **The model (`sim-physics`, `docs/plans/physics-and-vehicles.md`):**
+  - a dynamic bicycle: slip-angle tyres, linear to the limit then sliding, a friction circle shared with drive
+    and brakes;
+  - load transfer, downforce and banking;
+  - the kinematic bicycle at walking pace;
+  - 8 sub-steps a tick;
+  - aids: traction control and ABS.
+- **Tracks (`TrackDef`):**
+  - straights and left/right arcs with banking, eased across joins;
+  - `Track::pose(s, offset)` and `locate(x, y)` answer where things are;
+  - the track must close on itself.
+- **Autopilot:**
+  - a quasi-steady-state lap plan per (kind, line);
+  - pure pursuit steering and feed-forward pedals, with the aids on.
+- **Measured:**
+  - oracle tests against textbook vehicle dynamics (`sim-physics`);
+  - `simcraft-physics-bench` scenes, including `lap`, a stock car on the Charlotte-sized oval against the real
+    pole (`games/race/LAPS.md`).
+- **Not yet:** contact between cars (they pass through each other), a gearbox and RPM (layer 3), and suspension
+  (layer 4).
+
 ## Renderer (`sim-render`)
 
 A framework for game interfaces, in this workspace, with its own terminal renderer.

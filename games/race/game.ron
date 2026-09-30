@@ -1,13 +1,50 @@
 #![enable(implicit_some)]
-// Race: a first-person stock-car race on a 1.5-mile banked oval (tracks/charlotte.ron). The cars are data
-// (assets/vehicles/stock_car.ron) driven by the engine's vehicle physics (crates/sim-physics); this file is the
-// shell until the core steps vehicles natively (docs/plans/physics-and-vehicles.md). Units: 1 m cells, so fine
-// units are millimetres.
+// Race: a stock-car race on a 1.5-mile banked oval (tracks/charlotte.ron: Charlotte Motor Speedway's length,
+// radii and 24° banking). Every car is a Next Gen Cup car as data (assets/vehicles/stock_car.ron), driven by the
+// engine's vehicle physics (docs/architecture.md, Vehicles). You drive car 1 with throttle, brake and steering
+// (the `drive` action); the others are the engine's autopilot, each at its own pace and line.
+// Units: 1 m cells, so fine units are millimetres; speeds mm/s; accelerations mm/s².
 Game(
     name: "race",
-    perception: Senses,
+    perception: Direct,
+
     kinds: {
-        "car": (glyph: 'c', motion: (size: (1996, 4912)), props: { "human": 0 }),
+        "car": (glyph: 'c', motion: (size: (1996, 4912)), vehicle: "stock_car",
+                props: { "human": 0, "lap": 0, "last_s": 0, "lap_start": 0, "lap_ms": 0, "best_ms": 0 }),
     },
-    rules: [],
+
+    track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9000, columns: 2, gap: 5000)),
+
+    params: {
+        // You start from this grid slot.
+        "player_id": 1,
+        // The field's pace, ‰ of each car's planned limit: the fastest rival, and how much slower each slot back.
+        "pace_top": 995, "pace_step": 6,
+        // Rivals spread over lines this far apart (mm left of the centreline), cycling.
+        "line_step": 2500, "lines": 3,
+        // Half a lap in mm: a car whose distance along the track drops by more than this crossed the line.
+        "half_lap": 1207000,
+    },
+
+    rules: [
+        // First tick: a grid slot for everyone; the player drives, the rest get the autopilot.
+        (name: "grid", for: "car", when: "tick == 0",
+         then: [ Set("grid", "me.id"), Set("human", "if me.id == p.player_id { 1 } else { 0 }"),
+                 Set("pilot", "if me.id == p.player_id { 0 } else { 1 }"),
+                 Set("pace", "p.pace_top - (me.id - 2) * p.pace_step"),
+                 Set("line", "(me.id % p.lines - 1) * p.line_step") ]),
+        // Crossing the start/finish line: a lap, and its time.
+        (name: "lap", for: "car", when: "tick > 1 && me.track_s + p.half_lap < me.last_s",
+         then: [ Add("lap", "1"), Set("lap_ms", "(tick - me.lap_start) * 1000 / 60"), Set("lap_start", "tick"),
+                 Set("best_ms", "if me.lap > 0 && (me.best_ms == 0 || (tick - me.lap_start) * 1000 / 60 < me.best_ms) { (tick - me.lap_start) * 1000 / 60 } else { me.best_ms }"),
+                 Emit("lap") ]),
+        (name: "odometer", for: "car", when: "true", then: [ Set("last_s", "me.track_s") ]),
+    ],
+
+    // Your hands and feet: throttle and brake 0..1000, steering -1000 (right)..1000 (left).
+    actions: [
+        (name: "drive", for: "car", args: ["throttle", "brake", "steer"], when: "me.human == 1",
+         then: [ Set("throttle", "clamp(arg.throttle, 0, 1000)"), Set("brake", "clamp(arg.brake, 0, 1000)"),
+                 Set("steer", "clamp(arg.steer, -1000, 1000)") ]),
+    ],
 )

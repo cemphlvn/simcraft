@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────
 #  STEAM ENGINE — operator panel (race)
-#  1 m cells: the 1.5-mile oval fits in 1,000 × 600.
+#  1 m cells: the 1.5-mile oval and its run-off fit in 1,150 × 640. `car` is the field size.
 # ─────────────────────────────────────────────────────────────
 
 [run]
@@ -9,8 +9,11 @@ max_ticks = 36000
 tick_rate = 60
 
 [world]
-width = 1000
-height = 600
+width = 1150
+height = 640
 
 [spawn]
-car = 1
+car = 8
+
+[agent]
+controllable = ["car"]

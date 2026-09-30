@@ -39,12 +39,24 @@ pub struct GameDef {
     /// Environments this game uses (`envs/<name>.ron`); merged in at load.
     #[serde(default)]
     pub environments: Vec<String>,
+    /// The surface vehicles drive on: a track file (relative to the game) laid from `origin` (mm), and its grid.
+    #[serde(default)]
+    pub track: Option<TrackRef>,
     /// Filled by the merge: the environments' own rules (salted after every other rule).
     #[serde(skip)]
     pub env_rules: Vec<RuleDef>,
     /// Filled by the merge: the environment kinds, in `environments` order.
     #[serde(skip)]
     pub env_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackRef {
+    pub file: String,
+    pub origin: (i64, i64),
+    #[serde(default)]
+    pub grid: sim_core::Grid,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -116,6 +128,7 @@ impl GameDef {
                     solid: false,
                     cling: false,
                     motion: None,
+                    vehicle: None,
                     hidden: true,
                     glyphs: BTreeMap::new(),
                     senses: BTreeMap::new(),
@@ -233,6 +246,10 @@ pub struct KindDef {
     /// Continuous motion). `size` is its footprint (across, along; fine units).
     #[serde(default)]
     pub motion: Option<sim_core::Motion>,
+    /// A vehicle: the physics layer drives it as this car (`vehicles/<name>.ron` next to or above the game, or
+    /// `assets/vehicles/<name>.ron`; docs/architecture.md, Vehicles). Needs `motion`.
+    #[serde(default)]
+    pub vehicle: Option<String>,
     /// Glyph per state (else `glyph`).
     #[serde(default)]
     pub glyphs: BTreeMap<String, char>,

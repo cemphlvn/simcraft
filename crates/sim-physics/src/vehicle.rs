@@ -286,6 +286,9 @@ impl Params {
 
 /// Below this speed the power limit would divide by almost nothing; first gear's force caps it anyway (m/s).
 const CRAWL: Fx = Fx::ratio(1, 2);
+/// The share of an axle's remaining grip the driver aids let the engine or brakes use.
+const AID_MARGIN: Fx = Fx::ratio(85, 100);
+
 /// Slip angles lose their meaning at walking pace: below `SLOW` the car turns like the kinematic bicycle, above
 /// `FAST` like the dynamic one, and in between it blends (m/s).
 const SLOW: Fx = Fx::int(2);
@@ -328,6 +331,11 @@ pub struct Fleet {
     pub throttle: Vec<Fx>,
     pub brake: Vec<Fx>,
     pub steer: Vec<Fx>,
+    // Driver aids (keyboard players, the autopilot): traction control caps the drive, ABS the brakes, so each axle
+    // keeps a share of its grip for turning (the friction circle: a tyre spending all its grip on pushing or
+    // braking has none left to steer with, and a car that loses the rear that way spins).
+    pub traction_control: Vec<bool>,
+    pub abs: Vec<bool>,
     // The surface under each car, written by whoever knows the track: its slope, the direction it falls, and a
     // grip factor (1 on the racing surface; grass, wet, marbles less).
     pub bank: Vec<Angle>,
@@ -341,11 +349,12 @@ pub struct Fleet {
     pub slip_rear: Vec<Fx>,
     pub load_front: Vec<Fx>,
     pub load_rear: Vec<Fx>,
+    /// The tyres' sideways force last step, N (the slope's extra load depends on it; carry it between ticks).
+    pub tyre_lat: Vec<Fx>,
     // Stage scratch: net force (car frame) and yaw moment, from `forces` to `integrate`.
     fx: Vec<Fx>,
     fy: Vec<Fx>,
     mz: Vec<Fx>,
-    tyre_lat: Vec<Fx>,
 }
 
 impl Fleet {
@@ -372,6 +381,8 @@ impl Fleet {
         let i = self.len() - 1;
         (self.x[i], self.y[i]) = (x, y);
         self.yaw.push(yaw);
+        self.traction_control.push(false);
+        self.abs.push(false);
         self.bank.push(Angle::ZERO);
         self.bank_dir.push(Angle::ZERO);
         self.surface.push(Fx::ONE);
@@ -436,8 +447,20 @@ impl Fleet {
             let moving = if vx > Fx::ZERO { Fx::ONE } else { Fx::ZERO };
             let brake = p.brake_max * self.brake[i] * moving;
             let cap = |f: Fx, n: Fx| f.clamp(-(grip * n), grip * n);
-            let fxf = cap(drive * p.drive_front - brake * p.brake_front, nf);
-            let fxr = cap(drive * (Fx::ONE - p.drive_front) - brake * (Fx::ONE - p.brake_front), nr);
+            // The aids: what the axle's grip leaves after the turn it is holding (last step's sideways force,
+            // shared as the weight is), less a margin.
+            let aid = |f: Fx, n: Fx, share: Fx, on: bool| {
+                if !on {
+                    return f;
+                }
+                let lat = self.tyre_lat[i] * share;
+                let left = ((grip * n) * (grip * n) - lat * lat).max(Fx::ZERO).sqrt() * AID_MARGIN;
+                f.clamp(-left, left)
+            };
+            let (tc, abs) = (self.traction_control[i], self.abs[i]);
+            let (wf, wr) = (p.weight_front, Fx::ONE - p.weight_front);
+            let fxf = cap(aid(drive * p.drive_front, nf, wf, tc) - aid(brake * p.brake_front, nf, wf, abs), nf);
+            let fxr = cap(aid(drive * (Fx::ONE - p.drive_front), nr, wr, tc) - aid(brake * (Fx::ONE - p.brake_front), nr, wr, abs), nr);
 
             // Slip angles, small-angle form (velocity ratios, no atan: research §3).
             let ve = vx.max(Fx::ONE);

@@ -395,6 +395,9 @@ pub struct Game {
     natives: BTreeMap<String, Arc<dyn NativeEnv>>,
     /// Kind → state text at birth.
     initial_states: BTreeMap<String, String>,
+    /// Vehicle kinds → their car, and the surface they drive on (read with the game's files).
+    vehicles: BTreeMap<String, sim_core::sim_physics::VehicleDef>,
+    surface: Option<sim_core::Surface>,
     /// Definitions of rules written inside states (in `rules` order, for validation).
     machine_rules: Vec<RuleDef>,
     /// The `near.<kind>`s expressions actually read. None = all (could not be determined).
@@ -924,6 +927,14 @@ fn entity_map(e: &Entity, dist: Option<i64>) -> Map {
     m
 }
 
+/// Files a game names besides its own: vehicle texts by name, the track's text, and what could not be found.
+#[derive(Clone, Debug, Default)]
+pub struct Data {
+    pub vehicles: BTreeMap<String, String>,
+    pub track: Option<String>,
+    pub missing: Vec<String>,
+}
+
 impl Game {
     /// `dir/game.ron` + `config` (default `dir/engine.toml`).
     pub fn load(dir: &Path, config: Option<&Path>) -> Result<(World, Game), String> {
@@ -945,7 +956,30 @@ impl Game {
             let path = found.ok_or_else(|| format!("environment '{name}': no envs/{name}.ron next to or above {}", dir.display()))?;
             envs.push((name.clone(), read(&path)?));
         }
-        Self::from_parts(&game_src, cfg_src, &envs)
+        let mut data = Data::default();
+        for name in def.kinds.values().filter_map(|k| k.vehicle.as_ref()) {
+            // vehicles/<name>.ron next to or above the game, else assets/vehicles/<name>.ron above it.
+            let file = format!("{name}.ron");
+            let found = dir
+                .ancestors()
+                .map(|a| a.join("vehicles").join(&file))
+                .chain(dir.ancestors().map(|a| a.join("assets").join("vehicles").join(&file)))
+                .find(|p| p.exists());
+            match found {
+                Some(path) => {
+                    data.vehicles.insert(name.clone(), read(&path)?);
+                }
+                None => data.missing.push(format!("vehicle '{name}': no vehicles/{file} or assets/vehicles/{file} near {}", dir.display())),
+            }
+        }
+        if let Some(t) = &def.track {
+            let path = dir.join(&t.file);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => data.track = Some(text),
+                Err(e) => data.missing.push(format!("track: {}: {e}", path.display())),
+            }
+        }
+        Self::from_parts_with(&game_src, cfg_src, &envs, &data)
     }
 
     pub fn from_strs(game_ron: &str, engine_toml: &str) -> Result<(World, Game), String> {
@@ -954,6 +988,11 @@ impl Game {
 
     /// `envs`: (name, text of `envs/<name>.ron`) for every environment the game lists.
     pub fn from_parts(game_ron: &str, engine_toml: &str, envs: &[(String, String)]) -> Result<(World, Game), String> {
+        Self::from_parts_with(game_ron, engine_toml, envs, &Data::default())
+    }
+
+    /// Like `from_parts`, with the texts of the vehicle and track files the game names.
+    pub fn from_parts_with(game_ron: &str, engine_toml: &str, envs: &[(String, String)], data: &Data) -> Result<(World, Game), String> {
         let mut def: GameDef = ron::from_str(game_ron).map_err(|e| format!("game.ron: {e}"))?;
         let cfg: EngineConfig = toml::from_str(engine_toml).map_err(|e| format!("engine.toml: {e}"))?;
         let parsed: Vec<EnvDef> =
@@ -961,7 +1000,14 @@ impl Game {
         let merge_errors = def.merge_envs(&parsed).err().unwrap_or_default();
         let mut game = Self::compile(def, cfg);
         game.compile_errors.extend(merge_errors);
-        let texts: Vec<&str> = envs.iter().flat_map(|(_, s)| ["\0", s.as_str()]).collect();
+        game.read_vehicles(data);
+        let texts: Vec<&str> = envs
+            .iter()
+            .map(|(_, s)| s.as_str())
+            .chain(data.vehicles.values().map(String::as_str))
+            .chain(data.track.as_deref())
+            .flat_map(|s| ["\0", s])
+            .collect();
         game.source_hash = [game_ron, "\0", engine_toml]
             .into_iter()
             .chain(texts)
@@ -970,6 +1016,40 @@ impl Game {
         let (world, errs) = game.initial_world();
         game.compile_errors.extend(errs);
         Ok((world, game))
+    }
+
+    /// The cars and the track the game names, parsed and checked: every problem is a load error.
+    fn read_vehicles(&mut self, data: &Data) {
+        use sim_core::sim_physics::{Track, TrackDef, VehicleDef};
+        self.compile_errors.extend(data.missing.iter().cloned());
+        let kinds: Vec<(String, String)> = self.def.kinds.iter().filter_map(|(k, d)| d.vehicle.clone().map(|v| (k.clone(), v))).collect();
+        for (kind, name) in kinds {
+            let Some(text) = data.vehicles.get(&name) else {
+                if !data.missing.iter().any(|m| m.contains(&format!("'{name}'"))) {
+                    self.compile_errors.push(format!("kind '{kind}': vehicle '{name}' was not read"));
+                }
+                continue;
+            };
+            match ron::from_str::<VehicleDef>(text) {
+                Ok(v) => {
+                    let problems = v.problems();
+                    self.compile_errors.extend(problems.iter().map(|p| format!("vehicle '{name}': {p}")));
+                    if problems.is_empty() {
+                        self.vehicles.insert(kind, v);
+                    }
+                }
+                Err(e) => self.compile_errors.push(format!("vehicle '{name}': {e}")),
+            }
+        }
+        if let (Some(t), Some(text)) = (&self.def.track, &data.track) {
+            match ron::from_str::<TrackDef>(text) {
+                Ok(def) => match Track::new(&def) {
+                    Ok(_) => self.surface = Some(sim_core::Surface { track: def, origin: t.origin, grid: t.grid.clone() }),
+                    Err(problems) => self.compile_errors.extend(problems.iter().map(|p| format!("track {}: {p}", t.file))),
+                },
+                Err(e) => self.compile_errors.push(format!("track {}: {e}", t.file)),
+            }
+        }
     }
 
     fn compile(def: GameDef, cfg: EngineConfig) -> Game {
@@ -1187,6 +1267,8 @@ impl Game {
             expr_guards: mach.expr_guards,
             blocks: mach.blocks,
             initial_states,
+            vehicles: BTreeMap::new(),
+            surface: None,
         }
     }
 
@@ -1216,6 +1298,7 @@ impl Game {
         world.set_solid(self.def.kinds.iter().filter(|(_, k)| k.solid).map(|(n, _)| n.clone()).collect());
         world.set_cling(self.def.kinds.iter().filter(|(_, k)| k.cling).map(|(n, _)| n.clone()).collect());
         world.set_motion(self.def.kinds.iter().filter_map(|(n, k)| k.motion.map(|m| (n.clone(), m))).collect());
+        world.set_vehicles(self.vehicles.clone(), self.surface.clone(), self.cfg.run.tick_rate);
         for (name, f) in &self.def.fields {
             world.add_field(name, f.init);
             if let Some(from) = f.from_level {
@@ -2451,11 +2534,19 @@ impl Game {
             for p in sim_core::MOTION_PROPS.iter().filter(|p| k.props.contains_key(**p)) {
                 errs.push(format!("kind '{name}' declares prop '{p}': the engine owns it on a moving kind (set it in a rule)"));
             }
+            if k.vehicle.is_some() {
+                for p in sim_core::VEHICLE_PROPS.iter().filter(|p| k.props.contains_key(**p)) {
+                    errs.push(format!("kind '{name}' declares prop '{p}': the engine owns it on a vehicle (read it)"));
+                }
+            }
             if let Some(m) = k.motion
                 && (m.size.0 <= 0 || m.size.1 <= 0)
             {
                 errs.push(format!("kind '{name}' motion: size must be positive (fine units, {} a cell)", sim_core::FINE));
             }
+        }
+        for (name, _) in self.def.kinds.iter().filter(|(_, k)| k.vehicle.is_some() && k.motion.is_none()) {
+            errs.push(format!("kind '{name}' has `vehicle` but no `motion`: a vehicle moves continuously (add motion: (size: ..))"));
         }
         for k in self.cfg.spawn.keys().filter(|k| !known(k)) {
             errs.push(format!("engine.toml [spawn]: unknown kind '{k}'"));
@@ -2622,6 +2713,11 @@ impl Game {
             let (state, mut props) = self.template(kind);
             if self.def.kinds.get(kind).is_some_and(|k| k.motion.is_some()) {
                 props.extend(sim_core::MOTION_PROPS.iter().map(|p| ((*p).to_string(), 0)));
+            }
+            if self.def.kinds.get(kind).is_some_and(|k| k.vehicle.is_some()) {
+                for p in sim_core::VEHICLE_PROPS.iter().chain(&sim_core::VEHICLE_INPUTS) {
+                    props.entry((*p).to_string()).or_insert(0);
+                }
             }
             Entity { id: 0, kind: kind.into(), state, x: 0, y: 0, z: 0, props, genome: Vec::new() }
         };
