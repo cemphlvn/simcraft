@@ -19,6 +19,10 @@ pub enum Request {
         entity: Option<u64>,
         #[serde(rename = "as", default)]
         seat: Option<String>,
+        /// Only what is within this many cells of your first entity (map and entities): a large world observed by a
+        /// player that only needs its surroundings.
+        #[serde(default)]
+        near: Option<i64>,
     },
     Act {
         #[serde(rename = "as", default)]
@@ -61,7 +65,7 @@ impl Session {
     pub fn handle(&mut self, req: Request) -> Result<Value, String> {
         match req {
             Request::Info { seat } => Ok(self.info(seat.as_deref())),
-            Request::Observe { entity, seat } => self.observe(entity, seat.as_deref()),
+            Request::Observe { entity, seat, near } => self.observe(entity, seat.as_deref(), near),
             Request::Act { seat, actions } => self.act(seat.as_deref(), &actions),
             Request::Step { n } => Ok(self.step(n.unwrap_or(1))),
             Request::Field { name } => {
@@ -132,7 +136,7 @@ impl Session {
             })).collect::<Vec<_>>(),
             "commands": {
                 "info": "{\"cmd\":\"info\"}",
-                "observe": "{\"cmd\":\"observe\"} or {\"cmd\":\"observe\",\"entity\":ID} (local view, '@' = you)",
+                "observe": "{\"cmd\":\"observe\"} (add \"near\":R for only R cells around you) or {\"cmd\":\"observe\",\"entity\":ID} (local view, '@' = you)",
                 "act": "{\"cmd\":\"act\",\"as\":\"<seat>\",\"actions\":[{\"entity\":ID,\"do\":\"<action>\",\"args\":{...}}]}  see `actions`; `as` only when the game has seats; applied next step, before rules",
                 "step": "{\"cmd\":\"step\",\"n\":N}  stops early when the game ends (`done`, `result`)",
                 "field": "{\"cmd\":\"field\",\"name\":\"<field>\"}  the field at every voxel (x fastest, then y, then z)",
@@ -164,18 +168,29 @@ impl Session {
         out
     }
 
-    fn observe(&self, entity: Option<u64>, seat: Option<&str>) -> Result<Value, String> {
+    fn observe(&self, entity: Option<u64>, seat: Option<&str>, near: Option<i64>) -> Result<Value, String> {
         let w = self.engine.world();
         let Some(id) = entity else {
-            let (x0, y0, x1, y1) = (0, 0, w.width - 1, w.height - 1);
+            let you = self.yours(seat);
+            let centre = you.first().and_then(|id| w.get(*id));
+            let (x0, y0, x1, y1) = match (near, centre) {
+                (Some(r), Some(c)) => {
+                    let (x0, y0) = w.clamp(c.x - r, c.y - r);
+                    let (x1, y1) = w.clamp(c.x + r, c.y + r);
+                    (x0, y0, x1, y1)
+                }
+                _ => (0, 0, w.width - 1, w.height - 1),
+            };
+            let inside = |e: &&sim_core::Entity| (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y);
             return Ok(json!({
                 "tick": w.tick,
-                "you": self.yours(seat),
+                "you": you,
                 "scores": self.game().scores(w),
                 "counts": self.counts(),
                 "states": self.states(),
+                "origin": [x0, y0],
                 "map": self.render(x0, y0, x1, y1, None),
-                "entities": w.entities().values().collect::<Vec<_>>(),
+                "entities": w.entities().values().filter(inside).collect::<Vec<_>>(),
             }));
         };
         let me = w.get(id).ok_or_else(|| format!("entity {id} does not exist"))?;

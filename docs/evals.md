@@ -42,8 +42,28 @@ A metric is a Python expression over one run:
 | series `state.<kind>.<state>` | Entities of a kind in a state (active part, e.g. `state.ground.Trail`) |
 | series `sum.<kind>.<prop>` | Sum of a prop over a kind, e.g. `sum.nest.food` |
 
+`max_seconds` instead of `max_ticks` gives the length in game time (it survives a change of tick rate); `seconds` and
+`rate` (ticks a second) are in scope.
+
+**A player** (`highway_surfers`): a game measured *as played* names a scripted player. `module` is a Python file in
+the game with a `Player(info, seed, **args)` class whose `decide(observation)` returns actions
+(`[{"do": "hop", "args": {"dir": -1}}]`); it decides every `every` ticks. Same seeds, same player: still deterministic.
+
+```toml
+[player]
+module = "bot.py"
+args = { skill = 80 }   # passed to Player
+every = 2
+```
+
 Metrics are averaged over seeds (mean, min, max). Make metrics honest when the game breaks: a "first time" metric
 should not reward a game that ends before the event could happen (give it the worst value instead).
+
+## Feel
+
+How a game *looks in motion* is measured apart from how it plays: `simcraft-play <game> --feel` (a roam view: a
+scripted walker; a track: `--replay RUN` played headless at 60 frames a second through the renderer's own code, with
+`stall`, `step_ratio`, `eye_jerk`, `rider_jerk`, cost). Logged in `games/<name>/FEEL.md`, raw in `feel-evals/`.
 
 ## Example
 
