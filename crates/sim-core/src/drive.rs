@@ -13,13 +13,16 @@ use sim_physics::{Angle, Fleet, Fx, Params, Pilot, Plan, Track, TrackDef, Vehicl
 use std::collections::BTreeMap;
 
 /// What the engine writes on a vehicle (readable by rules), then its hidden state (engine only).
-pub const VEHICLE_PROPS: [&str; 17] = [
+pub const VEHICLE_PROPS: [&str; 23] = [
     "yaw",
     "speed",
     "g_long",
     "g_lat",
     "track_s",
     "track_off",
+    "rpm",
+    "gear",
+    "impact",
     "_on",
     "_x",
     "_y",
@@ -31,14 +34,20 @@ pub const VEHICLE_PROPS: [&str; 17] = [
     "_lat",
     "_seg",
     "_slip",
+    "_rpm",
+    "_cut",
+    "_stuck",
 ];
 
 /// Intent a vehicle reads (a rule, an action or the autopilot writes it): throttle and brake 0..1000, steer
-/// -1000 (right)..1000 (left); `reverse` 1 engages reverse; `shift` +1 / -1 asks the gearbox for a gear up or down (taken and cleared), when
-/// `manual` is 1 (else it shifts itself); `aids` 1 turns on traction control and ABS; `pilot` 1 hands the car to the
-/// autopilot, driving `line` mm left of the centreline at `pace` ‰ of the plan (1000 by default); `grid` places
-/// the car on the starting grid (slot 1, 2, ...).
-pub const VEHICLE_INPUTS: [&str; 10] = ["throttle", "brake", "steer", "shift", "manual", "aids", "pilot", "line", "pace", "grid"];
+/// -1000 (right)..1000 (left); `reverse` 1 engages reverse; `shift` +1 / -1 asks the gearbox for a gear up or down
+/// (taken and cleared) when `manual` is 1 (else it shifts itself); `aids` 1 turns on traction control and ABS.
+/// `pilot` hands work to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰ of its
+/// plan (1000 by default): 1 drives the car entirely (a rival); 2 is line steering for a player (the autopilot steers
+/// to `line`, catching slides, and caps the player's pedals at what the car can hold: brake assist; the player's
+/// throttle and brake still drive it). `grid` places the car on the starting grid (slot 1, 2, ...).
+pub const VEHICLE_INPUTS: [&str; 11] =
+    ["throttle", "brake", "steer", "reverse", "shift", "manual", "aids", "pilot", "line", "pace", "grid"];
 
 /// The starting grid, behind the start line: rows `spacing` apart, `columns` side by side `gap` apart (mm).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,17 +195,34 @@ impl World {
                 places.push(place);
                 if get("pilot") > 0 {
                     let (line, pace) = (get("line"), if e.props.contains_key("pace") { get("pace") } else { 1000 });
-                    pilots.push((i, e.kind.clone(), line, pace, place));
+                    pilots.push((i, e.kind.clone(), line, pace, place, get("pilot")));
                 }
             }
         }
         if let Some(track) = &cache.track {
             // Who is ahead of whom, for the pilots' racecraft.
             let ahead = if pilots.is_empty() { Vec::new() } else { ahead_of(track, &places, &fleet.vx) };
-            for (i, kind, line, pace, place) in pilots {
-                let plan = cache.plans.entry((kind, line)).or_insert_with_key(|(k, l)| Plan::new(track, &cache.params[k], metres(*l)));
+            for (i, kind, line, pace, place, mode) in pilots {
+                // Plans per metre of line (a player sliding across the track must not plan a lap every tick); the
+                // pursuit itself aims at the exact line.
+                let key = (line + 500).div_euclid(1000) * 1000;
+                let plan = cache.plans.entry((kind, key)).or_insert_with_key(|(k, l)| Plan::new(track, &cache.params[k], metres(*l)));
                 let pilot = Pilot { pace: Fx::ratio(pace.clamp(0, 2000), 1000), ..Pilot::default() };
-                pilot.drive(&mut fleet, i, track, plan, place, ahead[i]);
+                if mode == 2 {
+                    // Line steering: the pilot steers to the player's line and says what the car can hold; the
+                    // player's feet stay in charge within that (throttle no more than, brake no less than).
+                    let (throttle, brake) = (fleet.throttle[i], fleet.brake[i]);
+                    let mut plan = plan.clone();
+                    plan.offset = metres(line);
+                    pilot.drive(&mut fleet, i, track, &plan, place, None);
+                    // Backing out of a spin (the pilot's recovery) is the pilot's alone.
+                    if !fleet.reverse[i] {
+                        fleet.throttle[i] = throttle.min(fleet.throttle[i]);
+                    }
+                    fleet.brake[i] = brake.max(fleet.brake[i]);
+                } else {
+                    pilot.drive(&mut fleet, i, track, plan, place, ahead[i]);
+                }
             }
         }
         fleet.step(self.tick_rate);

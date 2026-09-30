@@ -899,7 +899,8 @@ mod tests {
             }
         }
         // The racing surface's edges sit where the track says they are: 24° banking lifts the outside.
-        let turn = r.s.iter().position(|&s| s > 700.0).unwrap();
+        // Mid turns 1-2 (the track starts just past the dogleg; the turn runs from ~37 m to ~773 m).
+        let turn = r.s.iter().position(|&s| s > 400.0).unwrap();
         let outside = r.pts[turn][0].1;
         assert!(outside > 3.0 && outside < 4.5, "outside edge of a 24° turn is {outside} m up");
     }

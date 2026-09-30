@@ -1,8 +1,10 @@
 #![enable(implicit_some)]
 // Race: a stock-car race on a 1.5-mile banked oval (tracks/charlotte.ron: Charlotte Motor Speedway's length,
 // radii and 24° banking). Every car is a Next Gen Cup car as data (assets/vehicles/stock_car.ron), driven by the
-// engine's vehicle physics (docs/architecture.md, Vehicles). You drive car 1 with throttle, brake and steering
-// (the `drive` action); the others are the engine's autopilot, each at its own pace and line.
+// engine's vehicle physics (docs/architecture.md, Vehicles). You drive car 1; the others are the engine's
+// autopilot, each at its own pace and line. How you steer is a choice (`assist`): line steering by default (arcade:
+// left/right move your line up and down the banking, the car follows it through the turns, catches slides and
+// holds you to what the car can take, so full throttle is always safe), or manual (the keys turn the wheel).
 // Units: 1 m cells, so fine units are millimetres; speeds mm/s; accelerations mm/s².
 Game(
     name: "race",
@@ -10,10 +12,10 @@ Game(
 
     kinds: {
         "car": (glyph: 'c', motion: (size: (1996, 4912)), vehicle: "stock_car",
-                props: { "human": 0, "lap": 0, "last_s": 0, "lap_start": 0, "lap_ms": 0, "best_ms": 0 }),
+                props: { "human": 0, "stick": 0, "lap": 0, "last_s": 0, "lap_start": 0, "lap_ms": 0, "best_ms": 0 }),
     },
 
-    track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9000, columns: 2, gap: 5000)),
+    track: (file: "tracks/charlotte.ron", origin: (650000, 50000), grid: (spacing: 9000, columns: 2, gap: 5000)),
 
     params: {
         // You are car 1 and start from the back of the grid (slot 8 of 8); the rivals fill slots 1-7 in order.
@@ -22,6 +24,15 @@ Game(
         "pace_top": 995, "pace_step": 6,
         // Rivals spread over lines this far apart (mm left of the centreline), cycling.
         "line_step": 2500, "lines": 3,
+        // How you steer: 2 = line steering (arcade), 0 = manual. Line steering moves your line this far a tick at
+        // full stick (mm: 60 is 3.6 m/s across the track; 150 snapped the car into a weave at 75 m/s).
+        "player_assist": 2, "line_rate": 60,
+        // How far your line goes: low (left, toward the apron) and high (right, toward the wall). The car runs up
+        // to ~2 m wide of its line at the limit, and the wall is 9 m out: the high line stops at 4.5 m.
+        "line_low": 5500, "line_high": 4500,
+        // With help, you run at this share of the car's limit (‰): a little margin, so the high line stays off
+        // the wall (at 100 % the car drifted 2 m wide into it).
+        "player_pace": 970,
         // Half a lap in mm: a car whose distance along the track drops by more than this crossed the line.
         "half_lap": 1207000,
     },
@@ -30,8 +41,8 @@ Game(
         // First tick: a grid slot for everyone; the player drives, the rest get the autopilot.
         (name: "grid", for: "car", when: "tick == 0",
          then: [ Set("grid", "if me.id == p.player_id { p.player_slot } else { me.id - 1 }"), Set("human", "if me.id == p.player_id { 1 } else { 0 }"),
-                 Set("pilot", "if me.id == p.player_id { 0 } else { 1 }"), Set("aids", "1"),
-                 Set("pace", "p.pace_top - (me.id - 2) * p.pace_step"),
+                 Set("pilot", "if me.id == p.player_id { p.player_assist } else { 1 }"), Set("aids", "1"),
+                 Set("pace", "if me.id == p.player_id { p.player_pace } else { p.pace_top - (me.id - 2) * p.pace_step }"),
                  Set("line", "(me.id % p.lines - 1) * p.line_step") ]),
         // Crossing the start/finish line: a lap, and its time.
         (name: "lap", for: "car", when: "tick > 1 && me.track_s + p.half_lap < me.last_s",
@@ -41,6 +52,9 @@ Game(
                  Set("best_ms", "if me.lap > 0 && (me.best_ms == 0 || (tick - me.lap_start) * 1000 / 60 < me.best_ms) { (tick - me.lap_start) * 1000 / 60 } else { me.best_ms }"),
                  Emit("lap") ]),
         (name: "odometer", for: "car", when: "true", then: [ Set("last_s", "me.track_s") ]),
+        // Line steering: the stick moves your line across the track; let go and the line stays.
+        (name: "groove", for: "car", when: "me.human == 1 && me.pilot == 2 && me.stick != 0",
+         then: [ Set("line", "clamp(me.line + me.stick * p.line_rate / 1000, -p.line_high, p.line_low)") ]),
     ],
 
     // Your hands and feet: throttle and brake 0..1000, steering -1000 (right)..1000 (left); paddles for the
@@ -50,11 +64,14 @@ Game(
          then: [ Set("manual", "1"), Set("shift", "arg.dir") ]),
         (name: "drive", for: "car", args: ["throttle", "brake", "steer"], when: "me.human == 1",
          then: [ Set("throttle", "clamp(arg.throttle, 0, 1000)"), Set("brake", "clamp(arg.brake, 0, 1000)"),
-                 Set("steer", "clamp(arg.steer, -1000, 1000)") ]),
+                 Set("steer", "clamp(arg.steer, -1000, 1000)"), Set("stick", "clamp(arg.steer, -1000, 1000)") ]),
         // Reverse in (1) or out (0); and handing your car to the autopilot (1) or taking it back (0), aids on.
         (name: "reverse", for: "car", args: ["on"], when: "me.human == 1 && (arg.on == 0 || arg.on == 1)",
          then: [ Set("reverse", "arg.on") ]),
         (name: "autopilot", for: "car", args: ["on"], when: "me.human == 1 && (arg.on == 0 || arg.on == 1)",
-         then: [ Set("pilot", "arg.on"), Set("aids", "1") ]),
+         then: [ Set("pilot", "if arg.on == 1 { 1 } else { p.player_assist }"), Set("aids", "1") ]),
+        // Steering help: 2 = line steering (arcade), 0 = manual (the keys turn the wheel).
+        (name: "assist", for: "car", args: ["mode"], when: "me.human == 1 && (arg.mode == 0 || arg.mode == 2)",
+         then: [ Set("pilot", "arg.mode"), Set("line", "clamp(me.track_off, -p.line_high, p.line_low)") ]),
     ],
 )

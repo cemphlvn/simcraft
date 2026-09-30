@@ -17,6 +17,12 @@ pub enum Shape {
     /// Radius (mm) and angle turned (hundredths of a degree).
     Left(i64, i64),
     Right(i64, i64),
+    /// A turn eased in and out by transition spirals (clothoids, the curve road and track design use): the
+    /// curvature grows steadily from straight to `radius` over `spiral` mm, holds, and falls back over `spiral` mm;
+    /// banking eases in and out along the spirals. Radius (mm), angle turned in all (hundredths of a degree),
+    /// spiral length (mm).
+    EasedLeft(i64, i64, i64),
+    EasedRight(i64, i64, i64),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,6 +86,12 @@ impl Default for SideDef {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Straight,
+    /// A clothoid-eased turn: `sign` 1 left, -1 right; its points are sampled in the segment's `pts`.
+    Eased {
+        radius: Fx,
+        sign: i64,
+        spiral: Fx,
+    },
     /// `sign` 1 turns left, -1 right; `a0` points from the centre to the segment's start.
     Arc {
         radius: Fx,
@@ -100,6 +112,37 @@ struct Seg {
     h0: Angle,
     kind: Kind,
     bank: Angle,
+    /// An eased turn's centreline, every `STEP` metres from its start (empty for other shapes).
+    pts: Vec<(Fx, Fx)>,
+}
+
+/// Sampling step along an eased turn (m): the chord between samples strays 0.2 mm from a 190 m curve.
+const STEP: Fx = Fx::HALF;
+
+/// The heading an eased turn has turned through `t` metres in (radians, before its sign).
+fn eased_turned(radius: Fx, spiral: Fx, len: Fx, t: Fx) -> Fx {
+    let t = t.clamp(Fx::ZERO, len);
+    if spiral == Fx::ZERO {
+        return t / radius;
+    }
+    let in_spiral = |u: Fx| u * u / (spiral * radius * 2);
+    if t < spiral {
+        in_spiral(t)
+    } else if t <= len - spiral {
+        in_spiral(spiral) + (t - spiral) / radius
+    } else {
+        // All it turns, (len − spiral)/radius, less what the last spiral has still to turn.
+        (len - spiral) / radius - in_spiral(len - t)
+    }
+}
+
+/// The curvature of an eased turn `t` metres in (1/m, before its sign).
+fn eased_curvature(radius: Fx, spiral: Fx, len: Fx, t: Fx) -> Fx {
+    if spiral == Fx::ZERO {
+        return Fx::ONE / radius;
+    }
+    let ramp = |u: Fx| (u / spiral).clamp(Fx::ZERO, Fx::ONE) / radius;
+    ramp(t).min(ramp(len - t))
 }
 
 /// Where a point is on the track.
@@ -189,8 +232,43 @@ impl Track {
                     let a0 = h - Angle(sign * TURN / 4);
                     (arc(radius, turn), Kind::Arc { radius, sign, cx, cy, a0, turn })
                 }
+                Shape::EasedLeft(r, a, l) | Shape::EasedRight(r, a, l) => {
+                    let sign = if matches!(sd.shape, Shape::EasedLeft(..)) { 1 } else { -1 };
+                    let (radius, turn, spiral) = (mm(r.max(1)), Angle::centidegrees(a), mm(l.max(0)));
+                    // Two spirals turn spiral/radius together; the arc between them turns the rest.
+                    let total = turn.to_radians();
+                    let arc_part = total * radius - spiral;
+                    if r <= 0 || a <= 0 || a > 36000 || l < 0 || arc_part < Fx::ZERO {
+                        problems.push(format!(
+                            "{label}: an eased turn needs a radius above 0, 0..360°, and spirals short enough to fit                              the angle (spiral ≤ angle × radius: {} mm here; is {r} mm, {a}, {l} mm)",
+                            (total * radius).to_units(1000)
+                        ));
+                    }
+                    (spiral * 2 + arc_part.max(Fx::ZERO), Kind::Eased { radius, sign, spiral })
+                }
             };
-            segs.push(Seg { s0: s, len, x0: x, y0: y, h0: h, kind, bank });
+            let pts = match kind {
+                Kind::Eased { radius, sign, spiral } => {
+                    // Walk the curve: exact heading, midpoint rule for the position.
+                    let n = (len / STEP).floor().max(1) as usize;
+                    let mut pts = Vec::with_capacity(n + 2);
+                    let (mut px, mut py) = (x, y);
+                    pts.push((px, py));
+                    let mut t = Fx::ZERO;
+                    while t < len {
+                        let dt = STEP.min(len - t);
+                        let mid = t + dt / 2;
+                        let hd = h + Angle(Angle::radians(eased_turned(radius, spiral, len, mid)).0 * sign);
+                        px += dt * hd.cos();
+                        py += dt * hd.sin();
+                        pts.push((px, py));
+                        t += dt;
+                    }
+                    pts
+                }
+                _ => Vec::new(),
+            };
+            segs.push(Seg { s0: s, len, x0: x, y0: y, h0: h, kind, bank, pts });
             let end = at(&segs[segs.len() - 1], len);
             (x, y, h) = (end.0, end.1, end.2);
             s += len;
@@ -245,8 +323,22 @@ impl Track {
         let s = self.wrap(s);
         let i = self.seg_at(s);
         let g = &self.segs[i];
-        let half = self.blend / 2;
         let n = self.segs.len();
+        // An eased turn banks along its spirals (from the segment before, to the one after).
+        if let Kind::Eased { spiral, .. } = g.kind
+            && spiral > Fx::ZERO
+        {
+            let t = s - g.s0;
+            let lerp = |a: Angle, b: Angle, f: Fx| a + Angle((((b - a).0 as i128 * f.0 as i128) >> 16) as i64);
+            if t < spiral {
+                return lerp(self.segs[(i + n - 1) % n].bank, g.bank, t / spiral);
+            }
+            if t > g.len - spiral {
+                return lerp(g.bank, self.segs[(i + 1) % n].bank, (t - (g.len - spiral)) / spiral);
+            }
+            return g.bank;
+        }
+        let half = self.blend / 2;
         let (from, to, into) = if s - g.s0 < half {
             (self.segs[(i + n - 1) % n].bank, g.bank, s - g.s0 + half)
         } else if g.s0 + g.len - s < half {
@@ -274,6 +366,10 @@ impl Track {
         match self.segs[self.seg_at(self.wrap(s))].kind {
             Kind::Straight => Fx::ZERO,
             Kind::Arc { radius, sign, .. } => Fx::ONE / radius * sign,
+            Kind::Eased { radius, sign, spiral } => {
+                let g = &self.segs[self.seg_at(self.wrap(s))];
+                eased_curvature(radius, spiral, g.len, self.wrap(s) - g.s0) * sign
+            }
         }
     }
 
@@ -345,6 +441,25 @@ impl Track {
                 let r = (dx * dx + dy * dy).sqrt();
                 (arc(radius, phi), (radius - r) * sign)
             }
+            Kind::Eased { .. } => {
+                // The nearest sample (coarse every 8 m, then fine), then the chord to its better neighbour.
+                let d2 = |k: usize| {
+                    let (px, py) = g.pts[k];
+                    (px - x) * (px - x) + (py - y) * (py - y)
+                };
+                let last = g.pts.len() - 1;
+                let coarse = (0..=last).step_by(16).chain([last]).min_by_key(|&k| d2(k)).unwrap_or(0);
+                let k = (coarse.saturating_sub(16)..=(coarse + 16).min(last)).min_by_key(|&k| d2(k)).unwrap_or(0);
+                let (a, b) = if k == last || (k > 0 && d2(k - 1) < d2(k + 1)) { (k - 1, k) } else { (k, k + 1) };
+                let ((ax, ay), (bx, by)) = (g.pts[a], g.pts[b]);
+                let (cx, cy) = (bx - ax, by - ay);
+                let len2 = (cx * cx + cy * cy).max(Fx(1));
+                let f = ((x - ax) * cx + (y - ay) * cy) / len2;
+                let t = STEP * a as i64 + STEP * f;
+                // Left of the chord is positive.
+                let chord = len2.sqrt();
+                (t, ((x - ax) * cy * -Fx::ONE + (y - ay) * cx) / chord)
+            }
         };
         let tol = Fx::ratio(1, 1000);
         (t >= -tol && t <= g.len + tol).then(|| Place { s: self.wrap(g.s0 + t.clamp(Fx::ZERO, g.len)), offset, seg: i })
@@ -362,6 +477,14 @@ fn at(g: &Seg, t: Fx) -> (Fx, Fx, Angle) {
             let phi = arc_angle(t, radius);
             let a = a0 + Angle(phi.0 * sign);
             (cx + radius * a.cos(), cy + radius * a.sin(), g.h0 + Angle(phi.0 * sign))
+        }
+        Kind::Eased { radius, sign, spiral } => {
+            let t = t.clamp(Fx::ZERO, g.len);
+            let k = ((t / STEP).floor().max(0) as usize).min(g.pts.len() - 2);
+            let f = (t - STEP * k as i64) / STEP;
+            let ((ax, ay), (bx, by)) = (g.pts[k], g.pts[k + 1]);
+            let heading = g.h0 + Angle(Angle::radians(eased_turned(radius, spiral, g.len, t)).0 * sign);
+            (ax + (bx - ax) * f, ay + (by - ay) * f, heading)
         }
     }
 }
@@ -426,6 +549,59 @@ mod tests {
                 assert!(ds < 0.005 && (f(at.offset) - off as f64).abs() < 0.005, "s {} off {off}: {at:?}", f(s));
             }
         }
+    }
+
+    /// The same oval with its turns eased by 60 m spirals.
+    fn eased_oval() -> TrackDef {
+        let mut d = oval();
+        d.blend = 0;
+        d.segments[1].shape = Shape::EasedLeft(100_000, 18000, 60_000);
+        d.segments[3].shape = Shape::EasedLeft(100_000, 18000, 60_000);
+        // An eased half turn of radius R with spirals L reaches further out; straights shortened to close: the
+        // generator of a real track solves this; here the two halves are symmetric, so it closes as it is.
+        d
+    }
+
+    #[test]
+    fn eased_turns_close_and_have_no_kinks() {
+        let t = Track::new(&eased_oval()).expect("closes");
+        let mut last_k = f(t.curvature(Fx::ZERO));
+        let mut last_h = t.pose(Fx::ZERO, Fx::ZERO).heading;
+        let mut worst = (0f64, 0f64);
+        for i in 1..(f(t.length) * 4.0) as i64 {
+            let s = Fx::ratio(i, 4);
+            let (k, h) = (f(t.curvature(s)), t.pose(s, Fx::ZERO).heading);
+            // Curvature changes by at most (1/R)/spiral per metre (no steps); heading by at most κ·ds.
+            worst.0 = worst.0.max((k - last_k).abs());
+            worst.1 = worst.1.max(((h - last_h).signed().0 as f64 / TURN as f64 * 360.0).abs());
+            (last_k, last_h) = (k, h);
+        }
+        // (plus one Q16 step of rounding: curvature is 1/65536 fine)
+        assert!(worst.0 <= 0.25 / 100.0 / 60.0 + 1.0 / 65536.0, "curvature jumps by {} per quarter metre", worst.0);
+        assert!(worst.1 <= (0.25f64 / 100.0).to_degrees() + 0.002, "heading jumps by {}° per quarter metre", worst.1);
+    }
+
+    #[test]
+    fn locate_undoes_pose_on_eased_turns() {
+        let t = Track::new(&eased_oval()).unwrap();
+        for i in 0..800 {
+            let s = Fx(t.length.0 * i / 800 + 777);
+            for off in [-7, 0, 5] {
+                let p = t.pose(s, Fx::int(off));
+                let at = t.locate(p.x, p.y, None);
+                let ds = f((at.s - s).abs()).min(f(t.length) - f((at.s - s).abs()));
+                assert!(ds < 0.02 && (f(at.offset) - off as f64).abs() < 0.02, "s {} off {off}: {at:?}", f(s));
+            }
+        }
+    }
+
+    #[test]
+    fn eased_banking_rises_along_the_spiral() {
+        let t = Track::new(&eased_oval()).unwrap();
+        let deg = |a: Angle| a.0 as f64 * 360.0 / TURN as f64;
+        assert!((deg(t.bank(Fx::int(250))) - 5.0).abs() < 0.01, "the straight's own bank up to the turn");
+        assert!((deg(t.bank(Fx::int(280))) - 14.5).abs() < 0.01, "halfway up the spiral: halfway up the bank");
+        assert!((deg(t.bank(Fx::int(320))) - 24.0).abs() < 0.01, "full bank on the arc");
     }
 
     #[test]

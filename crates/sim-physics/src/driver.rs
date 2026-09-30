@@ -268,7 +268,22 @@ impl Pilot {
         // Still rolling the wrong way (just out of reverse, or pushed): stop first, then drive.
         let rolling_back = !backing && v < -Fx::HALF;
         let dist = (dx * dx + dy * dy).sqrt().max(Fx::ONE);
-        let pursue = p.wheelbase * alpha.sin() * 2 / dist;
+        // Pursuit: the arc's curvature, turned into a wheel angle by geometry (δ = L·κ). Plus the understeer the
+        // steady turn itself needs, fed forward from the line's own curvature: K·v²·κ_line, K the understeer
+        // gradient from each axle's cornering stiffness at its load now (the steady-state inverse of the tested
+        // bicycle model). Only the steady turn gets it: multiplying the corrections too raised the loop gain up
+        // to 5× at speed.
+        let curve = alpha.sin() * 2 / dist;
+        let (cf, cr) = (p.cornering * fleet.load_front[i], p.cornering * fleet.load_rear[i]);
+        let gradient_v2 = if cf > Fx::ZERO && cr > Fx::ZERO {
+            let lean = p.cg_to_rear * cr - p.cg_to_front * cf;
+            (p.mass * v * v / p.wheelbase * lean / cf / cr).clamp(-p.wheelbase / 2, p.wheelbase * 4)
+        } else {
+            Fx::ZERO
+        };
+        let k_track = track.curvature(place.s + reach / 2);
+        let k_line = k_track / (Fx::ONE - k_track * line).max(Fx::HALF);
+        let pursue = curve * p.wheelbase + k_line * gradient_v2;
         // Stanley's cross-track term (Thrun et al. 2006): steer back toward the line in proportion to how far
         // off it the car is, gentler the faster it goes.
         let off = place.offset - plan.offset;
