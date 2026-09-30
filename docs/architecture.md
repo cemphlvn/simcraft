@@ -1107,7 +1107,7 @@ embedded, so the build is one self-contained artifact) and produces:
 | `macos` | `dist/<game>-macos/<Game>.app` (the layout a Steam or Epic depot takes; sign and notarize before upload) | Xcode command line tools |
 | `linux` / `windows` | native executable in `dist/<game>-<target>/` (Steam depots, Epic BuildPatchTool) | that target's toolchain |
 | `steam` | the native build plus SteamPipe scripts (`app_build.vdf`, one depot per OS) in `dist/<game>-steam/` | Steamworks app and depot ids (`--app`, `--depot`) |
-| `ios` / `android` | not yet: the same `sim-gpu` code, wrapped by Xcode / Gradle projects (IPA, AAB) | |
+| `ios` / `android` | `tools/mobile/build.sh ios\|android`: `sim-mobile` as a static library in an Xcode project (`xcodegen`; simulator, a paired iPhone over Wi-Fi with `ios phone`, and an archive for App Store Connect) or a shared library in a Gradle project (`NativeActivity`; APK for a device, AAB for Play) | Xcode 26 + iOS 26 SDK, `xcodegen`; JDK 17, Android SDK (API 36), NDK r28+ (16 KB pages), `cargo-ndk` |
 
 ## Mobile core (`sim-mobile`)
 
