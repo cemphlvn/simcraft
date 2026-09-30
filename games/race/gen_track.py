@@ -141,6 +141,9 @@ def main():
         f"    width: {mm(WIDTH)},\n"
         "    start: (0, 0, 0),\n"
         f"    blend: {mm(BLEND)},\n"
+        "    // Inside: the apron, then the infield grass (70 % grip, no wall). Outside: the SAFER barrier at the edge.\n"
+        "    left: (width: 20000, grip: 700, wall: false),\n"
+        "    right: (width: 0, wall: true),\n"
         "    segments: [\n" + "\n".join(lines) + "\n    ],\n)\n"
     )
     lap = sum(p[1] if p[0] == "S" else p[1] * p[2] for p in pieces)

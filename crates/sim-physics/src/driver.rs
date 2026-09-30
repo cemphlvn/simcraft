@@ -141,14 +141,55 @@ impl Plan {
     }
 }
 
-/// Seat car `i` on the track under it: the slope and the direction it falls. Returns where the car is.
+/// Seat car `i` on the track under it: the slope, the direction it falls, and the grip there (the racing surface,
+/// or a run-off beyond its edges). Returns where the car is.
 pub fn sit_on(fleet: &mut Fleet, i: usize, track: &Track, hint: Option<usize>) -> Place {
     let place = track.locate(fleet.x[i], fleet.y[i], hint);
     let pose = track.pose(place.s, place.offset);
     fleet.bank[i] = Angle(pose.bank.0.abs());
     // A positive bank falls to the left of the direction of travel.
     fleet.bank_dir[i] = pose.heading + if pose.bank.0 >= 0 { Angle::QUARTER } else { -Angle::QUARTER };
+    fleet.surface[i] = track.grip(place.offset);
     place
+}
+
+/// The nearest car ahead of one the pilot drives: how far ahead along the track (m), how fast it goes (m/s) and
+/// where it is across the track (m left of the centreline).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ahead {
+    pub gap: Fx,
+    pub speed: Fx,
+    pub offset: Fx,
+}
+
+/// Look this far ahead for a car to pass (m); a car within `DODGE_WIDTH` across the track is in the way, and the
+/// pass goes that far to its side, keeping `DODGE_EDGE` from the edge of the track.
+const LOOK: Fx = Fx::int(80);
+const DODGE_WIDTH: Fx = Fx::ratio(35, 10);
+const DODGE_EDGE: Fx = Fx::int(3);
+/// Pace off the planned line (a pass), as a share of the plan's speed.
+const PASS_PACE: Fx = Fx::ratio(97, 100);
+/// Recovery: ticks stalled before backing up, and ticks backing up.
+const STALL: i64 = 90;
+const BACK: i64 = 60;
+/// Following: a gap of 0.6 s of travel plus 8 m, closed at 0.5 m/s per metre of error.
+const FOLLOW_TIME: Fx = Fx::ratio(6, 10);
+const FOLLOW_MIN: Fx = Fx::int(8);
+const FOLLOW_GAIN: Fx = Fx::HALF;
+
+/// The nearest car ahead of each car along the track, within `LOOK`: from each car's place and speed.
+pub fn ahead_of(track: &Track, places: &[Place], speeds: &[Fx]) -> Vec<Option<Ahead>> {
+    (0..places.len())
+        .map(|i| {
+            (0..places.len())
+                .filter(|&j| j != i)
+                .filter_map(|j| {
+                    let gap = track.wrap(places[j].s - places[i].s);
+                    (gap > Fx::ZERO && gap < LOOK).then_some(Ahead { gap, speed: speeds[j], offset: places[j].offset })
+                })
+                .min_by_key(|a| (a.gap, a.offset))
+        })
+        .collect()
 }
 
 /// An autopilot for one car.
@@ -176,30 +217,67 @@ impl Default for Pilot {
 
 impl Pilot {
     /// Set car `i`'s steering and pedals to follow `plan`; `place` is where the car is (from [`sit_on`]).
-    pub fn drive(&self, fleet: &mut Fleet, i: usize, track: &Track, plan: &Plan, place: Place) {
+    pub fn drive(&self, fleet: &mut Fleet, i: usize, track: &Track, plan: &Plan, place: Place, ahead: Option<Ahead>) {
         let v = fleet.vx[i];
         let p = &fleet.params[i];
+        // Racecraft: a car ahead on this line is passed on the side with more room, and if the car cannot get
+        // alongside, it follows at a speed-dependent distance (the Intelligent Driver Model's gap idea).
+        // Recovering from a spin or a wall: stalled for `STALL` ticks with somewhere to go, back up for `BACK`
+        // ticks steering the other way, then drive on.
+        let stalled = v.abs() < Fx::ONE;
+        if fleet.stuck[i] < 0 {
+            fleet.stuck[i] += 1;
+        } else if stalled {
+            fleet.stuck[i] += 1;
+            if fleet.stuck[i] >= STALL {
+                fleet.stuck[i] = -BACK;
+            }
+        } else {
+            fleet.stuck[i] = 0;
+        }
+        let backing = fleet.stuck[i] < 0;
+        fleet.reverse[i] = backing;
+        let edge = track.width / 2 - DODGE_EDGE;
+        let (line, follow) = match ahead {
+            Some(a) if (a.offset - plan.offset).abs() < DODGE_WIDTH && a.gap < LOOK => {
+                let inside = (a.offset + DODGE_WIDTH).min(edge);
+                let outside = (a.offset - DODGE_WIDTH).max(-edge);
+                // The side nearer where this car already is, if there is room on it.
+                let pick = if (place.offset - inside).abs() <= (place.offset - outside).abs() { inside } else { outside };
+                let alongside = (place.offset - a.offset).abs() >= DODGE_WIDTH - Fx::HALF;
+                let safe = a.speed + (a.gap - v * FOLLOW_TIME - FOLLOW_MIN) * FOLLOW_GAIN;
+                (pick, if alongside { None } else { Some(safe.max(Fx::ZERO)) })
+            }
+            _ => (plan.offset, None),
+        };
         // Pure pursuit: the arc through a point on the line ahead, curvature 2·sin α / distance, α measured from
         // the car's heading (measuring from the direction of travel feeds back: turning left, the car slides a
         // little right of its heading, the error grows, it steers more; measured, it spun in 3 s). The front
         // wheels turn by atan(wheelbase × curvature), small-angle.
         let reach = (v * self.reach_time).max(self.reach_min);
-        let aim = track.pose(place.s + reach, plan.offset);
+        let aim = track.pose(place.s + reach, line);
         let (dx, dy) = (aim.x - fleet.x[i], aim.y - fleet.y[i]);
         let alpha = (Angle::atan2(dy, dx) - fleet.yaw[i]).signed();
+        // Facing away from the line (after a spin), pure pursuit's sin α is near zero: turn at full lock instead.
+        let behind = alpha.0.abs() > Angle::QUARTER.0;
         let dist = (dx * dx + dy * dy).sqrt().max(Fx::ONE);
         let pursue = p.wheelbase * alpha.sin() * 2 / dist;
         // Stanley's cross-track term (Thrun et al. 2006): steer back toward the line in proportion to how far
         // off it the car is, gentler the faster it goes.
         let off = place.offset - plan.offset;
         let back = -(Angle::atan2(off * self.cross, v.max(Fx::ONE)).signed().to_radians());
-        let wheel = (pursue + back) / p.steer_lock.to_radians();
+        let wheel = if behind { Fx::int(alpha.0.signum()) } else { (pursue + back) / p.steer_lock.to_radians() };
+        // Backing up, the steering works the other way round.
+        let wheel = if backing { -Fx::int(alpha.0.signum()) } else { wheel };
         fleet.steer[i] = wheel.clamp(-Fx::ONE, Fx::ONE);
         // Pedals: feed forward the force that holds the planned speed (drag, rolling, and the plan's own
         // acceleration), then correct gently toward it; a driver, not a switch (full throttle at any deficit
         // spun the car: 5.9 kN of push on rear tyres already near their limit).
         let ahead = place.s + v * Fx::ratio(2, 10);
         let want = plan.speed_at(track, ahead) * self.pace;
+        let want = follow.map_or(want, |safe| want.min(safe));
+        // Off the planned line (passing), a little margin: the plan's limit is for its own line.
+        let want = if line == plan.offset { want } else { want * PASS_PACE };
         let slope = (plan.speed_at(track, ahead + Fx::int(5)) - plan.speed_at(track, ahead)) / 5;
         let hold = p.drag_k * v * v + p.rolling + p.mass * slope * v;
         let engine = p.drive_max.min(p.power_max / v.max(Fx::ONE)).max(Fx::ONE);
@@ -211,10 +289,10 @@ impl Pilot {
         let peak = p.grip / p.cornering;
         let used = driven.abs() / peak;
         let lift = ((Fx::ONE - used) * 10 / 3).clamp(Fx::ZERO, Fx::ONE);
-        fleet.throttle[i] = pedal.clamp(Fx::ZERO, Fx::ONE) * lift;
+        fleet.throttle[i] = if backing { Fx::ratio(6, 10) } else { pedal.clamp(Fx::ZERO, Fx::ONE) * lift };
         // The pilot drives with the aids on (a racing driver's feet do what they do).
         fleet.traction_control[i] = true;
         fleet.abs[i] = true;
-        fleet.brake[i] = (-(error + Fx::ONE) * self.gain).clamp(Fx::ZERO, Fx::ONE);
+        fleet.brake[i] = if backing { Fx::ZERO } else { (-(error + Fx::ONE) * self.gain).clamp(Fx::ZERO, Fx::ONE) };
     }
 }

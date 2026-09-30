@@ -45,7 +45,36 @@ pub struct TrackDef {
     /// transition). 0: it steps.
     #[serde(default)]
     pub blend: i64,
+    /// What lies beyond each edge of the racing surface (left and right of the direction of travel).
+    #[serde(default)]
+    pub left: SideDef,
+    #[serde(default)]
+    pub right: SideDef,
     pub segments: Vec<SegmentDef>,
+}
+
+/// Beyond one edge of the racing surface: a run-off `width` mm wide with its own grip (an apron, grass, gravel),
+/// then, if `wall`, a wall (a SAFER barrier). No wall: the run-off goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SideDef {
+    #[serde(default)]
+    pub width: i64,
+    /// × 1000 of the racing surface's grip.
+    #[serde(default = "full")]
+    pub grip: i64,
+    #[serde(default)]
+    pub wall: bool,
+}
+
+fn full() -> i64 {
+    1000
+}
+
+impl Default for SideDef {
+    fn default() -> SideDef {
+        SideDef { width: 0, grip: 1000, wall: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +130,11 @@ pub struct Track {
     pub name: String,
     pub width: Fx,
     pub length: Fx,
+    /// Offsets of the walls (left positive, right negative), if there are walls.
+    pub wall_left: Option<Fx>,
+    pub wall_right: Option<Fx>,
+    left: SideDef,
+    right: SideDef,
     blend: Fx,
     segs: Vec<Seg>,
     names: Vec<String>,
@@ -174,10 +208,15 @@ impl Track {
         if !problems.is_empty() {
             return Err(problems);
         }
+        let half = mm(d.width) / 2;
         Ok(Track {
             name: d.name.clone(),
             width: mm(d.width),
             length: s,
+            wall_left: d.left.wall.then(|| half + mm(d.left.width)),
+            wall_right: d.right.wall.then(|| -(half + mm(d.right.width))),
+            left: d.left,
+            right: d.right,
             blend: mm(d.blend),
             segs,
             names: d.segments.iter().map(|s| s.name.clone()).collect(),
@@ -216,6 +255,18 @@ impl Track {
             return g.bank;
         };
         from + Angle(((to - from).0 as i128 * into.0 as i128 / self.blend.0.max(1) as i128) as i64)
+    }
+
+    /// The grip at `offset` from the centreline, as a share of the racing surface's: 1 on it, the run-off's beyond.
+    pub fn grip(&self, offset: Fx) -> Fx {
+        let half = self.width / 2;
+        if offset > half {
+            Fx::ratio(self.left.grip, 1000)
+        } else if offset < -half {
+            Fx::ratio(self.right.grip, 1000)
+        } else {
+            Fx::ONE
+        }
     }
 
     /// How sharply the centreline turns at `s`: 1 / radius, positive turning left, 0 on a straight.
@@ -330,6 +381,8 @@ mod tests {
             width: 15000,
             start: (0, 0, 0),
             blend: 40000,
+            left: SideDef::default(),
+            right: SideDef { width: 0, grip: 1000, wall: true },
             segments: vec![
                 SegmentDef { shape: Shape::Straight(250_000), bank: 500, name: "Front".into() },
                 SegmentDef { shape: Shape::Left(100_000, 18000), bank: 2400, name: "Turns 1-2".into() },

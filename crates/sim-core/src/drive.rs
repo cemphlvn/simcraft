@@ -9,7 +9,7 @@
 
 use crate::world::{FINE, World};
 use serde::{Deserialize, Serialize};
-use sim_physics::{Angle, Fleet, Fx, Params, Pilot, Plan, Track, TrackDef, VehicleDef, sit_on};
+use sim_physics::{Angle, Fleet, Fx, Params, Pilot, Plan, Track, TrackDef, VehicleDef, ahead_of, contact, sit_on};
 use std::collections::BTreeMap;
 
 /// What the engine writes on a vehicle (readable by rules), then its hidden state (engine only).
@@ -34,7 +34,7 @@ pub const VEHICLE_PROPS: [&str; 17] = [
 ];
 
 /// Intent a vehicle reads (a rule, an action or the autopilot writes it): throttle and brake 0..1000, steer
-/// -1000 (right)..1000 (left); `shift` +1 / -1 asks the gearbox for a gear up or down (taken and cleared), when
+/// -1000 (right)..1000 (left); `reverse` 1 engages reverse; `shift` +1 / -1 asks the gearbox for a gear up or down (taken and cleared), when
 /// `manual` is 1 (else it shifts itself); `aids` 1 turns on traction control and ABS; `pilot` 1 hands the car to the
 /// autopilot, driving `line` mm left of the centreline at `pace` ‰ of the plan (1000 by default); `grid` places
 /// the car on the starting grid (slot 1, 2, ...).
@@ -138,6 +138,7 @@ impl World {
         let ids: Vec<_> = self.vehicles.keys().filter_map(|k| self.by_kind.get(k)).flatten().copied().collect();
         let mut fleet = Fleet::default();
         let mut pilots = Vec::new();
+        let mut places = Vec::new();
         for &id in &ids {
             let e = &self.entities[&id];
             let get = |k: &str| e.props.get(k).copied().unwrap_or(0);
@@ -166,7 +167,13 @@ impl World {
                 (fleet.gear[i], fleet.rpm[i], fleet.shift_cut[i]) = (get("gear").max(1), Fx(get("_rpm")), get("_cut"));
                 i
             };
+            // The body for contact: the kind's footprint (across, along; mm).
+            if let Some(m) = self.motion(&e.kind) {
+                fleet.half[i] = (metres(m.size.1) / 2, metres(m.size.0) / 2);
+            }
             fleet.manual[i] = get("manual") > 0;
+            fleet.reverse[i] = get("reverse") > 0;
+            fleet.stuck[i] = get("_stuck");
             fleet.shift[i] = get("shift").signum();
             fleet.traction_control[i] = get("aids") > 0;
             fleet.abs[i] = get("aids") > 0;
@@ -176,6 +183,7 @@ impl World {
             let hint = usize::try_from(get("_seg") - 1).ok();
             if let Some(track) = &cache.track {
                 let place = sit_on(&mut fleet, i, track, hint);
+                places.push(place);
                 if get("pilot") > 0 {
                     let (line, pace) = (get("line"), if e.props.contains_key("pace") { get("pace") } else { 1000 });
                     pilots.push((i, e.kind.clone(), line, pace, place));
@@ -183,13 +191,22 @@ impl World {
             }
         }
         if let Some(track) = &cache.track {
+            // Who is ahead of whom, for the pilots' racecraft.
+            let ahead = if pilots.is_empty() { Vec::new() } else { ahead_of(track, &places, &fleet.vx) };
             for (i, kind, line, pace, place) in pilots {
                 let plan = cache.plans.entry((kind, line)).or_insert_with_key(|(k, l)| Plan::new(track, &cache.params[k], metres(*l)));
                 let pilot = Pilot { pace: Fx::ratio(pace.clamp(0, 2000), 1000), ..Pilot::default() };
-                pilot.drive(&mut fleet, i, track, plan, place);
+                pilot.drive(&mut fleet, i, track, plan, place, ahead[i]);
             }
         }
         fleet.step(self.tick_rate);
+        // Contact, once a tick: the walls, then car against car.
+        contact::clear(&mut fleet);
+        if let Some(track) = &cache.track {
+            let places: Vec<_> = (0..fleet.len()).map(|i| track.locate(fleet.x[i], fleet.y[i], None)).collect();
+            contact::walls(&mut fleet, track, &places);
+        }
+        contact::cars(&mut fleet);
         let (w, h) = (self.width * FINE - 1, self.height * FINE - 1);
         for (i, &id) in ids.iter().enumerate() {
             let place = cache.track.as_ref().map(|t| t.locate(fleet.x[i], fleet.y[i], None));
@@ -212,10 +229,13 @@ impl World {
                 ("brake", mm(fleet.brake[i])),
                 ("steer", mm(fleet.steer[i])),
                 ("rpm", fleet.rpm[i].round()),
+                ("impact", fleet.impact[i].round()),
                 ("gear", fleet.gear[i]),
                 ("shift", 0),
                 ("_rpm", fleet.rpm[i].0),
                 ("_cut", fleet.shift_cut[i]),
+                ("_stuck", fleet.stuck[i]),
+                ("reverse", i64::from(fleet.reverse[i])),
                 ("_on", 1),
                 ("_x", fleet.x[i].0),
                 ("_y", fleet.y[i].0),

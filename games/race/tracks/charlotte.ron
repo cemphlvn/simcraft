@@ -5,6 +5,9 @@
     width: 18000,
     start: (0, 0, 0),
     blend: 120000,
+    // Inside: the apron, then the infield grass (70 % grip, no wall). Outside: the SAFER barrier at the edge.
+    left: (width: 20000, grip: 700, wall: false),
+    right: (width: 0, wall: true),
     segments: [
         (shape: Left(500000, 1699), bank: 500, name: "Tri-oval (start/finish)"),
         (shape: Straight(40670), bank: 500, name: "Frontstretch"),

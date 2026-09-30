@@ -81,7 +81,7 @@ fn lap(track_path: &str, car_path: &str) {
             min_v = min_v.min(f(fleet.vx[0]));
             max_v = max_v.max(f(fleet.vx[0]));
         }
-        pilot.drive(&mut fleet, 0, &track, &plan, place);
+        pilot.drive(&mut fleet, 0, &track, &plan, place, None);
         if trace && tick.is_multiple_of(30) {
             eprintln!(
                 "t {:6.2}  s {:7.1}  off {:6.2}  v {:5.1} (plan {:5.1})  steer {:6.3}  thr {:4.2} brk {:4.2}  vy {:5.2}  r {:6.3}  slip f/r {:6.3} {:6.3}",

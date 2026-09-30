@@ -16,8 +16,8 @@ Game(
     track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9000, columns: 2, gap: 5000)),
 
     params: {
-        // You start from this grid slot.
-        "player_id": 1,
+        // You are car 1 and start from the back of the grid (slot 8 of 8); the rivals fill slots 1-7 in order.
+        "player_id": 1, "player_slot": 8,
         // The field's pace, ‰ of each car's planned limit: the fastest rival, and how much slower each slot back.
         "pace_top": 995, "pace_step": 6,
         // Rivals spread over lines this far apart (mm left of the centreline), cycling.
@@ -29,7 +29,7 @@ Game(
     rules: [
         // First tick: a grid slot for everyone; the player drives, the rest get the autopilot.
         (name: "grid", for: "car", when: "tick == 0",
-         then: [ Set("grid", "me.id"), Set("human", "if me.id == p.player_id { 1 } else { 0 }"),
+         then: [ Set("grid", "if me.id == p.player_id { p.player_slot } else { me.id - 1 }"), Set("human", "if me.id == p.player_id { 1 } else { 0 }"),
                  Set("pilot", "if me.id == p.player_id { 0 } else { 1 }"), Set("aids", "1"),
                  Set("pace", "p.pace_top - (me.id - 2) * p.pace_step"),
                  Set("line", "(me.id % p.lines - 1) * p.line_step") ]),

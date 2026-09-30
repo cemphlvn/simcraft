@@ -378,11 +378,21 @@ pub struct Fleet {
     // The gearbox: the gear engaged (1-based), a shift asked for (+1 up, -1 down; taken and cleared), whether the
     // driver shifts (else it shifts itself), and how many physics steps of the torque cut a shift has left.
     pub gear: Vec<i64>,
+    /// Reverse engaged (through first gear's ratio, backwards).
+    pub reverse: Vec<bool>,
+    /// For a driver that needs memory (the autopilot's recovery): ticks stalled (≥ 0), or reversing (< 0).
+    pub stuck: Vec<i64>,
     pub shift: Vec<i64>,
     pub manual: Vec<bool>,
     pub shift_cut: Vec<i64>,
     /// Engine speed, rpm (an output: the dash, the sound).
     pub rpm: Vec<Fx>,
+    /// The body as a box for contact: half its length and half its width, m (a caller that knows the car's
+    /// footprint sets it; by default ~1.75 × and ~0.72 × the wheelbase).
+    pub half: Vec<(Fx, Fx)>,
+    /// Impulse the car took from contact (walls, other cars) in the last `contact` pass, N·s: an output for the
+    /// game (damage, a penalty) and the camera (a jolt).
+    pub impact: Vec<Fx>,
     // The surface under each car, written by whoever knows the track: its slope, the direction it falls, and a
     // grip factor (1 on the racing surface; grass, wet, marbles less).
     pub bank: Vec<Angle>,
@@ -431,11 +441,16 @@ impl Fleet {
         self.traction_control.push(false);
         self.abs.push(false);
         self.gear.push(1);
+        self.reverse.push(false);
+        self.stuck.push(0);
         self.shift.push(0);
         self.manual.push(false);
         self.shift_cut.push(0);
         let idle = self.params[i].idle;
         self.rpm.push(idle);
+        let wb = self.params[i].wheelbase;
+        self.half.push((wb * Fx::ratio(875, 1000), wb * Fx::ratio(36, 100)));
+        self.impact.push(Fx::ZERO);
         self.bank.push(Angle::ZERO);
         self.bank_dir.push(Angle::ZERO);
         self.surface.push(Fx::ONE);
@@ -497,8 +512,15 @@ impl Fleet {
 
             // Driving and braking, each axle capped by its grip.
             // The engine through the gearbox (nothing while a shift cuts the torque).
-            let drive = if self.shift_cut[i] > 0 { Fx::ZERO } else { p.wheel_force(self.gear[i], self.rpm[i], self.throttle[i]) };
-            let moving = if vx > Fx::ZERO { Fx::ONE } else { Fx::ZERO };
+            let drive = if self.shift_cut[i] > 0 {
+                Fx::ZERO
+            } else if self.reverse[i] {
+                -p.wheel_force(1, self.rpm[i], self.throttle[i]).max(Fx::ZERO)
+            } else {
+                p.wheel_force(self.gear[i], self.rpm[i], self.throttle[i])
+            };
+            // Brakes and rolling resistance oppose the motion, whichever way it goes.
+            let moving = Fx::int(vx.signum());
             let brake = p.brake_max * self.brake[i] * moving;
             let cap = |f: Fx, n: Fx| f.clamp(-(grip * n), grip * n);
             // The aids: what the axle's grip leaves after the turn it is holding (last step's sideways force,
@@ -551,8 +573,11 @@ impl Fleet {
             let mut nvx = vx + ax / rate;
             let mut nvy = vy + ay / rate;
             let mut nr = r + self.mz[i] / p.iz / rate;
-            // Brakes, drag and slopes stop a car; with no reverse gear yet, they never back it up.
-            if nvx < Fx::ZERO {
+            // Brakes, drag and slopes stop a car; they never turn its motion round. Only the engine in reverse backs
+            // it up (and forward gears drive it forward from rest).
+            let crossed = (vx > Fx::ZERO && nvx < Fx::ZERO) || (vx < Fx::ZERO && nvx > Fx::ZERO);
+            let wrong_way = vx == Fx::ZERO && ((nvx < Fx::ZERO) != self.reverse[i]) && nvx != Fx::ZERO;
+            if crossed || wrong_way {
                 (nvx, nvy, nr) = (Fx::ZERO, Fx::ZERO, Fx::ZERO);
             }
             // At walking pace, the kinematic bicycle: the car goes where its wheels point.
@@ -586,7 +611,9 @@ impl Fleet {
         // keeps it from hunting between two gears.
         let pull = |g: i64| p.wheel_force(g, at(g), Fx::ONE);
         let g = self.gear[i];
-        let wanted = if self.manual[i] {
+        let wanted = if self.reverse[i] {
+            1 - g // reverse runs through first
+        } else if self.manual[i] {
             std::mem::take(&mut self.shift[i]).signum()
         } else if g < top && (at(g) >= p.redline * Fx::ratio(97, 100) || (at(g + 1) > p.idle && pull(g + 1) >= pull(g))) {
             1
@@ -600,7 +627,7 @@ impl Fleet {
             self.shift_cut[i] = cut;
         }
         // Coupled to the wheels, or, pulling away, held up by the slipping clutch toward the torque peak.
-        let coupled = at(self.gear[i]);
+        let coupled = if self.reverse[i] { -at(1) } else { at(self.gear[i]) };
         let slipping = p.idle + (p.launch - p.idle) * self.throttle[i];
         self.rpm[i] = coupled.max(slipping).max(p.idle);
     }

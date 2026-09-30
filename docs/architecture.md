@@ -324,6 +324,7 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
 - **Intent (props the car reads; rules, actions or the autopilot write them):**
   - `throttle` and `brake`, 0..1000;
   - `steer`, -1000 (right) to 1000 (left);
+  - `reverse` 1 engages reverse (through first gear's ratio);
   - `shift` +1 or -1 asks for a gear up or down when `manual` is 1 (otherwise the gearbox shifts itself);
   - `aids` 1 turns on traction control and ABS (the autopilot always drives with them);
   - `pilot` 1 hands the car to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰
@@ -358,7 +359,14 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - oracle tests against textbook vehicle dynamics (`sim-physics`);
   - `simcraft-physics-bench` scenes, including `lap`, a stock car on the Charlotte-sized oval against the real
     pole (`games/race/LAPS.md`).
-- **Not yet:** contact between cars (they pass through each other) and suspension (layer 4).
+- **Contact (`sim-physics::contact`, once a tick after the step):**
+  - cars are oriented boxes, from the kind's `motion` size, tested with the separating axis test;
+  - walls come from the track's `left`/`right` sides (`width`, `grip` of the run-off, `wall`);
+  - the response is sequential impulses with restitution and friction;
+  - `impact` (N·s) is the output.
+- **Autopilot racecraft:** it passes a car ahead on the side with room, follows at a speed-dependent gap when it
+  cannot, turns at full lock when facing away from the line, and backs up when stalled.
+- **Not yet:** suspension (layer 4).
 
 ## Renderer (`sim-render`)
 
