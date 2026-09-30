@@ -13,10 +13,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
 use crate::draw::Renderer;
-use crate::gesture::{Gesture, Px, Recognizer, Tuning};
-use crate::haptics::{self, Haptics};
-use crate::layer::{Color, Fit, Frame, Insets};
-use crate::scene::{BOARD, Scene, TICK_RATE};
+use crate::gesture::{Px, Recognizer, Tuning};
+use crate::haptics::{self, Haptics, Pulse};
+use crate::layer::{Color, Frame};
+use crate::playground::{Layout, Phase, Playground, TICK_RATE};
+use crate::sensors::Motion;
 use crate::stats::Stats;
 
 /// A phone's size in points for the desktop preview (an iPhone 15).
@@ -35,9 +36,10 @@ pub struct App {
     window: Option<Arc<Window>>,
     surface: Option<Surface>,
     renderer: Option<Renderer>,
-    scene: Scene,
+    playground: Playground,
     gestures: Recognizer,
     haptics: Box<dyn Haptics>,
+    motion: Motion,
     started: Instant,
     last: Instant,
     /// Unspent time towards the next tick (in ticks).
@@ -62,9 +64,10 @@ impl App {
             window: None,
             surface: None,
             renderer: None,
-            scene: Scene::new(),
+            playground: Playground::new(),
             gestures: Recognizer::new(Tuning::for_scale(1.0)),
             haptics: haptics::platform(),
+            motion: Motion::new(),
             started: now,
             last: now,
             clock: 0.0,
@@ -78,38 +81,47 @@ impl App {
         self.started.elapsed().as_millis() as u64
     }
 
-    /// Where the board is on the screen now: fitted into the safe area.
-    fn fit(&self) -> Option<(Fit, crate::layer::Rect)> {
+    /// Where everything is on the screen now.
+    fn layout(&self) -> Option<Layout> {
         let (s, w) = (self.surface.as_ref()?, self.window.as_ref()?);
-        let safe = Insets::phone(w.scale_factor() as f32).safe(s.config.width as f32, s.config.height as f32);
-        let margin = safe.w * 0.04;
-        let area = crate::layer::Rect::new(safe.x + margin, safe.y + margin * 3.0, safe.w - margin * 2.0, safe.h - margin * 4.0);
-        Some((Fit::new(BOARD.0, BOARD.1, area), safe))
+        Some(Layout::new(s.config.width as f32, s.config.height as f32, w.scale_factor() as f32))
     }
 
-    fn gestures(&mut self, gs: &[Gesture]) {
-        let Some((fit, _)) = self.fit() else { return };
-        let mut pulses = Vec::new();
-        for g in gs {
-            self.stats.gesture();
-            self.scene.input(g, &fit, &mut pulses);
-        }
+    fn play(&mut self, pulses: Vec<Pulse>) {
         for p in pulses {
             self.stats.pulse();
             self.haptics.play(p);
         }
     }
 
+    /// A finger (or the mouse): to the playground as a raw touch, and to the gesture recognizer.
+    fn finger(&mut self, id: u64, phase: Option<Phase>, at: Px) {
+        let Some(layout) = self.layout() else { return };
+        let ms = self.ms();
+        let mut pulses = Vec::new();
+        let gs = match phase {
+            Some(Phase::Down) => self.gestures.down(id, at, ms),
+            Some(Phase::Move) => self.gestures.moved(id, at, ms),
+            Some(Phase::Up) => self.gestures.up(id, at, ms),
+            None => self.gestures.cancel(id),
+        };
+        self.playground.touch(id, phase.unwrap_or(Phase::Up), at, &layout, &mut pulses);
+        for g in &gs {
+            self.stats.gesture();
+            self.playground.input(g, &layout, &mut pulses);
+        }
+        self.play(pulses);
+    }
+
     fn touch(&mut self, t: Touch) {
         let at = Px::new(t.location.x as f32, t.location.y as f32);
-        let ms = self.ms();
-        let gs = match t.phase {
-            TouchPhase::Started => self.gestures.down(t.id, at, ms),
-            TouchPhase::Moved => self.gestures.moved(t.id, at, ms),
-            TouchPhase::Ended => self.gestures.up(t.id, at, ms),
-            TouchPhase::Cancelled => self.gestures.cancel(t.id),
+        let phase = match t.phase {
+            TouchPhase::Started => Some(Phase::Down),
+            TouchPhase::Moved => Some(Phase::Move),
+            TouchPhase::Ended => Some(Phase::Up),
+            TouchPhase::Cancelled => None,
         };
-        self.gestures(&gs);
+        self.finger(t.id, phase, at);
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -125,22 +137,21 @@ impl App {
         let interval = now.duration_since(self.last).as_secs_f32();
         self.last = now;
         self.clock += interval.min(0.25) * TICK_RATE as f32;
+        let sense = self.motion.sense();
         let mut pulses = Vec::new();
         while self.clock >= 1.0 {
             let t = Instant::now();
-            self.scene.step(&mut pulses);
+            self.playground.step(&sense, &mut pulses);
             self.stats.tick(t.elapsed().as_secs_f32() * 1e6);
             self.clock -= 1.0;
         }
-        for p in pulses {
-            self.stats.pulse();
-            self.haptics.play(p);
-        }
-        let Some((fit, safe)) = self.fit() else { return };
+        self.play(pulses);
+        self.playground.age(interval * 1000.0);
+        let Some(layout) = self.layout() else { return };
         let (Some(s), Some(r)) = (self.surface.as_ref(), self.renderer.as_mut()) else { return };
         let (w, h) = (s.config.width, s.config.height);
         let mut frame = Frame::default();
-        self.scene.draw(self.clock, &fit, safe, &mut frame);
+        self.playground.draw(self.clock, &layout, &mut frame);
         let shapes = frame.sorted();
         match s.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex) | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
@@ -153,8 +164,9 @@ impl App {
         }
         self.stats.frame(interval * 1000.0, now.elapsed().as_secs_f32() * 1000.0);
         if let Some(report) = self.stats.take(1000.0) {
+            self.playground.fps = report.fps;
             let haptics = format!("\"haptics\":\"{}\",\"haptics_failed\":{}", self.haptics.name(), self.haptics.failed());
-            println!("{}", report.json(self.ms(), (w, h), &format!("{haptics},{}", self.scene.observe())));
+            println!("{}", report.json(self.ms(), (w, h), &format!("{haptics},{}", self.playground.observe())));
         }
     }
 }
@@ -217,20 +229,13 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse = Px::new(position.x as f32, position.y as f32);
                 if self.mouse_down {
-                    let gs = self.gestures.moved(MOUSE, self.mouse, self.ms());
-                    self.gestures(&gs);
+                    self.finger(MOUSE, Some(Phase::Move), self.mouse);
                 }
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                let ms = self.ms();
-                let gs = if state == ElementState::Pressed {
-                    self.mouse_down = true;
-                    self.gestures.down(MOUSE, self.mouse, ms)
-                } else {
-                    self.mouse_down = false;
-                    self.gestures.up(MOUSE, self.mouse, ms)
-                };
-                self.gestures(&gs);
+                self.mouse_down = state == ElementState::Pressed;
+                let phase = if self.mouse_down { Phase::Down } else { Phase::Up };
+                self.finger(MOUSE, Some(phase), self.mouse);
             }
             WindowEvent::RedrawRequested => self.frame(),
             _ => {}

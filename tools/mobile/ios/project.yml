@@ -52,3 +52,4 @@ targets:
       - sdk: Foundation.framework
       - sdk: CoreGraphics.framework
       - sdk: CoreHaptics.framework
+      - sdk: CoreMotion.framework

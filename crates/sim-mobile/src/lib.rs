@@ -1,16 +1,18 @@
 //! sim-mobile: the mobile core (`docs/architecture.md`, Mobile core). One shell for iOS, Android and a desktop
-//! preview: gestures (`gesture`), screen layers (`layer`), haptics (`haptics`), shape drawing (`draw`) and the
-//! application loop (`app`). Designed from the types of casual mobile games (`docs/research/mobile-types.md`).
+//! preview: gestures (`gesture`), screen layers (`layer`), haptics (`haptics`), sensors (`sensors`), shape drawing
+//! (`draw`), text (`font`), the Mobile Capability Playground (`playground`) and the application loop (`app`). Designed from the types of casual mobile games (`docs/research/mobile-types.md`).
 //!
 //! Entry points: `simcraft_mobile_main` (iOS: the Xcode app's `main` calls it; it never returns), `android_main`
 //! (Android: `NativeActivity` loads this library and calls it), [`preview`] (the desktop).
 
 pub mod app;
 pub mod draw;
+pub mod font;
 pub mod gesture;
 pub mod haptics;
 pub mod layer;
-pub mod scene;
+pub mod playground;
+pub mod sensors;
 pub mod stats;
 
 use winit::event_loop::EventLoop;

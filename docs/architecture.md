@@ -1139,6 +1139,14 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
 - **Release.** The same player with the bundle embedded: publishing a game never compiles the engine.
 - **Desktop preview** (`simcraft-mobile`): the player in a phone-sized window, for quick checks; the phone is
   where a game is judged.
+- **Mobile Capability Playground** (`playground`): where the mobile core's mechanics are tuned before a game uses
+  them, one card per capability, switched by tabs at the bottom of the safe area: `ROPE` (catch, pull, fling),
+  `TOUCH` (every finger with its id and trail; two fingers hold a rope's ends), `FEEL` (a pad for each haptic
+  kind, sliders for intensity and sharpness), `TILT` (a chain under the phone's real gravity, Core Motion). The
+  background is a workbench: a grid in world units (brighter every 4), marks where the safe area starts, and a
+  fading trail behind every finger, so distances, speeds and what the phone registered can be read by eye. Each
+  card adds its live values to the stats line. Sensors enter the simulation as whole numbers (tilt in
+  thousandths of g), so a replay includes them. Text is a 5×7 pixel font drawn with the same shapes.
 
 `simcraft-build --list` shows every target and whether this machine can build it.
 
