@@ -1,0 +1,23 @@
+// A generic front-wheel-drive hatchback with a small turbocharged engine: typical numbers for the class, not one
+// real car. Units and where each number comes from on a spec sheet: assets/vehicles/README.md.
+(
+    mass: 1300,               // kg, kerb weight
+    wheelbase: 2640,          // mm
+    weight_front: 61,         // % on the front axle (front-engined, front-driven)
+    cg_height: 520,           // mm (rarely published: ~35–40 % of the roof height for a hatchback)
+    track_width: 1540,        // mm
+    wheel_radius: 317,        // mm (a 225/45 R17 tyre: 17 × 25.4 / 2 + 45 % of 225)
+    steer_lock: 3500,         // hundredths of a degree at each front wheel
+    engine: (
+        idle: 800, redline: 6500,
+        // (rpm, Nm): the flat plateau a turbo gives, falling off toward the redline.
+        torque_curve: [(1000, 150), (1500, 250), (3500, 250), (5000, 215), (6000, 180), (6500, 160)],
+    ),
+    gears: [3615, 1947, 1281, 973, 778, 646],   // × 1000
+    final_drive: 3647,                           // × 1000
+    drive: fwd,
+    brake_torque: 5000,       // Nm, all four at full pedal (more than the tyres can use: grip decides)
+    tyre: (friction: 1000),   // × 1000, a road tyre on dry tarmac
+    drag: 320,                // Cd × 1000
+    frontal_area: 2200,       // m² × 1000
+)

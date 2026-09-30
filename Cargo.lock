@@ -2431,6 +2431,10 @@ dependencies = [
 [[package]]
 name = "sim-physics"
 version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+]
 
 [[package]]
 name = "sim-render"

@@ -7,6 +7,9 @@ license.workspace = true
 # The physics layer: plain data in, a fixed step, plain data out. It knows nothing about the world, the rules or any
 # game (docs/plans/physics-and-vehicles.md); sim-core calls it.
 [dependencies]
+serde.workspace = true
+# Only the benchmark binary and tests read RON; the library takes a VehicleDef however it was loaded.
+ron.workspace = true
 
 [lints]
 workspace = true

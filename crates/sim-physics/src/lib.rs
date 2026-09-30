@@ -3,5 +3,7 @@
 //! (`docs/plans/physics-and-vehicles.md`).
 
 pub mod fixed;
+pub mod vehicle;
 
 pub use fixed::{Angle, Fx, TURN, curve};
+pub use vehicle::{Fleet, Params, VehicleDef};

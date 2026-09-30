@@ -73,11 +73,7 @@ impl Fx {
         }
         // The standard library's integer root is exact by definition; 64 bits when the shifted value fits (2.5×
         // faster than 128, measured), 128 otherwise.
-        if self.0 < 1 << (63 - FRAC) {
-            Fx(((self.0 as u64) << FRAC).isqrt() as i64)
-        } else {
-            Fx(((self.0 as u128) << FRAC).isqrt() as i64)
-        }
+        if self.0 < 1 << (63 - FRAC) { Fx(((self.0 as u64) << FRAC).isqrt() as i64) } else { Fx(((self.0 as u128) << FRAC).isqrt() as i64) }
     }
 }
 
@@ -186,6 +182,11 @@ impl Angle {
     /// An angle in radians.
     pub fn radians(r: Fx) -> Angle {
         Angle(((r.0 as i128 * TURN as i128) / TWO_PI.0 as i128) as i64)
+    }
+
+    /// This angle scaled by `k` (a steering input of 0.25 turns the wheels a quarter of the way to full lock).
+    pub fn times(self, k: Fx) -> Angle {
+        Angle(((self.0 as i128 * k.0 as i128) >> FRAC) as i64)
     }
 
     /// The same direction, within `0..TURN`.
