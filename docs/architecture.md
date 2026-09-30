@@ -330,7 +330,7 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - `pilot` 1 hands the car to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰
     of its planned limit; `pilot` 2 is line steering for a player: the autopilot steers to `line` (the player moves
     it), catches slides, and caps the player's pedals at what the car can hold (brake assist): target control,
-    the arcade mode;
+    the arcade mode; `pilot` 3 is assisted steering: the same steering, the pedals the player's alone;
   - `grid` N puts the car in grid slot N on its first tick.
 - **State (props the engine writes; a game may read them, never declare them):**
   - `px`, `py`, and `vx`, `vy` in mm per tick;

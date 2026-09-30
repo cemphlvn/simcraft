@@ -31,8 +31,8 @@ Drive(
             (key: "z", action: "shift", args: { "dir": -1 }),
             // Reverse in, and out on the next press.
             (key: "backspace", action: "reverse", toggle: "on"),
-            // Line steering (2, how the game starts you) and manual (0), in turn.
-            (key: "t", action: "assist", toggle: "mode", values: (2, 0)),
+            // Assisted steering (3, how the game starts you) and manual (0), in turn.
+            (key: "t", action: "assist", toggle: "mode", values: (3, 0)),
         ],
     ),
     // From outside, the line you steer by, faint on the road ahead (while line steering is on).

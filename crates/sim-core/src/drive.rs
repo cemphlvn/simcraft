@@ -45,7 +45,8 @@ pub const VEHICLE_PROPS: [&str; 23] = [
 /// `pilot` hands work to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰ of its
 /// plan (1000 by default): 1 drives the car entirely (a rival); 2 is line steering for a player (the autopilot steers
 /// to `line`, catching slides, and caps the player's pedals at what the car can hold: brake assist; the player's
-/// throttle and brake still drive it). `grid` places the car on the starting grid (slot 1, 2, ...).
+/// throttle and brake still drive it); 3 is assisted steering (the autopilot steers to `line` and catches slides,
+/// the pedals are the player's alone). `grid` places the car on the starting grid (slot 1, 2, ...).
 pub const VEHICLE_INPUTS: [&str; 11] =
     ["throttle", "brake", "steer", "reverse", "shift", "manual", "aids", "pilot", "line", "pace", "grid"];
 
@@ -208,18 +209,23 @@ impl World {
                 let key = (line + 500).div_euclid(1000) * 1000;
                 let plan = cache.plans.entry((kind, key)).or_insert_with_key(|(k, l)| Plan::new(track, &cache.params[k], metres(*l)));
                 let pilot = Pilot { pace: Fx::ratio(pace.clamp(0, 2000), 1000), ..Pilot::default() };
-                if mode == 2 {
-                    // Line steering: the pilot steers to the player's line and says what the car can hold; the
+                if mode == 2 || mode == 3 {
+                    // Line steering (2): the pilot steers to the player's line and says what the car can hold; the
                     // player's feet stay in charge within that (throttle no more than, brake no less than).
+                    // Assisted steering (3): the pilot steers to the line only; the feet are the player's alone,
+                    // so a turn taken too fast runs wide (the game keeps the line where the car is).
                     let (throttle, brake) = (fleet.throttle[i], fleet.brake[i]);
                     let mut plan = plan.clone();
                     plan.offset = metres(line);
                     pilot.drive(&mut fleet, i, track, &plan, place, None);
                     // Backing out of a spin (the pilot's recovery) is the pilot's alone.
-                    if !fleet.reverse[i] {
+                    if fleet.reverse[i] {
+                    } else if mode == 2 {
                         fleet.throttle[i] = throttle.min(fleet.throttle[i]);
+                        fleet.brake[i] = brake.max(fleet.brake[i]);
+                    } else {
+                        (fleet.throttle[i], fleet.brake[i]) = (throttle, brake);
                     }
-                    fleet.brake[i] = brake.max(fleet.brake[i]);
                 } else {
                     pilot.drive(&mut fleet, i, track, plan, place, ahead[i]);
                 }
