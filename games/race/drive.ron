@@ -1,0 +1,41 @@
+// The race from the driver's seat of car 1 (the drive view, docs/architecture.md). The track and where it sits in the
+// world come from game.ron (`track:`); this file says how it looks, how the head moves, and how the keys drive.
+// Keys: up throttle, down brake, left/right steer (ramped, less at speed), A/Z paddles up/down, C cockpit/chase,
+// O autopilot, P pause, R restart, M mute, Esc quit.
+Drive(
+    cars: "car",
+    you: ("human", 1),
+    // The race's own words: lap counts on crossing the line, `lap_ms` is the last lap, `best_ms` the best.
+    props: (lap_time_ms: "", last_lap_ms: "lap_ms", best_lap_ms: "best_ms"),
+    cockpit: (
+        fov: 50.0,
+        // The wheel: a Cup car's ratio is about 12:1 on 16° of lock, so ±190° at full lock.
+        wheel: (lock: 190.0),
+        // The stock car's power band: lights from 7,800, flashing at 9,200 (redline 9,500).
+        shift_lights: (7800.0, 9200.0),
+    ),
+    controls: (
+        action: "drive",
+        axes: {
+            "throttle": (key: "up", rise_ms: 180.0, fall_ms: 120.0),
+            "brake": (key: "down", rise_ms: 160.0, fall_ms: 100.0),
+            // At 60 m/s and over only a tenth of the lock is left: an oval is taken with the wheel nearly straight.
+            "steer": (neg: "right", pos: "left", rise_ms: 240.0, fall_ms: 180.0, speed_sensitive: (60.0, 0.1)),
+        },
+        buttons: [
+            (key: "a", action: "shift", args: { "dir": 1 }),
+            (key: "z", action: "shift", args: { "dir": -1 }),
+        ],
+    ),
+    // For `--auto` and measured laps: pure pursuit on the groove. The car shifts itself (automatic until a paddle).
+    autopilot: (speed: 88.0, grip: 19.0, lookahead: 0.8, steer_per_curvature: 13000.0, offset_gain: 6.0, drives: "none"),
+    look: (
+        // Charlotte on race day: late afternoon, the sun low over turn 2.
+        sun: (205.0, 24.0),
+        pit_road: (-300.0, 240.0),
+        stands: [ (from: -300.0, to: 240.0, depth: 44.0, rise: 0.52, tower: true),
+                  (from: 700.0, to: 1000.0, depth: 30.0, rise: 0.5, tower: false) ],
+    ),
+    units: "mph",
+    screen: (1440, 810),
+)

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sim_core::{Engine, EntityId, Loaded, Running, World};
+use sim_gpu::drive::{Drive, DrivePlay, DrivePress};
 use sim_gpu::gpu::Gpu;
 use sim_gpu::gpu::World3;
 use sim_gpu::math::V3;
@@ -387,6 +388,8 @@ struct Args {
     theme: String,
     replay: Option<PathBuf>,
     feel: bool,
+    /// Drive views: the autopilot drives your car (shots of a car at speed, hands-off laps).
+    auto: bool,
     /// Roam shots: close to a crawler instead of facing the work; or a camera placed by hand.
     closeup: bool,
     eye: Vec<f32>,
@@ -419,6 +422,7 @@ fn args() -> Args {
         theme: String::new(),
         replay: None,
         feel: false,
+        auto: false,
         closeup: false,
         eye: Vec::new(),
         budget: 20.0,
@@ -437,6 +441,7 @@ fn args() -> Args {
             "--ticks" => a.ticks = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--replay" => a.replay = it.next().map(PathBuf::from),
             "--feel" => a.feel = true,
+            "--auto" => a.auto = true,
             "--closeup" => a.closeup = true,
             "--eye" => a.eye = it.next().map(|s| s.split(',').filter_map(|v| v.parse().ok()).collect()).unwrap_or_default(),
             "--budget" => a.budget = it.next().and_then(|s| s.parse().ok()).unwrap_or(20.0),
@@ -478,6 +483,12 @@ fn main() {
         if a.dir.join("roam.ron").exists() && a.stage.is_none() {
             let (roam, assets) = load_roam(&a.dir)?;
             return run_roam(engine, roam, assets, &a, &panel);
+        }
+        if a.dir.join("drive.ron").exists() && a.stage.is_none() {
+            let (drive, track) = sim_gpu::drive::load(&a.dir, engine.rules())?;
+            let (dir, seed, panel) = (a.dir.clone(), a.seed, panel);
+            let reboot: Reboot = Box::new(move || boot(&dir, seed, &panel));
+            return run_drive(engine, drive, track, &a, reboot);
         }
         if a.dir.join("track.ron").exists() && a.stage.is_none() {
             let (track, assets) = load_track(&a.dir)?;
@@ -540,6 +551,7 @@ fn main() {
             theme: 0,
             music: None,
             swipe_from: None,
+            engine_sound: None,
             window_size: a.sized.then_some(a.size),
             watch: None,
         };
@@ -650,6 +662,96 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
         theme,
         music: Some(Music::new(&a.dir)),
         swipe_from: None,
+        engine_sound: None,
+        window_size,
+        watch: None,
+    };
+    el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+/// Driving from the seat (`drive.ron`): how it feels (numbers), a screenshot or a recording, or a window.
+fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Track, a: &Args, reboot: Reboot) -> Result<(), String> {
+    let script = a.replay.as_deref().map(sim_gpu::drive::load_run).transpose()?;
+    // How it feels, measured: the autopilot drives you (unless a replay does) at 60 frames a second.
+    if a.feel {
+        let mut play = DrivePlay::new(engine, drive, track);
+        play.auto_you = script.is_none();
+        play.script = script;
+        play.rig.view = a.view;
+        let frames = if a.record > 0 { a.record } else { 2400 };
+        let report = sim_gpu::drive::feel_probe(&mut play, frames, 60.0);
+        println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if let Some(out) = &a.shot {
+        let instance = wgpu::Instance::default();
+        let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
+        sim_gpu::drive::upload_textures(&mut gpu);
+        let (w, h) = match drive.screen {
+            Some((sw, sh)) if !a.sized => (sw * 2, sh * 2),
+            _ => a.size,
+        };
+        let mut play = DrivePlay::new(engine, drive, track);
+        play.auto_you = a.auto && script.is_none();
+        play.script = script;
+        play.rig.view = a.view;
+        let rate = play.engine.rules().cfg.run.tick_rate as f32;
+        // Warm-up: the ticks asked for, with frames at 60 a second so the head and the horizon are where they would
+        // be in a window.
+        // (At least two ticks: a game places its cars on its first.)
+        let warm = (a.ticks.max(2) as f32 / rate * 60.0).ceil() as u32;
+        let mut clock = 0.0f32;
+        for _ in 0..warm {
+            clock += rate / 60.0;
+            let n = clock.floor() as u32;
+            clock -= n as f32;
+            play.step(n);
+            play.alpha = clock;
+            play.time += 1.0 / 60.0;
+            play.frame(w as f32, h as f32, 1.0 / 60.0);
+        }
+        play.time = play.time.max(a.time);
+        let frames = a.record.max(1);
+        let stem = out.with_extension("");
+        let dt = 1.0 / 30.0;
+        for f in 0..frames {
+            if a.record > 0 {
+                clock += dt * rate * a.speed;
+                let n = clock.floor() as u32;
+                clock -= n as f32;
+                play.step(n);
+                play.alpha = clock;
+                play.time += dt;
+            }
+            let fr = play.frame(w as f32, h as f32, if a.record > 0 { dt } else { 1.0 / 60.0 });
+            let img = play.shot(&mut gpu, w, h, &fr);
+            let path = if a.record > 0 { PathBuf::from(format!("{}_{f:03}.png", stem.display())) } else { out.clone() };
+            img.save(&path)?;
+        }
+        eprintln!("wrote {} ({frames} frame(s), {w}x{h}) at tick {} — {}", out.display(), play.world().tick, play.title(rate, false));
+        return Ok(());
+    }
+    let rate = engine.rules().cfg.run.tick_rate as f32;
+    let el = EventLoop::new().map_err(|e| e.to_string())?;
+    el.set_control_flow(ControlFlow::Poll);
+    let window_size = if a.sized { Some(a.size) } else { drive.screen };
+    let mut app = App {
+        play: Some(Start::Drive(Box::new((engine, drive, track, a.auto, script)))),
+        assets: Assets::default(),
+        window: None,
+        speed: rate * a.speed,
+        paused: false,
+        clock: 0.0,
+        last: Instant::now(),
+        cursor: (0.0, 0.0),
+        reboot: Some(reboot),
+        script: None,
+        saved: false,
+        grabbed: false,
+        theme: 0,
+        music: None,
+        swipe_from: None,
+        engine_sound: None,
         window_size,
         watch: None,
     };
@@ -727,6 +829,7 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args,
         theme: 0,
         music: None,
         swipe_from: None,
+        engine_sound: None,
         window_size: None,
         watch: Some((
             sim_gpu::perf::Watch::new(a.budget, Some(PathBuf::from("runs/spikes"))),
@@ -970,7 +1073,11 @@ enum Start {
     Stage(Box<(Engine<Running, Game>, Stage)>),
     Track(Box<(Engine<Running, Game>, Track)>),
     Roam(Box<(Engine<Running, Game>, Roam)>),
+    /// The drive view, whether the autopilot drives you, a run to replay.
+    Drive(Box<DriveStart>),
 }
+
+type DriveStart = (Engine<Running, Game>, Drive, sim_physics::Track, bool, Option<Vec<DrivePress>>);
 
 /// A track's music: its current loop, found next to the game or in an `assets/` folder above it. No sound device,
 /// no music, no error: the game plays silently.
@@ -1020,11 +1127,182 @@ impl Music {
     }
 }
 
+/// The engine's note, made while it plays rather than from recordings: harmonics of the engine's cycle (the
+/// firing frequency, rpm / 60 × cylinders / 2, strongest; the half order a cross-plane V8 burbles at), a rasp of
+/// noise pulsed at the firing rate that grows with throttle, and wind that grows with the square of speed. It lives
+/// in the host: the simulation never hears it, and a machine without a sound device plays silently.
+struct EngineSound {
+    _sink: rodio::MixerDeviceSink,
+    _player: rodio::Player,
+    shared: Arc<EngineShared>,
+    muted: bool,
+}
+
+#[derive(Default)]
+struct EngineShared {
+    rpm: std::sync::atomic::AtomicU32,
+    /// ‰ of throttle, cm/s of speed, ‰ of volume.
+    load: std::sync::atomic::AtomicU32,
+    speed: std::sync::atomic::AtomicU32,
+    gain: std::sync::atomic::AtomicU32,
+}
+
+impl EngineSound {
+    fn new(s: &sim_gpu::drive::Sound) -> Option<EngineSound> {
+        if !s.engine {
+            return None;
+        }
+        let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
+        sink.log_on_drop(false);
+        let shared = Arc::new(EngineShared::default());
+        shared.gain.store((s.volume * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed);
+        let player = rodio::Player::connect_new(sink.mixer());
+        player.append(Note::new(shared.clone(), s.cylinders.max(1) as f32, s.wind));
+        Some(EngineSound { _sink: sink, _player: player, shared, muted: false })
+    }
+
+    /// The car you drive now: rpm (or one made up from speed when the car has no gearbox yet), throttle, speed.
+    fn follow(&self, rpm: Option<f32>, throttle: f32, speed: f32, volume: f32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let rpm = rpm.unwrap_or_else(|| 1500.0 + speed.max(0.0) * 95.0);
+        self.shared.rpm.store(rpm.max(0.0) as u32, Relaxed);
+        self.shared.load.store((throttle.clamp(0.0, 1.0) * 1000.0) as u32, Relaxed);
+        self.shared.speed.store((speed.max(0.0) * 100.0) as u32, Relaxed);
+        self.shared.gain.store(if self.muted { 0 } else { (volume * 1000.0) as u32 }, Relaxed);
+    }
+}
+
+/// The synthesised note, one sample at a time (mono, 44.1 kHz).
+struct Note {
+    shared: Arc<EngineShared>,
+    phase: f64,
+    rpm: f32,
+    load: f32,
+    speed: f32,
+    gain: f32,
+    seed: u32,
+    rasp: f32,
+    wind: (f32, f32),
+    cylinders: f32,
+    wind_k: f32,
+}
+
+const RATE: u32 = 44_100;
+
+impl Note {
+    fn new(shared: Arc<EngineShared>, cylinders: f32, wind_k: f32) -> Note {
+        Note {
+            shared,
+            phase: 0.0,
+            rpm: 1500.0,
+            load: 0.0,
+            speed: 0.0,
+            gain: 0.0,
+            seed: 0x1234_5678,
+            rasp: 0.0,
+            wind: (0.0, 0.0),
+            cylinders,
+            wind_k,
+        }
+    }
+
+    fn noise(&mut self) -> f32 {
+        self.seed ^= self.seed << 13;
+        self.seed ^= self.seed >> 17;
+        self.seed ^= self.seed << 5;
+        self.seed as f32 / u32::MAX as f32 * 2.0 - 1.0
+    }
+}
+
+impl Iterator for Note {
+    type Item = rodio::Sample;
+
+    fn next(&mut self) -> Option<rodio::Sample> {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Follow the car smoothly (a few ms), so a new frame's value never clicks.
+        let k = 0.0015;
+        self.rpm += (self.shared.rpm.load(Relaxed) as f32 - self.rpm) * k;
+        self.load += (self.shared.load.load(Relaxed) as f32 / 1000.0 - self.load) * k;
+        self.speed += (self.shared.speed.load(Relaxed) as f32 / 100.0 - self.speed) * k;
+        self.gain += (self.shared.gain.load(Relaxed) as f32 / 1000.0 - self.gain) * k;
+        let cycle = (self.rpm / 120.0).max(1.0) as f64; // one four-stroke cycle is two turns of the crank
+        self.phase = (self.phase + cycle / RATE as f64).fract();
+        let tau = std::f64::consts::TAU;
+        let fire = self.cylinders;
+        let mut harm = 0.0f32;
+        for n in 1..=32u32 {
+            let f = cycle as f32 * n as f32;
+            if f > 7000.0 {
+                break;
+            }
+            let order = n as f32;
+            let a = if order == fire {
+                1.0
+            } else if order == fire / 2.0 {
+                0.55
+            } else if order == fire * 2.0 {
+                0.4
+            } else if order == fire * 1.5 {
+                0.28
+            } else if order == fire * 3.0 {
+                0.18
+            } else {
+                0.05 * (0.4 + self.load) / order.sqrt()
+            };
+            harm += a * ((tau * n as f64 * self.phase).sin() as f32);
+        }
+        // Combustion rasp: noise, pulsed at the firing rate, louder under load.
+        let pulse = 0.5 + 0.5 * ((tau * fire as f64 * self.phase).sin() as f32);
+        let w = self.noise();
+        self.rasp += (w - self.rasp) * 0.25;
+        let rasp = self.rasp * pulse * pulse * self.load * (0.25 + self.rpm / 12_000.0) * 0.6;
+        // Wind: noise with the lows and the highs taken off, with the square of speed.
+        let w2 = self.noise();
+        self.wind.0 += (w2 - self.wind.0) * 0.2;
+        self.wind.1 += (self.wind.0 - self.wind.1) * 0.02;
+        let wind = (self.wind.0 - self.wind.1) * self.wind_k * (self.speed / 80.0).powi(2);
+        let x = harm * 0.18 * (0.35 + 0.65 * self.load) + rasp + wind;
+        Some((x * 1.4).tanh() * self.gain)
+    }
+}
+
+impl rodio::Source for Note {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        std::num::NonZero::new(1).expect("one")
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        std::num::NonZero::new(RATE).expect("a rate")
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// A key's name for drive views (arrows, letters, space), from what it types.
+fn drive_key(k: &Key) -> Option<String> {
+    Some(match k.as_ref() {
+        Key::Named(NamedKey::ArrowUp) => "up".into(),
+        Key::Named(NamedKey::ArrowDown) => "down".into(),
+        Key::Named(NamedKey::ArrowLeft) => "left".into(),
+        Key::Named(NamedKey::ArrowRight) => "right".into(),
+        Key::Named(NamedKey::Space) => "space".into(),
+        Key::Named(NamedKey::Shift) => "shift".into(),
+        Key::Named(NamedKey::Enter) => "enter".into(),
+        Key::Named(NamedKey::Escape) => "esc".into(),
+        Key::Character(c) => c.to_lowercase(),
+        _ => return None,
+    })
+}
+
 /// What a window plays: a stage (side view) or a track (first person).
 enum Session {
     Stage(Box<Play>),
     Track(Box<TrackPlay>),
     Roam(Box<RoamPlay>),
+    Drive(Box<DrivePlay>),
 }
 
 impl Session {
@@ -1047,6 +1325,11 @@ impl Session {
                 p.time += time;
                 p.step(n);
                 p.tween.alpha = if paused { 1.0 } else { clock.clamp(0.0, 1.0) };
+            }
+            Session::Drive(p) => {
+                p.time += time;
+                p.step(n);
+                p.alpha = if paused { 1.0 } else { clock.clamp(0.0, 1.0) };
             }
             // The body moves every frame; the game ticks at its rate and follows it.
             Session::Roam(p) => {
@@ -1075,6 +1358,10 @@ impl Session {
                 let world = p.world3(gpu, &fr, w, h);
                 gpu.render(view, w, h, &fr.back, Some(world), &fr.front);
             }
+            Session::Drive(p) => {
+                let fr = p.frame(w as f32, h as f32, dt);
+                p.render(gpu, view, w, h, &fr);
+            }
         }
     }
 
@@ -1083,6 +1370,7 @@ impl Session {
             Session::Stage(p) => p.title(speed, paused),
             Session::Track(p) => p.title(speed, paused),
             Session::Roam(p) => p.title(),
+            Session::Drive(p) => p.title(speed, paused),
         }
     }
 }
@@ -1116,6 +1404,8 @@ struct App {
     music: Option<Music>,
     /// Where a press (mouse or finger) started: its release decides the swipe.
     swipe_from: Option<(f32, f32)>,
+    /// A drive view's engine note (none without a sound device).
+    engine_sound: Option<EngineSound>,
     /// The window's logical size (a track's `screen`, or `--size`); none = the default.
     window_size: Option<(u32, u32)>,
     /// Roam: every frame measured against the budget; spike reports to `runs/spikes/` (game, panel, seed).
@@ -1199,6 +1489,15 @@ impl ApplicationHandler for App {
                 let (engine, roam) = *b;
                 Session::Roam(Box::new(RoamPlay::new(engine, roam)))
             }
+            Start::Drive(b) => {
+                sim_gpu::drive::upload_textures(&mut gpu);
+                let (engine, drive, track, auto, script) = *b;
+                let mut p = DrivePlay::new(engine, drive, track);
+                p.auto_you = auto && script.is_none();
+                p.script = script;
+                self.engine_sound = EngineSound::new(&p.drive.sound);
+                Session::Drive(Box::new(p))
+            }
         };
         self.window = Some(Window3 { window, surface, config, gpu, play });
         self.last = Instant::now();
@@ -1256,9 +1555,66 @@ impl ApplicationHandler for App {
                 _ => {}
             }
         }
+        // Driving: held keys ramp the pedals and the wheel (the play turns them into the game's action); C swaps
+        // cockpit and chase, O hands your car to the autopilot, P pauses, R restarts, M mutes, Esc quits.
+        if let Some(Session::Drive(p)) = self.window.as_mut().map(|w| &mut w.play) {
+            match &event {
+                WindowEvent::KeyboardInput { event: k, .. } => {
+                    let Some(name) = drive_key(&k.logical_key) else { return };
+                    if k.state != ElementState::Pressed {
+                        p.held.remove(&name);
+                        return;
+                    }
+                    p.held.insert(name.clone());
+                    if k.repeat {
+                        return;
+                    }
+                    match name.as_str() {
+                        "esc" => el.exit(),
+                        "c" => p.cycle_view(),
+                        "p" => self.paused = !self.paused,
+                        "o" => p.auto_you = !p.auto_you,
+                        "m" => {
+                            if let Some(s) = &mut self.engine_sound {
+                                s.muted = !s.muted;
+                            }
+                        }
+                        "r" => {
+                            if let Some(Ok(engine)) = self.reboot.as_ref().map(|r| r()) {
+                                if !p.log.is_empty() {
+                                    let _ = sim_gpu::drive::save_run(&run_path(&p.engine.rules().def.name), &p.log);
+                                }
+                                p.restart(engine);
+                                self.clock = 0.0;
+                            }
+                        }
+                        other => {
+                            p.key(other);
+                        }
+                    }
+                    return;
+                }
+                WindowEvent::Focused(false) => {
+                    p.held.clear();
+                    return;
+                }
+                _ => {}
+            }
+        }
         let Some(w) = self.window.as_mut() else { return };
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                if let Session::Drive(p) = &w.play
+                    && !p.log.is_empty()
+                    && p.script.is_none()
+                {
+                    let path = run_path(&p.engine.rules().def.name);
+                    if sim_gpu::drive::save_run(&path, &p.log).is_ok() {
+                        eprintln!("run saved: {} (replay: --replay {})", path.display(), path.display());
+                    }
+                }
+                el.exit()
+            }
             WindowEvent::Resized(size) => {
                 w.config.width = size.width.max(1);
                 w.config.height = size.height.max(1);
@@ -1270,7 +1626,7 @@ impl ApplicationHandler for App {
                 match &mut w.play {
                     Session::Stage(p) => p.hover(cw, ch, self.cursor.0, self.cursor.1),
                     Session::Track(p) => p.hover(cw, ch, self.cursor.0, self.cursor.1),
-                    Session::Roam(_) => {}
+                    Session::Roam(_) | Session::Drive(_) => {}
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: winit::event::MouseButton::Left, .. } => {
@@ -1289,7 +1645,7 @@ impl ApplicationHandler for App {
                             self.swipe_from = Some(self.cursor);
                         }
                     }
-                    Session::Roam(_) => {}
+                    Session::Roam(_) | Session::Drive(_) => {}
                 }
             }
             // A mouse drag is a swipe (the same code as a finger): its direction picks the move, a short one is a tap.
@@ -1425,6 +1781,12 @@ impl ApplicationHandler for App {
                 w.play.advance(dt, self.paused, &mut self.clock, self.speed);
                 if let (Session::Track(p), Some(m)) = (&w.play, &mut self.music) {
                     m.follow(p.track.music.as_deref());
+                }
+                if let (Session::Drive(p), Some(s)) = (&w.play, &self.engine_sound)
+                    && let Some(c) = p.cars().into_iter().find(|c| c.you)
+                {
+                    let vol = if self.paused { 0.0 } else { p.drive.sound.volume };
+                    s.follow(c.rpm, c.throttle, c.speed, vol);
                 }
                 let advance_ms = t.elapsed().as_secs_f64() * 1000.0;
                 // A run that just ended is kept, so it can be replayed later (`--replay`).

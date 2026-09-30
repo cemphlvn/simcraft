@@ -13,6 +13,7 @@ path = "src/bin/simcraft-play.rs"
 [dependencies]
 sim-core.workspace = true
 sim-rules.workspace = true
+sim-physics.workspace = true
 sim-state.workspace = true
 sim-render = { path = "../sim-render" }
 serde.workspace = true

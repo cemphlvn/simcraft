@@ -1,6 +1,7 @@
 //! sim-gpu: the HD 2.5D renderer. `stage` turns the world into quads (testable, no GPU); `gpu` draws them with
 //! wgpu (Metal, Vulkan, DX12, WebGPU/WebGL2) and can read a frame back as a picture.
 
+pub mod drive;
 pub mod fx;
 pub mod gpu;
 pub mod math;

@@ -269,7 +269,12 @@ pub struct Gpu {
     shadow_bg: wgpu::BindGroup,
     /// The lens (depth of field), made when a frame first asks for one.
     post: Option<crate::post::Post>,
+    /// The depth buffer the last world pass used (the lens reads it), and one per size drawn (a frame and a mirror
+    /// in it do not rebuild each other's).
     depth: Option<(u32, u32, wgpu::TextureView)>,
+    depths: BTreeMap<(u32, u32), wgpu::TextureView>,
+    /// Pictures rendered on the GPU that quads and meshes can name (`render_into`): size and target.
+    offscreen: BTreeMap<String, (u32, u32, wgpu::TextureView)>,
     /// Texture sizes (for the composer's aspect ratios).
     pub sizes: BTreeMap<String, (u32, u32)>,
 }
@@ -700,6 +705,8 @@ impl Gpu {
             shadow_bg,
             post: None,
             depth: None,
+            depths: BTreeMap::new(),
+            offscreen: BTreeMap::new(),
             sizes: BTreeMap::new(),
         };
         gpu.upload(WHITE, &Image { w: 1, h: 1, px: vec![[255; 4]] }, 1);
@@ -854,18 +861,30 @@ impl Gpu {
 
     fn world_pass(&mut self, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, w: u32, h: u32, world: &World3) {
         if self.depth.as_ref().is_none_or(|(dw, dh, _)| (*dw, *dh) != (w, h)) {
-            let t = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("depth"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                // Readable too: the lens reads depth back as distance.
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            self.depth = Some((w, h, t.create_view(&wgpu::TextureViewDescriptor::default())));
+            let view = self
+                .depths
+                .entry((w, h))
+                .or_insert_with(|| {
+                    let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("depth"),
+                        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Depth32Float,
+                        // Readable too: the lens reads depth back as distance.
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+                    t.create_view(&wgpu::TextureViewDescriptor::default())
+                })
+                .clone();
+            // A window resized many times would keep every old size: keep only the last few.
+            if self.depths.len() > 4 {
+                let keep = [(w, h)];
+                self.depths.retain(|k, _| keep.contains(k));
+            }
+            self.depth = Some((w, h, view));
         }
         let verts = to_linear(world.meshes);
         if verts.len() > self.vcapacity {
@@ -996,6 +1015,41 @@ impl Gpu {
             }
             at += n;
         }
+    }
+
+    /// Renders a frame (2D behind, the 3D world) into a picture called `name` that later quads and meshes can use: a
+    /// rear-view mirror, a screen in the world. Submitted at once, so a frame drawn after it sees it; the picture must
+    /// not appear in its own `world` (a target cannot be read while it is drawn into).
+    pub fn render_into(&mut self, name: &str, w: u32, h: u32, back: &[Quad], world: World3) {
+        if self.offscreen.get(name).is_none_or(|t| (t.0, t.1) != (w, h)) {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(name),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind = |s: &wgpu::Sampler| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(name),
+                    layout: &self.tex_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(s) },
+                    ],
+                })
+            };
+            let tex = Tex(std::array::from_fn(|i| bind(&self.samplers[i])));
+            self.textures.insert(name.to_string(), tex);
+            self.sizes.insert(name.to_string(), (w, h));
+            self.offscreen.insert(name.to_string(), (w, h, view));
+        }
+        let view = self.offscreen[name].2.clone();
+        self.render(&view, w, h, back, Some(world), &[]);
     }
 
     /// Keeps meshes on the GPU under `slot` until `version` changes: uploaded once, drawn by every frame that lists the

@@ -2415,6 +2415,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sim-core",
+ "sim-physics",
  "sim-render",
  "sim-rules",
  "sim-state",
