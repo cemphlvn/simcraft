@@ -390,6 +390,8 @@ struct Args {
     feel: bool,
     /// Drive views: the autopilot drives your car (shots of a car at speed, hands-off laps).
     auto: bool,
+    /// Drive views: ride on board this car (its entity id).
+    watch: Option<u64>,
     /// Roam shots: close to a crawler instead of facing the work; or a camera placed by hand.
     closeup: bool,
     eye: Vec<f32>,
@@ -423,6 +425,7 @@ fn args() -> Args {
         replay: None,
         feel: false,
         auto: false,
+        watch: None,
         closeup: false,
         eye: Vec::new(),
         budget: 20.0,
@@ -442,6 +445,7 @@ fn args() -> Args {
             "--replay" => a.replay = it.next().map(PathBuf::from),
             "--feel" => a.feel = true,
             "--auto" => a.auto = true,
+            "--watch" => a.watch = it.next().and_then(|s| s.parse().ok()),
             "--closeup" => a.closeup = true,
             "--eye" => a.eye = it.next().map(|s| s.split(',').filter_map(|v| v.parse().ok()).collect()).unwrap_or_default(),
             "--budget" => a.budget = it.next().and_then(|s| s.parse().ok()).unwrap_or(20.0),
@@ -678,6 +682,7 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
         play.auto_you = script.is_none();
         play.script = script;
         play.rig.view = a.view;
+        play.watch = a.watch;
         let frames = if a.record > 0 { a.record } else { 2400 };
         let report = sim_gpu::drive::feel_probe(&mut play, frames, 60.0);
         println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
@@ -695,6 +700,7 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
         play.auto_you = a.auto && script.is_none();
         play.script = script;
         play.rig.view = a.view;
+        play.watch = a.watch;
         let rate = play.engine.rules().cfg.run.tick_rate as f32;
         // Warm-up: the ticks asked for, with frames at 60 a second so the head and the horizon are where they would
         // be in a window.
@@ -1293,6 +1299,7 @@ fn drive_key(k: &Key) -> Option<String> {
         Key::Named(NamedKey::Enter) => "enter".into(),
         Key::Named(NamedKey::Escape) => "esc".into(),
         Key::Named(NamedKey::Backspace) => "backspace".into(),
+        Key::Named(NamedKey::Tab) => "tab".into(),
         Key::Character(c) => c.to_lowercase(),
         _ => return None,
     })
@@ -1573,6 +1580,7 @@ impl ApplicationHandler for App {
                     match name.as_str() {
                         "esc" => el.exit(),
                         "c" => p.cycle_view(),
+                        "tab" => p.watch_next(),
                         "p" => self.paused = !self.paused,
                         "o" => p.auto_you = !p.auto_you,
                         "m" => {

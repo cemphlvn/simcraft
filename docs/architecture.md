@@ -951,6 +951,7 @@ Drive(
   a wheel turning `steer × lock` with gloved hands, roll cage, A-pillars and the centre post, window net, windshield
   with its sun strip, and a rear-view mirror: the driver's eye mirrored in its glass renders the scene into a texture
   every frame (`Gpu::render_into`, drawn before the frame that shows it).
+- **Tab** rides on board the next car (`--watch ID` for shots and feel runs); your keys keep driving yours.
 - **HUD**: position, gaps ahead and behind (seconds), lap, current, last and best lap; spotter calls (car low, car
   high, three wide, still there, clear) from who overlaps you along the track.
 - **Controls** (analog, keyboard now): each arg of `action` is an axis; held keys ramp it over `rise_ms`, release

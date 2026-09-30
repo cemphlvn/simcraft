@@ -1136,6 +1136,8 @@ pub struct DrivePlay {
     /// The autopilot drives your car too.
     pub auto_you: bool,
     auto_sent: Option<bool>,
+    /// The car ridden on board, if not yours.
+    pub watch: Option<EntityId>,
     /// Toggle keys that are on.
     toggled: BTreeMap<String, bool>,
     spotter: Spotter,
@@ -1165,6 +1167,7 @@ impl DrivePlay {
             script: None,
             auto_you: false,
             auto_sent: None,
+            watch: None,
             toggled: BTreeMap::new(),
             spotter: Spotter::default(),
             refused: None,
@@ -1178,8 +1181,13 @@ impl DrivePlay {
         self.engine.world()
     }
 
-    /// Your car's entity.
+    /// The car on screen: the one you watch (Tab), else yours.
     pub fn you(&self) -> Option<EntityId> {
+        self.watch.filter(|id| self.world().get(*id).is_some()).or_else(|| self.driver())
+    }
+
+    /// Your car: the one the keys drive.
+    pub fn driver(&self) -> Option<EntityId> {
         let w = self.world();
         let mut cars = w.of_kind(&self.drive.cars);
         match &self.drive.you {
@@ -1332,7 +1340,7 @@ impl DrivePlay {
                 true
             }
             Err(why) => {
-                if Some(id) == self.you() {
+                if Some(id) == self.driver() {
                     self.refused = Some((action.into(), why, self.time));
                 }
                 false
@@ -1351,7 +1359,7 @@ impl DrivePlay {
             }
             return;
         }
-        let Some(id) = self.you() else { return };
+        let Some(id) = self.driver() else { return };
         if let Some(ap) = self.drive.autopilot.clone()
             && self.auto_sent != Some(self.auto_you)
         {
@@ -1381,7 +1389,7 @@ impl DrivePlay {
         if self.script.is_some() {
             return true;
         }
-        if let Some(id) = self.you() {
+        if let Some(id) = self.driver() {
             let mut args = b.args.clone();
             // A toggle flips its arg between 1 and 0 each press (reverse in, reverse out).
             if let Some(t) = &b.toggle {
@@ -1517,6 +1525,17 @@ impl DrivePlay {
             auto: self.auto_you,
             replay: self.script.is_some(),
         }
+    }
+
+    /// Ride on board the next car (Tab), round to your own.
+    pub fn watch_next(&mut self) {
+        let ids: Vec<EntityId> = self.world().of_kind(&self.drive.cars).map(|e| e.id).collect();
+        let now = self.you();
+        let next = ids.iter().position(|id| Some(*id) == now).map_or(0, |i| (i + 1) % ids.len().max(1));
+        self.watch = ids.get(next).copied().filter(|id| Some(*id) != self.driver());
+        // Another car: its motion is measured afresh (the head does not carry the last car's g over).
+        self.kin = Kin::default();
+        self.rig = Rig { view: self.rig.view, ..Rig::default() };
     }
 
     pub fn cycle_view(&mut self) {
