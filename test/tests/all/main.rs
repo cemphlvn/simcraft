@@ -3,6 +3,7 @@
 
 mod engine;
 mod kernel;
+mod physics;
 mod properties;
 mod render;
 mod scenarios;

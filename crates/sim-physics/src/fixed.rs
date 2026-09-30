@@ -189,6 +189,47 @@ impl Angle {
         Angle(((self.0 as i128 * k.0 as i128) >> FRAC) as i64)
     }
 
+    /// The direction of the vector (x, y): CORDIC in vectoring mode, shifts and adds only (Volder 1959). Exact to a
+    /// few units of `TURN` (under a millionth of a degree); (0, 0) has no direction and answers zero.
+    pub fn atan2(y: Fx, x: Fx) -> Angle {
+        let (mut x, mut y) = (x.0, y.0);
+        if x == 0 && y == 0 {
+            return Angle::ZERO;
+        }
+        // Scale up to 60 bits so the shifts below keep their precision (the rotation grows it by ~1.65, still
+        // inside i64).
+        let big = x.unsigned_abs().max(y.unsigned_abs());
+        let up = (big.leading_zeros() as i32 - 4).max(0) as u32;
+        let down = (4 - big.leading_zeros() as i32).max(0) as u32;
+        x = (x << up) >> down;
+        y = (y << up) >> down;
+        // Into the right half-plane first: CORDIC turns at most ~100° either way.
+        let mut z = 0i64;
+        if x < 0 {
+            x = -x;
+            y = -y;
+            z = TURN / 2;
+        }
+        for (i, &a) in ATAN_TABLE.iter().enumerate() {
+            let (dx, dy) = (y >> i, x >> i);
+            if y > 0 {
+                x += dx;
+                y -= dy;
+                z += a;
+            } else {
+                x -= dx;
+                y += dy;
+                z -= a;
+            }
+        }
+        Angle(z)
+    }
+
+    /// The same direction, within `-TURN/2..TURN/2` (a difference of two headings, the short way round).
+    pub const fn signed(self) -> Angle {
+        Angle(((self.0 + TURN / 2) & (TURN - 1)) - TURN / 2)
+    }
+
     /// The same direction, within `0..TURN`.
     pub const fn wrapped(self) -> Angle {
         Angle(self.0 & (TURN - 1))
@@ -283,6 +324,30 @@ const fn sin_table() -> [i64; QUARTER_N + 1] {
     t
 }
 
+/// atan(2^-i) in `TURN` units, i = 0..31, by the Taylor series in Q62 (integers only), for CORDIC.
+static ATAN_TABLE: [i64; 32] = atan_table();
+
+const fn atan_table() -> [i64; 32] {
+    const TWO_PI_Q62: i128 = 4 * 7_244_019_458_077_122_842;
+    let mut t = [0i64; 32];
+    t[0] = TURN / 8;
+    let mut i = 1;
+    while i < 32 {
+        // atan x = x − x³/3 + x⁵/5 − …
+        let x: i128 = 1 << (62 - i);
+        let x2 = (x * x) >> 62;
+        let (mut pow, mut sum, mut n) = (x, x, 1i128);
+        while pow != 0 {
+            pow = -((pow * x2) >> 62);
+            sum += pow / (2 * n + 1);
+            n += 1;
+        }
+        t[i] = ((sum * TURN as i128 + TWO_PI_Q62 / 2) / TWO_PI_Q62) as i64;
+        i += 1;
+    }
+    t
+}
+
 /// A curve through points (x ascending), read by linear interpolation and held flat past either end: an engine's
 /// torque against RPM, straight from a dyno sheet (`docs/research/driving-physics.md` §6.2).
 pub fn curve(points: &[(i64, i64)], x: i64) -> i64 {
@@ -369,6 +434,30 @@ mod tests {
         let back = Angle::radians(Angle::QUARTER.to_radians());
         assert!((back.0 - Angle::QUARTER.0).abs() <= TURN / TWO_PI.0, "{back:?}");
         assert_eq!((Angle::HALF + Angle::HALF + Angle::QUARTER).wrapped(), Angle::QUARTER);
+    }
+
+    #[test]
+    fn atan2_finds_every_direction() {
+        for i in 0..2000i64 {
+            let a = Angle(i * (TURN / 2000) + i * 104_729);
+            for r in [Fx::ratio(1, 100), Fx::ONE, Fx::int(250), Fx::int(1 << 30)] {
+                let (x, y) = (r * a.cos(), r * a.sin());
+                let back = Angle::atan2(y, x);
+                // The error comes from building (x, y): sin/cos are exact to one Fx step (1/65536 rad of direction),
+                // and a tiny radius rounds its coordinates too. CORDIC itself adds a few units.
+                let tol = (TURN / TWO_PI.0) * (2 + 2 * Fx::ONE.0 / r.0.max(1));
+                let err = (back - a).signed().0.abs();
+                assert!(err <= tol, "angle {a:?} radius {r:?}: {back:?}, off by {err}");
+            }
+        }
+        // The axes, to CORDIC's own few units.
+        let near = |a: Angle, b: i64| (a - Angle(b)).signed().0.abs() < 8;
+        assert!(near(Angle::atan2(Fx::ZERO, Fx::ONE), 0));
+        assert!(near(Angle::atan2(Fx::ONE, Fx::ZERO), TURN / 4));
+        assert!(near(Angle::atan2(Fx::ZERO, -Fx::ONE), TURN / 2));
+        assert!(near(Angle::atan2(-Fx::ONE, Fx::ZERO), -TURN / 4));
+        assert_eq!(Angle::atan2(Fx::ZERO, Fx::ZERO), Angle::ZERO);
+        assert_eq!(Angle(TURN - 10).signed(), Angle(-10));
     }
 
     #[test]
