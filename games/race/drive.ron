@@ -83,7 +83,27 @@ Drive(
             ((120, 40, 150), (250, 196, 30)),   // 7: purple and gold
         ],
     ),
+    // In the window the field waits on the grid this long before the green (the menu music plays).
+    countdown: 4.0,
     sound: (
+        // Recordings (assets/src/race/audio/README.md lists what goes there): the designer's drop folder first,
+        // then assets/race/audio. Any of .wav .flac .ogg .mp3; whatever is missing is synthesised (music and the
+        // pass-by are silent instead).
+        dirs: ["src/race/audio", "race/audio"],
+        buses: (engine: 1.0, others: 0.7, effects: 0.8, voice: 1.0, music: 0.45),
+        // Your engine: loops tagged with the rpm they were recorded at, crossfaded by rpm and throttle.
+        loops: [
+            (file: "engine_idle", rpm: 1800.0, load: Both),
+            (file: "engine_low", rpm: 4000.0, load: On),
+            (file: "engine_mid", rpm: 6200.0, load: On),
+            (file: "engine_high", rpm: 8800.0, load: On),
+            (file: "engine_off", rpm: 6000.0, load: Off),
+        ],
+        // Or one steady sweep, idle to redline, cut into six loops (they replace the on-load loops above).
+        sweep: (file: "engine_sweep", from: 2000.0, to: 9500.0, bands: 6),
+        files: { "squeal": "tyre_squeal" },
+        // The music ducks under your engine.
+        duck: 0.6,
         // The spotter on the radio (assets/race/voice): each call says the first line that exists. Car low has no
         // line of its own yet ("inside" says it); clear after a car low or high says which, else plain "clear".
         voice: (dir: "race/voice", lines: {

@@ -27,8 +27,8 @@ wgpu = "29"
 winit = "0.30"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
-# Music (a track theme's loop): the standard Rust audio player.
-rodio = { version = "0.22", default-features = false, features = ["playback", "mp3"] }
+# Sound: music, the drive view's mixer and recordings (WAV, FLAC, Ogg Vorbis, MP3); the standard Rust audio player.
+rodio = { version = "0.22", default-features = false, features = ["playback", "mp3", "wav", "flac", "vorbis"] }
 
 [[bin]]
 name = "simcraft-import"

@@ -15,6 +15,7 @@ pub mod audio;
 pub mod car;
 pub mod carmodel;
 pub mod geom;
+pub mod mixer;
 pub mod photos;
 pub mod scene;
 
@@ -85,6 +86,9 @@ pub struct Drive {
     /// The window's size (logical pixels) and shots' (twice it), unless `--size` says otherwise.
     #[serde(default)]
     pub screen: Option<(u32, u32)>,
+    /// In the window, the field waits this long on the grid (s) before the green flag (the menu music plays).
+    #[serde(default)]
+    pub countdown: f32,
     /// The game's folder (pictures, the car's model and recordings are found from it).
     #[serde(skip)]
     pub dir: PathBuf,
@@ -126,6 +130,8 @@ pub struct Props {
     pub number: String,
     /// A knock from contact this tick (N·s): the head jolts.
     pub impact: String,
+    /// How far the tyres slide (thousandths of a radian): they squeal.
+    pub slip: String,
 }
 
 impl Default for Props {
@@ -149,6 +155,7 @@ impl Default for Props {
             position: s("position"),
             number: s("number"),
             impact: s("impact"),
+            slip: s("_slip"),
         }
     }
 }
@@ -611,6 +618,8 @@ pub struct CarView {
     pub number: i64,
     /// Contact this tick (N·s).
     pub impact: f32,
+    /// The tyres' slip (radians), when the car reports it.
+    pub slip: f32,
     /// The line it steers by (m left of the centreline), when the drive view shows one (`line_marker`).
     pub line: Option<f32>,
     /// Accelerations it reports (m/s²: forward, left) and its body motion (radians: nose up, right side down).
@@ -864,6 +873,8 @@ pub struct Hud {
     pub best_lap: Option<f32>,
     pub auto: bool,
     pub replay: bool,
+    /// Seconds to the green flag, while the field waits on the grid.
+    pub countdown: Option<f32>,
 }
 
 fn lap_text(t: f32) -> String {
@@ -1245,6 +1256,13 @@ impl Composer<'_> {
             rect(out, w / 2.0 - tw / 2.0 - 16.0 * s, h - 80.0 * s, tw + 32.0 * s, 64.0 * s, [0.0, 0.0, 0.0, 0.45]);
             text(out, &line, w / 2.0 - tw / 2.0, h - 68.0 * s, size, white);
         }
+        if let Some(c) = hud.countdown {
+            let t = if c > 1.0 { format!("GREEN IN {}", c.ceil() as i64 - 1) } else { "GREEN GREEN GREEN".into() };
+            let size = 44.0 * s;
+            let tw = geom::char_w(size) * t.len() as f32;
+            rect(out, w / 2.0 - tw / 2.0 - 20.0 * s, h * 0.3 - 12.0 * s, tw + 40.0 * s, size + 24.0 * s, [0.0, 0.0, 0.0, 0.5]);
+            text(out, &t, w / 2.0 - tw / 2.0, h * 0.3, size, [0.4, 1.0, 0.45, 0.98]);
+        }
         if hud.auto {
             text(out, "AUTO", 16.0 * s, h - 40.0 * s, 20.0 * s, [0.6, 0.8, 1.0, 0.9]);
         }
@@ -1372,6 +1390,10 @@ pub struct DrivePlay {
     pub refused: Option<(String, String, f32)>,
     /// Seconds a tick lasts.
     tick_dt: f32,
+    /// When the green flag falls (s of `time`): until then the field waits on the grid (`countdown`).
+    pub green_at: f32,
+    /// Points along the grandstands (track frame, m): the crowd is loud there.
+    pub stands: Vec<(f32, f32)>,
 }
 
 impl DrivePlay {
@@ -1411,9 +1433,43 @@ impl DrivePlay {
             last_hud: Hud::default(),
             refused: None,
             tick_dt: 1.0 / rate,
+            green_at: 0.0,
+            stands: Vec::new(),
         };
         p.observe();
+        p.stands = stand_points(&p.track, &p.drive.look);
         p
+    }
+
+    /// The race as the ears hear it this frame: every car where it is, how it moves, what its engine and tyres do.
+    pub fn hearing(&self) -> (Option<audio::Heard>, Vec<audio::Heard>) {
+        let heard = |c: &CarView| audio::Heard {
+            id: c.id,
+            pos: (c.x, c.y),
+            vel: (c.speed * c.yaw.cos(), c.speed * c.yaw.sin()),
+            heading: c.yaw,
+            rpm: c.rpm.unwrap_or_else(|| 1500.0 + c.speed.max(0.0) * 95.0),
+            throttle: c.throttle,
+            speed: c.speed,
+            gear: c.gear.unwrap_or(0),
+            impact: c.impact,
+            slip: c.slip,
+            g_lat: c.accel.map_or(self.kin.a_lat, |a| a.1),
+        };
+        let cars = self.cars();
+        (cars.iter().find(|c| c.you).map(heard), cars.iter().filter(|c| !c.you).map(heard).collect())
+    }
+
+    /// Where the race is: on the grid (before the green), racing, or over.
+    pub fn phase(&self) -> audio::Phase {
+        let max = self.engine.rules().cfg.run.max_ticks;
+        if self.engine.outcome().is_some() || self.world().tick + 1 >= max {
+            audio::Phase::Finished
+        } else if self.time < self.green_at || self.world().tick < 2 {
+            audio::Phase::Grid
+        } else {
+            audio::Phase::Racing
+        }
     }
 
     pub fn world(&self) -> &World {
@@ -1478,6 +1534,7 @@ impl DrivePlay {
                     position: n(&pr.position),
                     number: n(&pr.number).unwrap_or(e.id as i64),
                     impact: f(&pr.impact, 1.0).unwrap_or(0.0),
+                    slip: f(&pr.slip, 0.001).unwrap_or(0.0),
                     line: self.drive.line_marker.as_ref().and_then(|m| {
                         let on = m.when.as_ref().is_none_or(|(p, v)| prop(e, p) == Some(*v));
                         on.then(|| f(&m.prop, 0.001)).flatten()
@@ -1671,6 +1728,10 @@ impl DrivePlay {
     /// Runs `n` ticks.
     pub fn step(&mut self, n: u32) {
         for _ in 0..n {
+            // On the grid before the green: the game places the field (its first ticks), then waits.
+            if self.time < self.green_at && self.world().tick >= 2 {
+                return;
+            }
             if self.engine.outcome().is_some() || self.world().tick >= self.engine.rules().cfg.run.max_ticks {
                 return;
             }
@@ -1789,6 +1850,7 @@ impl DrivePlay {
             best_lap,
             auto: self.auto_you,
             replay: self.script.is_some(),
+            countdown: (self.time < self.green_at).then_some(self.green_at - self.time),
         }
     }
 
@@ -1865,6 +1927,24 @@ impl DrivePlay {
             None => {}
         }
     }
+}
+
+/// Points every 10 m along the grandstands, 25 m outside the racing surface (track frame).
+fn stand_points(track: &Track, look: &Look) -> Vec<(f32, f32)> {
+    let half = fl(track.width) / 2.0;
+    let len = fl(track.length);
+    let mut out = Vec::new();
+    for st in &look.stands {
+        let mut at = st.from;
+        while at <= st.to {
+            let c = centre(track, at.rem_euclid(len));
+            let (sn, cs) = c.heading.sin_cos();
+            let o = -(half + 25.0);
+            out.push((c.x - o * sn, c.y + o * cs));
+            at += 10.0;
+        }
+    }
+    out
 }
 
 /// The cars' model from `look.model`, fitted to the kind's footprint (its `motion` size: mm in a 1 m cell world).

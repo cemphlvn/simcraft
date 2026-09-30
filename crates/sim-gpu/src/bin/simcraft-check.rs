@@ -201,6 +201,20 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
         Ok(None) => r.notes.push("drive model: none (box cars)".into()),
         Err(e) => r.warn(format!("drive.ron: {e} (box cars are drawn instead)")),
     }
+    // Recordings: which are there, and what plays in place of each missing one.
+    let (found, missing): (Vec<_>, Vec<_>) = d.sound.inventory(&d.dir).into_iter().partition(|x| x.1.is_some());
+    r.notes.push(format!(
+        "drive audio: {} recording(s) found{}",
+        found.len(),
+        found
+            .iter()
+            .map(|x| format!("; {} = {}", x.0, x.1.as_ref().map_or(String::new(), |p| p.display().to_string())))
+            .collect::<Vec<_>>()
+            .concat()
+    ));
+    for (what, _, fallback) in &missing {
+        r.notes.push(format!("drive audio: {what}: no recording, {fallback}"));
+    }
     // The spotter's lines: which calls have a voice, which stay silent (text only).
     let calls = [
         "car_low",

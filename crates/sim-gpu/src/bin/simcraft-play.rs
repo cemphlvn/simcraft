@@ -556,8 +556,7 @@ fn main() {
             theme: 0,
             music: None,
             swipe_from: None,
-            engine_sound: None,
-            voice: None,
+            sound: None,
             window_size: a.sized.then_some(a.size),
             watch: None,
         };
@@ -668,8 +667,7 @@ fn run_track(engine: Engine<Running, Game>, track: Track, assets: Assets, a: &Ar
         theme,
         music: Some(Music::new(&a.dir)),
         swipe_from: None,
-        engine_sound: None,
-        voice: None,
+        sound: None,
         window_size,
         watch: None,
     };
@@ -763,8 +761,7 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
         theme: 0,
         music: None,
         swipe_from: None,
-        engine_sound: None,
-        voice: None,
+        sound: None,
         window_size,
         watch: None,
     };
@@ -911,8 +908,7 @@ fn run_roam(engine: Engine<Running, Game>, roam: Roam, assets: Assets, a: &Args,
         theme: 0,
         music: None,
         swipe_from: None,
-        engine_sound: None,
-        voice: None,
+        sound: None,
         window_size: None,
         watch: Some((
             sim_gpu::perf::Watch::new(a.budget, Some(PathBuf::from("runs/spikes"))),
@@ -1210,61 +1206,24 @@ impl Music {
     }
 }
 
-/// The engine's note, made while it plays rather than from recordings: harmonics of the engine's cycle (the
-/// firing frequency, rpm / 60 × cylinders / 2, strongest; the half order a cross-plane V8 burbles at), a rasp of
-/// noise pulsed at the firing rate that grows with throttle, and wind that grows with the square of speed. It lives
-/// in the host: the simulation never hears it, and a machine without a sound device plays silently.
-struct EngineSound {
-    _sink: rodio::MixerDeviceSink,
-    _player: rodio::Player,
-    shared: Arc<EngineShared>,
-    muted: bool,
-}
-
-#[derive(Default)]
-struct EngineShared {
-    rpm: std::sync::atomic::AtomicU32,
-    /// ‰ of throttle, cm/s of speed, ‰ of volume.
-    load: std::sync::atomic::AtomicU32,
-    speed: std::sync::atomic::AtomicU32,
-    gain: std::sync::atomic::AtomicU32,
-}
-
-impl EngineSound {
-    fn new(s: &sim_gpu::drive::Sound) -> Option<EngineSound> {
-        if !s.engine {
-            return None;
-        }
-        let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
-        sink.log_on_drop(false);
-        let shared = Arc::new(EngineShared::default());
-        shared.gain.store((s.volume * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed);
-        let player = rodio::Player::connect_new(sink.mixer());
-        player.append(Note::new(shared.clone(), s.cylinders.max(1) as f32, s.wind));
-        Some(EngineSound { _sink: sink, _player: player, shared, muted: false })
-    }
-
-    /// The car you drive now: rpm (or one made up from speed when the car has no gearbox yet), throttle, speed.
-    fn follow(&self, rpm: Option<f32>, throttle: f32, speed: f32, volume: f32) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let rpm = rpm.unwrap_or_else(|| 1500.0 + speed.max(0.0) * 95.0);
-        self.shared.rpm.store(rpm.max(0.0) as u32, Relaxed);
-        self.shared.load.store((throttle.clamp(0.0, 1.0) * 1000.0) as u32, Relaxed);
-        self.shared.speed.store((speed.max(0.0) * 100.0) as u32, Relaxed);
-        self.shared.gain.store(if self.muted { 0 } else { (volume * 1000.0) as u32 }, Relaxed);
-    }
-}
-
-/// The spotter on the radio (`sound.voice` in drive.ron): the HUD's calls and the race's flags as recorded lines,
-/// one at a time (`drive::audio::Radio` decides when). No sound device or no lines: silence.
-struct SpotterVoice {
+/// The drive view's sound (`sound:` in drive.ron), in the host: the simulation never hears it, and a machine
+/// without a sound device plays silently. The mixer (`drive::mixer::Desk`) plays the engines and the effects on
+/// its buses; the spotter's lines and the music play beside it at their buses' levels. `drive::audio::Director`
+/// decides what plays each frame, `drive::audio::Radio` when the spotter speaks.
+struct DriveAudio {
     sink: rodio::MixerDeviceSink,
-    player: Option<rodio::Player>,
+    _desk: rodio::Player,
+    shared: sim_gpu::drive::mixer::Shared,
+    director: sim_gpu::drive::audio::Director,
     radio: sim_gpu::drive::audio::Radio,
-    /// Each line's file and length (s), found once.
+    /// Each spotter line's file and length (s), found once.
     lines: std::collections::BTreeMap<String, (PathBuf, f32)>,
-    green: bool,
-    checkered: bool,
+    line: Option<rodio::Player>,
+    passby_peak: Option<f32>,
+    /// The music playing (its role), its player and its level now (it fades).
+    music: Option<(String, rodio::Player)>,
+    music_level: f32,
+    phase: sim_gpu::drive::audio::Phase,
     muted: bool,
 }
 
@@ -1284,174 +1243,135 @@ const CALLS: [&str; 12] = [
     "wreck",
 ];
 
-impl SpotterVoice {
-    fn new(p: &DrivePlay) -> Option<SpotterVoice> {
+fn open_audio(path: &Path) -> Option<rodio::Decoder<std::io::BufReader<std::fs::File>>> {
+    let f = std::fs::File::open(path).ok()?;
+    rodio::Decoder::new(std::io::BufReader::new(f)).ok()
+}
+
+impl DriveAudio {
+    fn new(p: &DrivePlay) -> Option<DriveAudio> {
         use rodio::Source;
-        let v = &p.drive.sound.voice;
+        let s = &p.drive.sound;
+        let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
+        sink.log_on_drop(false);
+        let (bank, problems) = sim_gpu::drive::mixer::Bank::load(&p.drive.dir, s);
+        for e in problems {
+            eprintln!("sound: {e} (synthesised instead)");
+        }
+        let passby_peak = bank.passby_peak;
+        let shared = sim_gpu::drive::mixer::Shared::default();
+        let desk = rodio::Player::connect_new(sink.mixer());
+        desk.append(sim_gpu::drive::mixer::Desk::new(Arc::new(bank), shared.clone()));
         let mut lines = std::collections::BTreeMap::new();
-        for call in CALLS.iter().map(|c| c.to_string()).chain(v.lines.keys().cloned()) {
-            let Some(path) = v.line(&p.drive.dir, &call) else { continue };
-            let Ok(dec) = std::fs::File::open(&path)
-                .map(std::io::BufReader::new)
-                .map_err(|e| e.to_string())
-                .and_then(|f| rodio::Decoder::new(f).map_err(|e| e.to_string()))
-            else {
-                continue;
-            };
+        for call in CALLS.iter().map(|c| c.to_string()).chain(s.voice.lines.keys().cloned()) {
+            let Some(path) = s.voice.line(&p.drive.dir, &call) else { continue };
+            let Some(dec) = open_audio(&path) else { continue };
             let len = dec.total_duration().map(|d| d.as_secs_f32()).unwrap_or_else(|| {
                 let (ch, rate) = (dec.channels().get() as f32, dec.sample_rate().get() as f32);
                 dec.count() as f32 / ch / rate
             });
             lines.insert(call, (path, len));
         }
-        if lines.is_empty() {
-            return None;
-        }
-        let mut sink = rodio::DeviceSinkBuilder::open_default_sink().ok()?;
-        sink.log_on_drop(false);
-        Some(SpotterVoice { sink, player: None, radio: Default::default(), lines, green: false, checkered: false, muted: false })
+        Some(DriveAudio {
+            sink,
+            _desk: desk,
+            shared,
+            director: Default::default(),
+            radio: Default::default(),
+            lines,
+            line: None,
+            passby_peak,
+            music: None,
+            music_level: 0.0,
+            phase: sim_gpu::drive::audio::Phase::Grid,
+            muted: false,
+        })
     }
 
-    /// A frame: the HUD's call, the green flag when the field first rolls, the checkered when the race is over.
-    fn follow(&mut self, p: &DrivePlay) {
+    /// A new race: the flags again.
+    fn restart(&mut self) {
+        self.director = Default::default();
+        self.radio = Default::default();
+        self.phase = sim_gpu::drive::audio::Phase::Grid;
+    }
+
+    /// A frame: what the race sounds like now.
+    fn follow(&mut self, p: &DrivePlay, paused: bool, dt: f32) {
+        use sim_gpu::drive::audio::{Phase, Scene};
+        let s = &p.drive.sound;
+        let (you, others) = p.hearing();
+        let phase = p.phase();
         let now = p.time;
-        if !self.green && p.world().tick >= 2 {
-            self.green = true;
-            self.radio.announce("green", now);
+        // The flags: green as the field goes, checkered when it is over.
+        match (self.phase, phase) {
+            (Phase::Grid, Phase::Racing) => self.radio.announce("green", now),
+            (a, Phase::Finished) if a != Phase::Finished => self.radio.announce("checkered", now),
+            _ => {}
         }
-        if !self.checkered && (p.engine.outcome().is_some() || p.world().tick + 1 >= p.engine.rules().cfg.run.max_ticks) {
-            self.checkered = true;
-            self.radio.announce("checkered", now);
+        self.phase = phase;
+        let scene = Scene {
+            you,
+            others: &others,
+            stands: &p.stands,
+            time: now,
+            tick: p.world().tick,
+            phase,
+            paused,
+            passby_peak: self.passby_peak,
+        };
+        let (mut mix, wreck) = self.director.listen(s, &scene);
+        if let Some(w) = wreck {
+            self.radio.announce(w, now);
         }
-        let lines = &self.lines;
-        let say = self.radio.hear(p.last_hud.voice.as_deref(), now, &p.drive.sound.voice, |c| lines.get(c).map(|l| l.1));
-        let Some(call) = say else { return };
         if self.muted {
-            return;
+            mix.engine.gain = 0.0;
+            mix.others.iter_mut().for_each(|o| o.gain = 0.0);
+            (mix.squeal.0, mix.scrape, mix.wind.0, mix.crowd, mix.music_gain, mix.voice_gain) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+            mix.shots.clear();
         }
-        let Some((path, _)) = self.lines.get(&call) else { return };
-        if let Ok(src) = std::fs::File::open(path)
-            .map(std::io::BufReader::new)
-            .map_err(|e| e.to_string())
-            .and_then(|f| rodio::Decoder::new(f).map_err(|e| e.to_string()))
+        let (music, music_gain, voice_gain) = (mix.music.clone(), mix.music_gain, mix.voice_gain);
+        if let Ok(mut m) = self.shared.lock() {
+            // One-shots the audio thread has not taken yet stay queued.
+            let mut shots = std::mem::take(&mut m.shots);
+            shots.append(&mut mix.shots);
+            *m = sim_gpu::drive::audio::Mix { shots, ..mix };
+        }
+        // Music: a new piece starts silent and fades in; a piece that is no longer wanted fades out, then stops.
+        let want = music.filter(|r| s.role(&p.drive.dir, r).is_some());
+        if want.is_some() && self.music.as_ref().map(|m| &m.0) != want.as_ref() && self.music_level < 0.02 {
+            if let Some(m) = self.music.take() {
+                m.1.stop();
+            }
+            if let Some(role) = &want
+                && let Some(src) = s
+                    .role(&p.drive.dir, role)
+                    .and_then(|f| std::fs::File::open(f).ok())
+                    .and_then(|f| rodio::Decoder::new_looped(std::io::BufReader::new(f)).ok())
+            {
+                let player = rodio::Player::connect_new(self.sink.mixer());
+                player.set_volume(0.0);
+                player.append(src);
+                self.music = Some((role.clone(), player));
+            }
+        }
+        let target = if want.is_some() && self.music.as_ref().map(|m| &m.0) == want.as_ref() { music_gain } else { 0.0 };
+        self.music_level += (target - self.music_level) * (dt / 0.8).min(1.0);
+        if let Some((_, pl)) = &self.music {
+            pl.set_volume(self.music_level);
+        }
+        // The spotter.
+        let lines = &self.lines;
+        let say = self.radio.hear(p.last_hud.voice.as_deref(), now, &s.voice, |c| lines.get(c).map(|l| l.1));
+        if let Some(call) = say
+            && let Some(src) = self.lines.get(&call).and_then(|l| open_audio(&l.0))
         {
             let player = rodio::Player::connect_new(self.sink.mixer());
-            player.set_volume(p.drive.sound.voice.volume);
+            player.set_volume(voice_gain);
             player.append(src);
-            self.player = Some(player);
+            self.line = Some(player);
         }
     }
 }
-
-/// The synthesised note, one sample at a time (mono, 44.1 kHz).
-struct Note {
-    shared: Arc<EngineShared>,
-    phase: f64,
-    rpm: f32,
-    load: f32,
-    speed: f32,
-    gain: f32,
-    seed: u32,
-    rasp: f32,
-    wind: (f32, f32),
-    cylinders: f32,
-    wind_k: f32,
-}
-
-const RATE: u32 = 44_100;
-
-impl Note {
-    fn new(shared: Arc<EngineShared>, cylinders: f32, wind_k: f32) -> Note {
-        Note {
-            shared,
-            phase: 0.0,
-            rpm: 1500.0,
-            load: 0.0,
-            speed: 0.0,
-            gain: 0.0,
-            seed: 0x1234_5678,
-            rasp: 0.0,
-            wind: (0.0, 0.0),
-            cylinders,
-            wind_k,
-        }
-    }
-
-    fn noise(&mut self) -> f32 {
-        self.seed ^= self.seed << 13;
-        self.seed ^= self.seed >> 17;
-        self.seed ^= self.seed << 5;
-        self.seed as f32 / u32::MAX as f32 * 2.0 - 1.0
-    }
-}
-
-impl Iterator for Note {
-    type Item = rodio::Sample;
-
-    fn next(&mut self) -> Option<rodio::Sample> {
-        use std::sync::atomic::Ordering::Relaxed;
-        // Follow the car smoothly (a few ms), so a new frame's value never clicks.
-        let k = 0.0015;
-        self.rpm += (self.shared.rpm.load(Relaxed) as f32 - self.rpm) * k;
-        self.load += (self.shared.load.load(Relaxed) as f32 / 1000.0 - self.load) * k;
-        self.speed += (self.shared.speed.load(Relaxed) as f32 / 100.0 - self.speed) * k;
-        self.gain += (self.shared.gain.load(Relaxed) as f32 / 1000.0 - self.gain) * k;
-        let cycle = (self.rpm / 120.0).max(1.0) as f64; // one four-stroke cycle is two turns of the crank
-        self.phase = (self.phase + cycle / RATE as f64).fract();
-        let tau = std::f64::consts::TAU;
-        let fire = self.cylinders;
-        let mut harm = 0.0f32;
-        for n in 1..=32u32 {
-            let f = cycle as f32 * n as f32;
-            if f > 7000.0 {
-                break;
-            }
-            let order = n as f32;
-            let a = if order == fire {
-                1.0
-            } else if order == fire / 2.0 {
-                0.55
-            } else if order == fire * 2.0 {
-                0.4
-            } else if order == fire * 1.5 {
-                0.28
-            } else if order == fire * 3.0 {
-                0.18
-            } else {
-                0.05 * (0.4 + self.load) / order.sqrt()
-            };
-            harm += a * ((tau * n as f64 * self.phase).sin() as f32);
-        }
-        // Combustion rasp: noise, pulsed at the firing rate, louder under load.
-        let pulse = 0.5 + 0.5 * ((tau * fire as f64 * self.phase).sin() as f32);
-        let w = self.noise();
-        self.rasp += (w - self.rasp) * 0.25;
-        let rasp = self.rasp * pulse * pulse * self.load * (0.25 + self.rpm / 12_000.0) * 0.6;
-        // Wind: noise with the lows and the highs taken off, with the square of speed.
-        let w2 = self.noise();
-        self.wind.0 += (w2 - self.wind.0) * 0.2;
-        self.wind.1 += (self.wind.0 - self.wind.1) * 0.02;
-        let wind = (self.wind.0 - self.wind.1) * self.wind_k * (self.speed / 80.0).powi(2);
-        let x = harm * 0.18 * (0.35 + 0.65 * self.load) + rasp + wind;
-        Some((x * 1.4).tanh() * self.gain)
-    }
-}
-
-impl rodio::Source for Note {
-    fn current_span_len(&self) -> Option<usize> {
-        None
-    }
-    fn channels(&self) -> rodio::ChannelCount {
-        std::num::NonZero::new(1).expect("one")
-    }
-    fn sample_rate(&self) -> rodio::SampleRate {
-        std::num::NonZero::new(RATE).expect("a rate")
-    }
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        None
-    }
-}
-
 /// A key's name for drive views (arrows, letters, space), from what it types.
 fn drive_key(k: &Key) -> Option<String> {
     Some(match k.as_ref() {
@@ -1577,10 +1497,8 @@ struct App {
     music: Option<Music>,
     /// Where a press (mouse or finger) started: its release decides the swipe.
     swipe_from: Option<(f32, f32)>,
-    /// A drive view's engine note (none without a sound device).
-    engine_sound: Option<EngineSound>,
-    /// A drive view's spotter on the radio.
-    voice: Option<SpotterVoice>,
+    /// A drive view's sound: engines, effects, the spotter, music (none without a sound device).
+    sound: Option<DriveAudio>,
     /// The window's logical size (a track's `screen`, or `--size`); none = the default.
     window_size: Option<(u32, u32)>,
     /// Roam: every frame measured against the budget; spike reports to `runs/spikes/` (game, panel, seed).
@@ -1671,8 +1589,9 @@ impl ApplicationHandler for App {
                 p.rig.view = view;
                 p.auto_you = auto && script.is_none();
                 p.script = script;
-                self.engine_sound = EngineSound::new(&p.drive.sound);
-                self.voice = SpotterVoice::new(&p);
+                // In the window the field waits on the grid for the green (the menu music plays).
+                p.green_at = p.drive.countdown;
+                self.sound = DriveAudio::new(&p);
                 Session::Drive(Box::new(p))
             }
         };
@@ -1753,11 +1672,8 @@ impl ApplicationHandler for App {
                         "p" => self.paused = !self.paused,
                         "o" => p.auto_you = !p.auto_you,
                         "m" => {
-                            if let Some(s) = &mut self.engine_sound {
+                            if let Some(s) = &mut self.sound {
                                 s.muted = !s.muted;
-                            }
-                            if let Some(v) = &mut self.voice {
-                                v.muted = !v.muted;
                             }
                         }
                         "r" => {
@@ -1767,8 +1683,8 @@ impl ApplicationHandler for App {
                                 }
                                 p.restart(engine);
                                 self.clock = 0.0;
-                                if let Some(v) = &mut self.voice {
-                                    (v.green, v.checkered) = (false, false);
+                                if let Some(s) = &mut self.sound {
+                                    s.restart();
                                 }
                             }
                         }
@@ -1966,14 +1882,8 @@ impl ApplicationHandler for App {
                 if let (Session::Track(p), Some(m)) = (&w.play, &mut self.music) {
                     m.follow(p.track.music.as_deref());
                 }
-                if let (Session::Drive(p), Some(s)) = (&w.play, &self.engine_sound)
-                    && let Some(c) = p.cars().into_iter().find(|c| c.you)
-                {
-                    let vol = if self.paused { 0.0 } else { p.drive.sound.volume };
-                    s.follow(c.rpm, c.throttle, c.speed, vol);
-                }
-                if let (Session::Drive(p), Some(v)) = (&w.play, &mut self.voice) {
-                    v.follow(p);
+                if let (Session::Drive(p), Some(s)) = (&w.play, &mut self.sound) {
+                    s.follow(p, self.paused, dt);
                 }
                 let advance_ms = t.elapsed().as_secs_f64() * 1000.0;
                 // A run that just ended is kept, so it can be replayed later (`--replay`).
