@@ -3,79 +3,88 @@
 
 Published (charlottemotorspeedway.com, Track Facts): 1.5 mi (7,920 ft); frontstretch 1,980 ft, backstretch 1,500 ft;
 turns 1-2 2,400 ft long with a 685 ft radius, turns 3-4 2,040 ft with 625 ft; turns banked 24°, straights 5°.
-A turn is longer than a half circle of its radius: the radius is the tightest part, and real turns sweep in and out
-wider (transition spirals). So each turn here is a wider entry arc (ENTRY × the radius), the published radius in the
-middle, and a matching exit, sized to the published turn length. Not published: the shape of the quad-oval's dogleg.
-Here it is one gentle left bend of radius DOGLEG_R at the start/finish line; its angle and the straights either side
-are solved so the lap closes with the published frontstretch length. Charlotte's lengths, radii and banking on an
-approximate plan, not a survey of the real track.
 
-    games/race/gen_track.py            # writes games/race/tracks/charlotte.ron
+A turn is longer than a circular arc of its radius would be for the angle it turns: real turns ease in and out
+with transition spirals (clothoids), the published radius being the tightest part. An eased turn of radius R,
+angle θ and spiral length Ls is θ·R + Ls long, so each spiral is Ls = length − θ·R: the published length and
+radius fix it (turns 1-2: ~138 m, 3-4: ~80 m). Banking rises along the spirals. Not published: the shape of the
+quad-oval's dogleg; here one eased bend of radius DOGLEG_R with DOGLEG_SPIRAL spirals, its angle and the
+straights either side solved so the lap closes with the published frontstretch length. The lap starts just past
+the dogleg (the real start/finish line is at its apex, ~70 m earlier). Charlotte's lengths, radii and banking on
+an approximate plan, not a survey of the real track.
+
+    games/race/gen_track.py            # writes games/race/tracks/charlotte.ron and prints its extent
 """
 
 import math
 from pathlib import Path
 
 FT = 0.3048
-LAP = 1.5 * 1609.344
 R12, R34 = 685 * FT, 625 * FT
-BACK = 1500 * FT
-FRONT = 1980 * FT
 L12, L34 = 2400 * FT, 2040 * FT
-ENTRY = 1.6
-DOGLEG_R = 500.0
+BACK, FRONT = 1500 * FT, 1980 * FT
+DOGLEG_R, DOGLEG_SPIRAL = 500.0, 60.0
 WIDTH = 18.0  # m, assumed (not published)
 TURN_BANK, STRAIGHT_BANK = 24.0, 5.0
-BLEND = 120.0
 
 
-def walk(segs):
-    """End point and heading of segments laid from (0, 0) heading 0: ("S", len) or ("L", radius, radians)."""
-    x = y = h = 0.0
+def eased_turned(r, ls, length, t):
+    """Heading turned t metres into an eased turn (the engine's own formula)."""
+    t = min(max(t, 0.0), length)
+    f = lambda u: u * u / (2 * ls * r)
+    if ls == 0:
+        return t / r
+    if t < ls:
+        return f(t)
+    if t <= length - ls:
+        return f(ls) + (t - ls) / r
+    return (length - ls) / r - f(length - t)
+
+
+def walk(segs, x=0.0, y=0.0, h=0.0, step=0.02):
+    """End point of ("S", len) and ("E", radius, angle, spiral) pieces laid from (x, y) heading h."""
     for s in segs:
         if s[0] == "S":
-            x += s[1] * math.cos(h)
-            y += s[1] * math.sin(h)
-        else:
-            r, a = s[1], s[2]
-            cx, cy = x - r * math.sin(h), y + r * math.cos(h)
-            h += a
-            x, y = cx + r * math.sin(h), cy - r * math.cos(h)
+            x, y = x + s[1] * math.cos(h), y + s[1] * math.sin(h)
+            continue
+        _, r, ang, ls = s
+        length = ang * r + ls
+        t = 0.0
+        while t < length:
+            dt = min(step, length - t)
+            hd = h + eased_turned(r, ls, length, t + dt / 2)
+            x, y = x + dt * math.cos(hd), y + dt * math.sin(hd)
+            t += dt
+        h += ang
     return x, y, h
 
 
-def turn(radius, length, k):
-    """Entry, apex and exit arcs turning π - k in all, `length` long, tightest at `radius`."""
-    wide = ENTRY * radius
-    apex = (length - wide * (math.pi - k)) / (radius - wide)
-    entry = (math.pi - k - apex) / 2
-    assert 0 < apex < math.pi - k, (radius, length, k, apex)
-    return [("L", wide, entry), ("L", radius, apex), ("L", wide, entry)]
+def pieces(a, b, k):
+    turn = math.pi - k
+    return [("S", b), ("E", R12, turn, L12 - turn * R12), ("S", BACK), ("E", R34, turn, L34 - turn * R34), ("S", a),
+            ("E", DOGLEG_R, 2 * k, DOGLEG_SPIRAL)]
 
 
-def layout(a, b, k):
-    return ([("L", DOGLEG_R, k), ("S", b)] + turn(R12, L12, k) + [("S", BACK)] + turn(R34, L34, k)
-            + [("S", a), ("L", DOGLEG_R, k)])
-
-
-def straights(k):
-    """For a dogleg angle k, the two frontstretch straights that close the lap: the end point is linear in them."""
-    x0, y0, _ = walk(layout(0.0, 0.0, k))
-    # b runs at heading k, a at heading -k (they only add (a+b)cos k, (b-a) sin k): solve for x = y = 0.
-    total = -x0 / math.cos(k)
-    diff = -y0 / math.sin(k)
-    return (total - diff) / 2, (total + diff) / 2
+def straights(k, rounded=None):
+    """The straights a (before the dogleg) and b (after it) that close the lap: the end point is linear in them."""
+    ps = rounded or pieces(0.0, 0.0, k)
+    ps = [("S", 0.0) if p[0] == "S" and i in (0, 4) else p for i, p in enumerate(ps)]
+    x0, y0, _ = walk(ps)
+    ha = sum(p[2] for p in ps[:4] if p[0] == "E")  # heading along a
+    # b runs at heading 0, a at heading ha: x0 + b + a·cos ha = 0, y0 + a·sin ha = 0.
+    a = -y0 / math.sin(ha)
+    b = -x0 - a * math.cos(ha)
+    return a, b
 
 
 def front(k):
     a, b = straights(k)
-    return a + b + 2 * DOGLEG_R * k
+    return a + b + (2 * k * DOGLEG_R + DOGLEG_SPIRAL)
 
 
-def solve():
-    # The frontstretch lengthens as the dogleg sharpens; bisect for the published length.
-    lo, hi = 0.02, 0.6
-    for _ in range(200):
+def main():
+    lo, hi = 0.05, 0.6
+    for _ in range(80):
         mid = (lo + hi) / 2
         if front(mid) < FRONT:
             lo = mid
@@ -83,72 +92,58 @@ def solve():
             hi = mid
     k = (lo + hi) / 2
     a, b = straights(k)
-    return a, b, k
-
-
-def rounded(a, b, k):
-    """The layout as the file stores it (whole mm, hundredths of a degree), still closing to the millimetre: round
-    every angle, make them add up to exactly 360.00° (the largest arc takes the remainder), then solve the two
-    straights again for the rounded angles (the end point is linear in them)."""
-    pieces = layout(a, b, k)
-    cd = [round(math.degrees(p[2]) * 100) if p[0] == "L" else None for p in pieces]
-    turns = [i for i, c in enumerate(cd) if c is not None]
-    biggest = max(turns, key=lambda i: cd[i])
-    cd[biggest] += 36000 - sum(cd[i] for i in turns)
-    exact = [("L", p[1], math.radians(c / 100)) if c is not None else p for p, c in zip(pieces, cd)]
-    ia, ib = 9, 1  # indices of the straights a and b in layout()
-    exact[ia], exact[ib] = ("S", 0.0), ("S", 0.0)
-    x0, y0, _ = walk(exact)
-    ha = sum(p[2] for p in exact[:ia] if p[0] == "L")
-    hb = sum(p[2] for p in exact[:ib] if p[0] == "L")
-    # x0 + a·cos ha + b·cos hb = 0, y0 + a·sin ha + b·sin hb = 0.
-    det = math.cos(ha) * math.sin(hb) - math.sin(ha) * math.cos(hb)
-    na = (-x0 * math.sin(hb) + y0 * math.cos(hb)) / det
-    nb = (-y0 * math.cos(ha) + x0 * math.sin(ha)) / det
-    exact[ia], exact[ib] = ("S", na), ("S", nb)
-    return exact
-
-
-def main():
-    a, b, k = solve()
-    assert a > 0 and b > 0 and 0 < k < 0.5, (a, b, k)
-    pieces = rounded(a, b, k)
-    x, y, _ = walk([("S", round(p[1] * 1000) / 1000) if p[0] == "S" else ("L", round(p[1] * 1000) / 1000, p[2])
-                    for p in pieces])
+    assert a > 0 and b > 0, (a, b, k)
+    # Round as the file stores (mm, hundredths of a degree), angles summing to exactly 360.00°, then solve the
+    # straights again for the rounded pieces.
+    ps = pieces(a, b, k)
+    cds = [round(math.degrees(p[2]) * 100) if p[0] == "E" else None for p in ps]
+    turns = [i for i, c in enumerate(cds) if c is not None]
+    cds[max(turns, key=lambda i: cds[i])] += 36000 - sum(cds[i] for i in turns)
+    ps = [("E", round(p[1] * 1000) / 1000, math.radians(c / 100), round(p[3] * 1000) / 1000) if c is not None else p
+          for p, c in zip(ps, cds)]
+    a, b = straights(k, ps)
+    ps[0], ps[4] = ("S", round(b * 1000) / 1000), ("S", round(a * 1000) / 1000)
+    x, y, _ = walk(ps)
     assert math.hypot(x, y) < 0.005, f"closes {math.hypot(x, y) * 1000:.1f} mm off"
-    mm = lambda m: round(m * 1000)
-    cd = lambda rad: round(math.degrees(rad) * 100)
-    names = ["Tri-oval (start/finish)", "Frontstretch", "Turn 1", "Turns 1-2", "Turn 2", "Backstretch", "Turn 3",
-             "Turns 3-4", "Turn 4", "Frontstretch", "Tri-oval"]
-    segs = []
-    for piece, name in zip(pieces, names):
-        bank = TURN_BANK if name.startswith("Turn") else STRAIGHT_BANK
-        if piece[0] == "S":
-            segs.append(("Straight", piece[1], None, bank, name))
-        else:
-            segs.append(("Left", piece[1], piece[2], bank, name))
+    names = ["Frontstretch", "Turns 1-2", "Backstretch", "Turns 3-4", "Frontstretch", "Tri-oval"]
     lines = []
-    for shape, r, ang, bank, name in segs:
-        s = f"Straight({mm(r)})" if shape == "Straight" else f"Left({mm(r)}, {cd(ang)})"
-        lines.append(f'        (shape: {s}, bank: {round(bank * 100)}, name: "{name}"),')
+    for p, c, name in zip(ps, cds, names):
+        if p[0] == "S":
+            lines.append(f'        (shape: Straight({round(p[1] * 1000)}), bank: {round(STRAIGHT_BANK * 100)}, name: "{name}"),')
+        else:
+            bank = TURN_BANK if name.startswith("Turns") else STRAIGHT_BANK
+            lines.append(f'        (shape: EasedLeft({round(p[1] * 1000)}, {c}, {round(p[3] * 1000)}), '
+                         f'bank: {round(bank * 100)}, name: "{name}"),')
     out = Path(__file__).parent / "tracks" / "charlotte.ron"
-    out.parent.mkdir(exist_ok=True)
     out.write_text(
-        "// Generated by games/race/gen_track.py: Charlotte Motor Speedway's published length, radii and banking on an\n"
-        "// approximate plan (the dogleg's shape is not published). Millimetres and hundredths of a degree.\n"
+        "// Generated by games/race/gen_track.py: Charlotte Motor Speedway's published length, radii, turn lengths and\n"
+        "// banking; turns eased by transition spirals; the dogleg's shape approximate. mm, hundredths of a degree.\n"
         "(\n"
         '    name: "1.5-mile quad-oval (Charlotte dimensions)",\n'
-        f"    width: {mm(WIDTH)},\n"
+        f"    width: {round(WIDTH * 1000)},\n"
         "    start: (0, 0, 0),\n"
-        f"    blend: {mm(BLEND)},\n"
         "    // Inside: the apron, then the infield grass (70 % grip, no wall). Outside: the SAFER barrier at the edge.\n"
         "    left: (width: 20000, grip: 700, wall: false),\n"
         "    right: (width: 0, wall: true),\n"
         "    segments: [\n" + "\n".join(lines) + "\n    ],\n)\n"
     )
-    lap = sum(p[1] if p[0] == "S" else p[1] * p[2] for p in pieces)
-    print(f"lap {lap:.1f} m (published {LAP:.1f}); frontstretch straights {a:.1f} + {b:.1f} m, "
-          f"dogleg {math.degrees(2 * k):.1f}°; wrote {out}")
+    # Extent (centreline ± 40 m), to place the track in a world.
+    xs, ys = [], []
+    X = Y = H = 0.0
+    for p in ps:
+        n = 200
+        for j in range(n):
+            if p[0] == "S":
+                X, Y = X + p[1] / n * math.cos(H), Y + p[1] / n * math.sin(H)
+            else:
+                X, Y, H2 = walk([("E", p[1], p[2] / n, 0.0)], X, Y, H)
+                H = H2
+            xs.append(X)
+            ys.append(Y)
+    lap = sum(p[1] if p[0] == "S" else p[2] * p[1] + p[3] for p in ps)
+    print(f"lap {lap:.1f} m; spirals {ps[1][3]:.1f} m (turns 1-2), {ps[3][3]:.1f} m (turns 3-4); dogleg "
+          f"{math.degrees(2 * k):.1f}°; straights a {a:.1f} b {b:.1f}; extent x {min(xs) - 40:.0f}..{max(xs) + 40:.0f}, "
+          f"y {min(ys) - 40:.0f}..{max(ys) + 40:.0f} m; wrote {out}")
 
 
 if __name__ == "__main__":

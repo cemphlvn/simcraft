@@ -15,7 +15,7 @@ Game(
                 props: { "human": 0, "stick": 0, "lap": 0, "last_s": 0, "lap_start": 0, "lap_ms": 0, "best_ms": 0 }),
     },
 
-    track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9000, columns: 2, gap: 5000)),
+    track: (file: "tracks/charlotte.ron", origin: (650000, 50000), grid: (spacing: 9000, columns: 2, gap: 5000)),
 
     params: {
         // You are car 1 and start from the back of the grid (slot 8 of 8); the rivals fill slots 1-7 in order.
@@ -25,8 +25,8 @@ Game(
         // Rivals spread over lines this far apart (mm left of the centreline), cycling.
         "line_step": 2500, "lines": 3,
         // How you steer: 2 = line steering (arcade), 0 = manual. Line steering moves your line this far a tick at
-        // full stick (mm: 150 is 9 m/s across the track) up to this far either side of the centreline.
-        "player_assist": 2, "line_rate": 150,
+        // full stick (mm: 60 is 3.6 m/s across the track; 150 snapped the car into a weave at 75 m/s).
+        "player_assist": 2, "line_rate": 60,
         // How far your line goes: low (left, toward the apron) and high (right, toward the wall). The car runs up
         // to ~2 m wide of its line at the limit, and the wall is 9 m out: the high line stops at 4.5 m.
         "line_low": 5500, "line_high": 4500,

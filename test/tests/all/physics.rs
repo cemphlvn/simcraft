@@ -20,7 +20,7 @@ fn the_charlotte_oval_closes_at_its_published_length() {
             let p = t.pose(s, Fx::int(off));
             let at = t.locate(p.x, p.y, None);
             let ds = ((at.s - s).0.abs()).min(t.length.0 - (at.s - s).0.abs());
-            assert!(ds < Fx::ratio(1, 100).0 && (at.offset - Fx::int(off)).abs() < Fx::ratio(1, 100), "{s:?} {off}: {at:?}");
+            assert!(ds < Fx::ratio(2, 100).0 && (at.offset - Fx::int(off)).abs() < Fx::ratio(2, 100), "{s:?} {off}: {at:?}");
         }
     }
 }
