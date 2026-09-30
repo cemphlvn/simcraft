@@ -689,6 +689,9 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
         println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
         return Ok(());
     }
+    if a.bench > 0 {
+        return bench_drive(engine, drive, track, a);
+    }
     if let Some(out) = &a.shot {
         let instance = wgpu::Instance::default();
         let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
@@ -763,6 +766,75 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
         watch: None,
     };
     el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+/// The drive view's whole frame, GPU included (`--bench N`): the autopilot drives you (`--watch`, `--view` as for
+/// shots), each frame rendered offscreen at the window's size (the mirror too) and waited for. Prints the mean of
+/// each part and the frame's p99 and how many frames went over 8 ms (the budget for 120 Hz).
+fn bench_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Track, a: &Args) -> Result<(), String> {
+    let instance = wgpu::Instance::default();
+    let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
+    sim_gpu::drive::upload_textures(&mut gpu);
+    let (w, h) = match drive.screen {
+        Some(s) if !a.sized => s,
+        _ => a.size,
+    };
+    let mut play = DrivePlay::new(engine, drive, track);
+    play.auto_you = true;
+    play.rig.view = a.view;
+    play.watch = a.watch;
+    let rate = play.engine.rules().cfg.run.tick_rate as f32;
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bench"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: gpu.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let (mut sim, mut compose, mut draw, mut clock) = (0.0f64, 0.0f64, 0.0f64, 0.0f32);
+    let mut frames: Vec<f64> = Vec::new();
+    let dt = 1.0 / 60.0;
+    for f in 0..a.bench {
+        let whole = Instant::now();
+        let t = Instant::now();
+        clock += dt * rate * a.speed;
+        let n = clock.floor() as u32;
+        clock -= n as f32;
+        play.step(n);
+        play.alpha = clock;
+        play.time += dt;
+        sim += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let fr = play.frame(w as f32, h as f32, dt);
+        compose += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        play.render(&mut gpu, &view, w, h, &fr);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        draw += t.elapsed().as_secs_f64();
+        // After the first frames (pipelines and uploads warm up).
+        if f >= 30 {
+            frames.push(whole.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    let per = |s: f64| s * 1000.0 / a.bench as f64;
+    frames.sort_by(f64::total_cmp);
+    let p99 = frames.get(frames.len() * 99 / 100).copied().unwrap_or(0.0);
+    let over = frames.iter().filter(|m| **m > 8.0).count();
+    eprintln!(
+        "{} frames at {w}x{h} (view {}): sim {:.3} ms, compose {:.3} ms, gpu {:.3} ms per frame; p99 {p99:.2} ms, over 8 ms: {over}, worst {:.2} ms (tick {})",
+        a.bench,
+        a.view,
+        per(sim),
+        per(compose),
+        per(draw),
+        frames.last().copied().unwrap_or(0.0),
+        play.world().tick
+    );
+    Ok(())
 }
 
 /// First person in a voxel world: how moving feels (numbers), a screenshot, or a window.
