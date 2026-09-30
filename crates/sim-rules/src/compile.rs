@@ -170,9 +170,9 @@ impl QueryCtx {
         self.counted();
         let Some(w) = self.world() else { return default };
         let Some(me) = w.get(self.me) else { return default };
-        match w.nearest(me, kind) {
-            Some((e, d)) if d <= r => e.props.get(prop).copied().unwrap_or(default),
-            _ => default,
+        match w.nearest_within(me, kind, r, |_| true) {
+            Some((e, _)) => e.props.get(prop).copied().unwrap_or(default),
+            None => default,
         }
     }
 

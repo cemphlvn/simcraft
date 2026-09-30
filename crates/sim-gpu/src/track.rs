@@ -1445,6 +1445,8 @@ pub struct TrackPlay {
     pub theme: usize,
     /// Show that a replay is playing (red edges, a dot): in a window yes; in a recording of a run, no.
     pub replay_marks: bool,
+    /// The tick the buttons' lit state was last asked at.
+    pub lit_at: Option<u64>,
 }
 
 /// What a key means right now (the window acts on it; kept here so it is tested).
@@ -1508,6 +1510,7 @@ impl TrackPlay {
             base: Track::clone(&base),
             theme: 0,
             replay_marks: true,
+            lit_at: None,
         }
     }
 
@@ -1676,8 +1679,14 @@ impl TrackPlay {
 
     /// The frame for a `w × h` target; `dt` since the last one.
     pub fn frame(&mut self, w: f32, h: f32, dt: f32) -> Frame {
-        for i in 0..self.track.buttons.len() {
-            self.buttons[i].enabled = self.allowed(i).is_ok();
+        // Whether a button is lit asks the game (its action's `when`, the entity's senses): only for buttons that
+        // are drawn, and only once a tick (the answer changes when the world does, not when a frame is drawn).
+        let tick = self.world().tick;
+        if self.lit_at != Some(tick) {
+            self.lit_at = Some(tick);
+            for i in 0..self.track.buttons.len() {
+                self.buttons[i].enabled = !self.track.buttons[i].hidden && self.allowed(i).is_ok();
+            }
         }
         let composer = TrackComposer { track: &self.track, game: self.engine.rules(), sizes: &self.sizes, w, h };
         let mut f = composer.compose(self.engine.world(), Some(&self.tween), &mut self.rig, self.time, dt);
@@ -1770,6 +1779,11 @@ pub struct TrackFeel {
     pub entities: f32,
     /// Frames measured: the run may end before all were played (a wreck); frames after the end are not counted.
     pub frames: u32,
+    /// Spikes (what a player feels as a hitch): the worst and the 99th-percentile frame (ticks + composing, ms),
+    /// and how many frames went over 8 ms (half a 60 Hz frame, leaving the rest for the GPU).
+    pub worst_ms: f32,
+    pub p99_ms: f32,
+    pub over_8ms: u32,
 }
 
 /// Plays `frames` frames at `fps` (ticking at the game's rate, replaying `play.script` if set) and measures them.
@@ -1781,6 +1795,7 @@ pub fn feel_probe(play: &mut TrackPlay, frames: u32, fps: f32) -> TrackFeel {
     let mut steps: BTreeMap<EntityId, Vec<f32>> = BTreeMap::new();
     let (mut eye, mut rider): (Vec<(f32, f32, f32)>, Vec<f32>) = (Vec::new(), Vec::new());
     let mut played = 0u32;
+    let mut costs: Vec<f64> = Vec::new();
     for _ in 0..frames {
         if play.engine.outcome().is_some() {
             break;
@@ -1800,6 +1815,7 @@ pub fn feel_probe(play: &mut TrackPlay, frames: u32, fps: f32) -> TrackFeel {
         let t1 = std::time::Instant::now();
         let f = play.frame(450.0, 800.0, dt);
         frame_s += t1.elapsed().as_secs_f64();
+        costs.push(t0.elapsed().as_secs_f64() * 1000.0);
         ents += play.world().entities().len() as f64;
         eye.push((f.eye.pos.0, f.eye.pos.1, f.eye.pos.2));
         rider.push(play.rig.drawn_x.unwrap_or(0.0));
@@ -1845,6 +1861,13 @@ pub fn feel_probe(play: &mut TrackPlay, frames: u32, fps: f32) -> TrackFeel {
         frame_ms: r((frame_s * 1000.0 / played.max(1) as f64) as f32),
         entities: r((ents / played.max(1) as f64) as f32),
         frames: played,
+        worst_ms: r(costs.iter().cloned().fold(0.0, f64::max) as f32),
+        p99_ms: {
+            let mut c = costs.clone();
+            c.sort_by(f64::total_cmp);
+            r(c.get(c.len() * 99 / 100).copied().unwrap_or(0.0) as f32)
+        },
+        over_8ms: costs.iter().filter(|c| **c > 8.0).count() as u32,
     }
 }
 

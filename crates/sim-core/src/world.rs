@@ -620,6 +620,12 @@ impl World {
     /// Nearest `kind` passing `keep`. Sparse kind → scan members one by one; dense kind →
     /// search outward ring by ring. Both give the same result (smallest distance, then smallest id).
     pub fn nearest_where(&self, from: &Entity, kind: &str, keep: impl Fn(&Entity) -> bool) -> Option<(&Entity, i64)> {
+        self.nearest_within(from, kind, i64::MAX, keep)
+    }
+
+    /// Nearest `kind` passing `keep` at most `r` away (Chebyshev), or none: a bounded question searches only as far
+    /// as it asks (radius 0 looks at one cell), not the whole world first.
+    pub fn nearest_within(&self, from: &Entity, kind: &str, r: i64, keep: impl Fn(&Entity) -> bool) -> Option<(&Entity, i64)> {
         let members = self.by_kind.get(kind)?;
         if members.len() <= SPARSE {
             return members
@@ -628,9 +634,10 @@ impl World {
                 .map(|id| &self.entities[id])
                 .filter(|e| keep(e))
                 .map(|e| (e, (e.x - from.x).abs().max((e.y - from.y).abs()).max((e.z - from.z).abs())))
+                .filter(|(_, d)| *d <= r)
                 .min_by_key(|(e, d)| (*d, e.id));
         }
-        let max_d = self.width.max(self.height).max(self.depth);
+        let max_d = self.width.max(self.height).max(self.depth).min(r);
         for d in 0..=max_d {
             let best = self
                 .ring(from.x, from.y, from.z, d)
@@ -868,5 +875,31 @@ mod motion_tests {
         let car = w.spawn("car", "-", 1, 2, BTreeMap::new()).unwrap();
         assert!(w.leap(car, 1, 3, 0));
         assert_eq!((p(&w, car, "px"), p(&w, car, "py")), (2500, 5500));
+    }
+}
+
+#[cfg(test)]
+mod nearest_tests {
+    use super::*;
+
+    #[test]
+    fn a_bounded_search_finds_what_the_unbounded_one_finds_within_its_radius() {
+        let mut w = World::new(1, 7, 400);
+        let me = w.spawn("probe", "-", 3, 200, BTreeMap::new()).unwrap();
+        // Dense (ring search) and sparse (member scan) kinds.
+        for y in (0..400).step_by(3) {
+            w.spawn("dense", "-", (y % 7) as i64, y as i64, BTreeMap::new());
+        }
+        for y in [10, 150, 207, 390] {
+            w.spawn("sparse", "-", 2, y, BTreeMap::new());
+        }
+        let from = w.get(me).unwrap().clone();
+        for kind in ["dense", "sparse"] {
+            let all = w.nearest(&from, kind).map(|(e, d)| (e.id, d));
+            for r in [0, 1, 3, 7, 50, 500] {
+                let within = w.nearest_within(&from, kind, r, |_| true).map(|(e, d)| (e.id, d));
+                assert_eq!(within, all.filter(|(_, d)| *d <= r), "{kind} r={r}");
+            }
+        }
     }
 }
