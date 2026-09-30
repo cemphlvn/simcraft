@@ -328,7 +328,9 @@ track: (file: "tracks/charlotte.ron", origin: (680000, 60000), grid: (spacing: 9
   - `shift` +1 or -1 asks for a gear up or down when `manual` is 1 (otherwise the gearbox shifts itself);
   - `aids` 1 turns on traction control and ABS (the autopilot always drives with them);
   - `pilot` 1 hands the car to the engine's autopilot, which drives `line` mm left of the centreline at `pace` ‰
-    of its planned limit;
+    of its planned limit; `pilot` 2 is line steering for a player: the autopilot steers to `line` (the player moves
+    it), catches slides, and caps the player's pedals at what the car can hold (brake assist): target control,
+    the arcade mode;
   - `grid` N puts the car in grid slot N on its first tick.
 - **State (props the engine writes; a game may read them, never declare them):**
   - `px`, `py`, and `vx`, `vy` in mm per tick;

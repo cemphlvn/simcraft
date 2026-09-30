@@ -268,7 +268,19 @@ impl Pilot {
         // Still rolling the wrong way (just out of reverse, or pushed): stop first, then drive.
         let rolling_back = !backing && v < -Fx::HALF;
         let dist = (dx * dx + dy * dy).sqrt().max(Fx::ONE);
-        let pursue = p.wheelbase * alpha.sin() * 2 / dist;
+        // The arc's curvature, turned into a wheel angle by the steady-state inverse of the linear bicycle model:
+        // δ = κ·(L + K·v²), K the understeer gradient from each axle's cornering stiffness at its load right now
+        // (vehicle tests: `a_gentle_turn_obeys_the_linear_bicycle_model`). Geometry alone (δ = L·κ) left the car
+        // understeering 2.5 m wide at 75 m/s, onto the wall. Multiplied in an order that keeps Q16's digits.
+        let curve = alpha.sin() * 2 / dist;
+        let (cf, cr) = (p.cornering * fleet.load_front[i], p.cornering * fleet.load_rear[i]);
+        let gradient_v2 = if cf > Fx::ZERO && cr > Fx::ZERO {
+            let lean = p.cg_to_rear * cr - p.cg_to_front * cf;
+            (p.mass * v * v / p.wheelbase * lean / cf / cr).clamp(-p.wheelbase / 2, p.wheelbase * 4)
+        } else {
+            Fx::ZERO
+        };
+        let pursue = curve * (p.wheelbase + gradient_v2);
         // Stanley's cross-track term (Thrun et al. 2006): steer back toward the line in proportion to how far
         // off it the car is, gentler the faster it goes.
         let off = place.offset - plan.offset;
