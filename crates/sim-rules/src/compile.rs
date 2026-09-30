@@ -148,6 +148,12 @@ impl QueryCtx {
         self.world().map_or(sim_core::FAR, |w| w.gap(self.me, kind, dx, dir))
     }
 
+    /// Who the footprint gap is to (0 if nobody): read its speed with `prop_of`.
+    fn gap_id(&self, kind: &str, dx: i64, dir: i64) -> i64 {
+        self.counted();
+        self.world().map_or(0, |w| w.gap_to(self.me, kind, dx, dir).1 as i64)
+    }
+
     fn touching(&self, kind: &str) -> i64 {
         self.counted();
         self.world().map_or(0, |w| w.touching(self.me, kind))
@@ -226,6 +232,108 @@ impl QueryCtx {
 
 thread_local! {
     static CTX: RefCell<QueryCtx> = RefCell::new(QueryCtx::default());
+    /// What compiled expressions read on this thread right now (the native shadow of the interpreter's scope):
+    /// set where the scope gets `me`, `sense`, `it`, `roll`; none = compiled expressions are not used here.
+    static NENV: RefCell<Option<NEnv>> = const { RefCell::new(None) };
+}
+
+/// The native shadow of an evaluation scope. Pointers to entities and senses live exactly as long as the scope they
+/// shadow (set and restored around the same calls; see `NScope`).
+#[derive(Clone)]
+struct NEnv {
+    me: NonNull<Entity>,
+    it: Option<(NonNull<Entity>, i64)>,
+    sense: Vec<(String, crate::native::Val)>,
+    roll: Option<i64>,
+    tick: Option<i64>,
+    tick_rate: i64,
+}
+
+/// Restores the previous native shadow when dropped.
+struct NScope(Option<NEnv>);
+
+impl Drop for NScope {
+    fn drop(&mut self) {
+        NENV.with(|n| *n.borrow_mut() = self.0.take());
+    }
+}
+
+/// Makes compiled expressions see `env` until the guard drops.
+fn nscope(env: Option<NEnv>) -> NScope {
+    NScope(NENV.with(|n| std::mem::replace(&mut *n.borrow_mut(), env)))
+}
+
+/// Changes one part of the current shadow (if there is one) until the guard drops.
+fn nset(f: impl FnOnce(&mut NEnv)) -> NScope {
+    NScope(NENV.with(|n| {
+        let prev = n.borrow().clone();
+        if let Some(e) = n.borrow_mut().as_mut() {
+            f(e);
+        }
+        prev
+    }))
+}
+
+fn field(e: &Entity, f: &str) -> Option<i64> {
+    e.props.get(f).copied().or(match f {
+        "x" => Some(e.x),
+        "y" => Some(e.y),
+        "z" => Some(e.z),
+        "id" => Some(e.id as i64),
+        _ => None,
+    })
+}
+
+impl crate::native::Env for NEnv {
+    fn me(&self, f: &str) -> Option<i64> {
+        // SAFETY: set from a live `&Entity` for the duration of the scope it shadows (see `NEnv`).
+        field(unsafe { self.me.as_ref() }, f)
+    }
+    fn it(&self, f: &str) -> Option<i64> {
+        let (e, d) = self.it?;
+        // SAFETY: as `me`.
+        let e = unsafe { e.as_ref() };
+        if f == "dist" { Some(d) } else { field(e, f) }
+    }
+    fn arg(&self, _: &str) -> Option<i64> {
+        None
+    }
+    fn sense(&self, f: &str) -> Option<crate::native::Val> {
+        self.sense.iter().find(|(n, _)| n == f).map(|(_, v)| *v)
+    }
+    fn var(&self, f: &str) -> Option<i64> {
+        match f {
+            "roll" => self.roll,
+            "tick" => self.tick,
+            _ => None,
+        }
+    }
+    fn call(&self, f: crate::native::Func, args: &[crate::native::Arg]) -> Option<crate::native::Val> {
+        use crate::native::{Arg::S, Arg::V, Func as F, Val::B, Val::I};
+        CTX.with(|c| {
+            Some(match (f, args) {
+                (F::Ahead, [S(k)]) => I(c.borrow().gap(k, 0, 1)),
+                (F::Ahead, [S(k), V(I(dx))]) => I(c.borrow().gap(k, *dx, 1)),
+                (F::Behind, [S(k)]) => I(c.borrow().gap(k, 0, -1)),
+                (F::Behind, [S(k), V(I(dx))]) => I(c.borrow().gap(k, *dx, -1)),
+                (F::AheadId, [S(k)]) => I(c.borrow().gap_id(k, 0, 1)),
+                (F::AheadId, [S(k), V(I(dx))]) => I(c.borrow().gap_id(k, *dx, 1)),
+                (F::BehindId, [S(k)]) => I(c.borrow().gap_id(k, 0, -1)),
+                (F::BehindId, [S(k), V(I(dx))]) => I(c.borrow().gap_id(k, *dx, -1)),
+                (F::Touching, [S(k)]) => I(c.borrow().touching(k)),
+                (F::Under, [S(k)]) => I(c.borrow().under(k)),
+                (F::PropOf, [V(I(id)), S(p), V(I(d))]) => I(c.borrow().prop_of(*id, p, *d)),
+                (F::NearestProp, [S(k), S(p), V(I(r)), V(I(d))]) => I(c.borrow().nearest_prop(k, p, *r, *d)),
+                (F::Around, [S(k), V(I(r))]) => I(c.borrow().around(k, None, *r)),
+                (F::Around, [S(k), S(st), V(I(r))]) => I(c.borrow().around(k, Some(st), *r)),
+                (F::InState, [S(sel)]) => B(sim_state::in_label(&c.borrow().state, sel)),
+                (F::Rand, [V(I(n))]) => I(c.borrow_mut().rand(*n)),
+                (F::Pace, [V(I(n))]) => B(c.borrow().pace(*n, 1, self.tick_rate)),
+                (F::Pace, [V(I(n)), V(I(secs))]) => B(c.borrow().pace(*n, *secs, self.tick_rate)),
+                _ => return None,
+            })
+        })
+    }
 }
 
 /// A world lent to this thread's queries; the lifetime keeps the world alive and unchanged while it is bound.
@@ -252,7 +360,7 @@ pub struct Game {
     /// Rules first, then actions (`is_action`). Salts are assigned in this order.
     rules: Vec<CompiledRule>,
     ends: Vec<CompiledEnd>,
-    score: Option<AST>,
+    score: Option<Ex>,
     compile_errors: Vec<String>,
     /// None = single core.
     pool: Option<Pool>,
@@ -261,7 +369,7 @@ pub struct Game {
     /// Kind → chart (kinds that have a machine).
     kind_charts: Arc<BTreeMap<String, Arc<StateChart>>>,
     /// Condition/score expressions and action blocks of the charts.
-    exprs: Vec<AST>,
+    exprs: Vec<Ex>,
     /// `exprs[i]` checked natively, when it is a simple condition (see `native_guard`).
     expr_guards: Vec<Option<Vec<Term>>>,
     blocks: Vec<Vec<CDo>>,
@@ -270,9 +378,9 @@ pub struct Game {
     /// `perception: Senses`: kinds see external reality only through their senses.
     strict: bool,
     /// Fields pinned onto level 0 every tick: (field, world-level expression).
-    field_tops: Vec<(String, AST)>,
+    field_tops: Vec<(String, Ex)>,
     /// Kind → its senses (name, expression).
-    senses: BTreeMap<String, Vec<(String, AST)>>,
+    senses: BTreeMap<String, Vec<(String, Ex)>>,
     /// Kind → its brain (learning agents).
     brains: BTreeMap<String, Arc<Brain>>,
     /// Work done so far (see `work`).
@@ -310,11 +418,11 @@ struct CompiledRule {
     bind: BTreeMap<String, Vec<NodeId>>,
     target: Option<Target>,
     args: Vec<String>,
-    when: Option<AST>,
+    when: Option<Ex>,
     /// `when`, checked natively when it is simple (see `native_guard`).
     guard: Option<Vec<Term>>,
     then: Vec<CDo>,
-    script: Option<AST>,
+    script: Option<Ex>,
     /// Which per-entity names its expressions mention.
     sees: Sees,
 }
@@ -359,33 +467,33 @@ impl Sees {
 }
 
 enum CDo {
-    Set(String, AST),
-    Add(String, AST),
+    Set(String, Ex),
+    Add(String, Ex),
     Emit(String),
     Despawn(Target),
     Spawn(String),
-    SpawnAt(String, AST, AST),
+    SpawnAt(String, Ex, Ex),
     MoveToward(String),
     MoveAway(String),
     Climb(String, String),
     Wander,
     Goto(String),
-    Move(AST, AST),
-    Move3(AST, AST, AST),
-    MoveBy(AST, AST),
-    SetField(String, AST),
-    AddField(String, AST),
-    SetFieldAt(String, AST, AST, AST, AST),
+    Move(Ex, Ex),
+    Move3(Ex, Ex, Ex),
+    MoveBy(Ex, Ex),
+    SetField(String, Ex),
+    AddField(String, Ex),
+    SetFieldAt(String, Ex, Ex, Ex, Ex),
     ClimbField(String),
     On(Target, Vec<CDo>),
-    Need(String, AST),
+    Need(String, Ex),
     Interrupt(String),
     Back,
 }
 
 impl CDo {
     /// Number expressions to evaluate in this action (and nested `On` blocks).
-    fn int_exprs<'a>(&'a self, out: &mut Vec<&'a AST>) {
+    fn int_exprs<'a>(&'a self, out: &mut Vec<&'a Ex>) {
         match self {
             CDo::Set(_, a) | CDo::Add(_, a) | CDo::Need(_, a) => out.push(a),
             CDo::Move(dx, dy) => out.extend([dx, dy]),
@@ -400,7 +508,7 @@ impl CDo {
 }
 
 struct CompiledEnd {
-    when: AST,
+    when: Ex,
     result: String,
 }
 
@@ -410,18 +518,46 @@ struct Who<'a> {
     it: Option<&'a Entity>,
 }
 
+/// A rule expression: the interpreter's AST, and its native form when it is in the compiled subset
+/// (`crate::native`). Everything that reads an `Ex` as an `AST` still works (the interpreter path).
+struct Ex {
+    ast: AST,
+    native: Option<crate::native::Compiled>,
+    /// The source, for `SIMCRAFT_NATIVE_CHECK` reports.
+    src: String,
+}
+
+/// `SIMCRAFT_NATIVE_CHECK=1`: every compiled answer is also asked of the interpreter, and a difference stops the
+/// program with the expression and both answers (a debugging aid for the compiler, not for games).
+fn native_check() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SIMCRAFT_NATIVE_CHECK").is_some())
+}
+
+impl std::ops::Deref for Ex {
+    type Target = AST;
+    fn deref(&self) -> &AST {
+        &self.ast
+    }
+}
+
 /// Compiles source texts to AST, collecting errors (does not stop at the first).
 struct Compiler<'a> {
     rhai: &'a Rhai,
     errors: Vec<String>,
+    /// The game's params and tick rate: `p.*` and `tick_rate` are constants in compiled expressions.
+    params: BTreeMap<String, i64>,
+    tick_rate: i64,
 }
 
 impl Compiler<'_> {
-    fn expr(&mut self, src: &str, ctx: &str) -> AST {
-        self.rhai.compile_expression(src).unwrap_or_else(|e| {
+    fn expr(&mut self, src: &str, ctx: &str) -> Ex {
+        let ast = self.rhai.compile_expression(src).unwrap_or_else(|e| {
             self.errors.push(format!("{ctx}: `{src}`: {e}"));
             AST::empty()
-        })
+        });
+        let native = crate::native::compile(src, &self.params, self.tick_rate);
+        Ex { ast, native, src: src.to_string() }
     }
 
     fn doo(&mut self, d: &Do, ctx: &str) -> CDo {
@@ -456,10 +592,11 @@ impl Compiler<'_> {
     fn rule(&mut self, r: &RuleDef, salt: u64, is_action: bool, cfg: &EngineConfig) -> CompiledRule {
         let ctx = format!("{} '{}'", if is_action { "action" } else { "rule" }, r.name);
         let script = r.script.as_deref().map(|src| {
-            self.rhai.compile(src).unwrap_or_else(|e| {
+            let ast = self.rhai.compile(src).unwrap_or_else(|e| {
                 self.errors.push(format!("{ctx} script: {e}"));
                 AST::empty()
-            })
+            });
+            Ex { ast, native: crate::native::compile(src, &self.params, self.tick_rate), src: src.to_string() }
         });
         CompiledRule {
             checks: AtomicU64::new(0),
@@ -488,7 +625,7 @@ impl Compiler<'_> {
 /// Collected from machines: expressions, action blocks, rules written in states.
 #[derive(Default)]
 struct Machines {
-    exprs: Vec<AST>,
+    exprs: Vec<Ex>,
     expr_guards: Vec<Option<Vec<Term>>>,
     blocks: Vec<Vec<CDo>>,
     /// (machine, path within machine, rule)
@@ -863,6 +1000,10 @@ impl Game {
         rhai.register_fn("ahead", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap(kind, dx, 1)));
         rhai.register_fn("behind", |kind: &str| CTX.with(|c| c.borrow().gap(kind, 0, -1)));
         rhai.register_fn("behind", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap(kind, dx, -1)));
+        rhai.register_fn("ahead_id", |kind: &str| CTX.with(|c| c.borrow().gap_id(kind, 0, 1)));
+        rhai.register_fn("ahead_id", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap_id(kind, dx, 1)));
+        rhai.register_fn("behind_id", |kind: &str| CTX.with(|c| c.borrow().gap_id(kind, 0, -1)));
+        rhai.register_fn("behind_id", |kind: &str, dx: i64| CTX.with(|c| c.borrow().gap_id(kind, dx, -1)));
         rhai.register_fn("touching", |kind: &str| CTX.with(|c| c.borrow().touching(kind)));
         rhai.register_fn("under", |kind: &str| CTX.with(|c| c.borrow().under(kind)));
         rhai.register_fn("prop_of", |id: i64, prop: &str, default: i64| CTX.with(|c| c.borrow().prop_of(id, prop, default)));
@@ -887,7 +1028,9 @@ impl Game {
         #[cfg(not(feature = "parallel"))]
         let pool: Option<Pool> = None;
 
-        let mut cc = Compiler { rhai: &rhai, errors: Vec::new() };
+        let mut native_params = def.params.clone();
+        native_params.extend(cfg.params.iter().map(|(k, v)| (k.clone(), *v)));
+        let mut cc = Compiler { rhai: &rhai, errors: Vec::new(), params: native_params, tick_rate: cfg.run.tick_rate };
         let mut mach = Machines::default();
         let specs: BTreeMap<String, Spec<usize, usize>> =
             def.fsms.iter().map(|(name, f)| (name.clone(), cc.spec(&mut mach, name, "", f, true))).collect();
@@ -909,9 +1052,9 @@ impl Game {
             .map(|e| CompiledEnd { when: cc.expr(&e.when, &format!("end '{}'", e.result)), result: e.result.clone() })
             .collect();
         let score = def.score.as_deref().map(|s| cc.expr(s, "score"));
-        let field_tops: Vec<(String, AST)> =
+        let field_tops: Vec<(String, Ex)> =
             def.fields.iter().filter_map(|(n, f)| Some((n.clone(), cc.expr(f.top.as_ref()?, &format!("field '{n}' top"))))).collect();
-        let senses: BTreeMap<String, Vec<(String, AST)>> = def
+        let senses: BTreeMap<String, Vec<(String, Ex)>> = def
             .kinds
             .iter()
             .filter(|(_, k)| !k.senses.is_empty())
@@ -924,7 +1067,7 @@ impl Game {
         for (kind, k) in &def.kinds {
             if let Some(b) = &k.brain {
                 let inputs =
-                    b.inputs.iter().map(|(n, src)| (n.clone(), cc.expr(src, &format!("kind '{kind}' brain input '{n}'")))).collect();
+                    b.inputs.iter().map(|(n, src)| (n.clone(), cc.expr(src, &format!("kind '{kind}' brain input '{n}'")).ast)).collect();
                 brain_inputs.insert(kind.clone(), inputs);
             }
         }
@@ -1131,10 +1274,11 @@ impl Game {
             let Some(def) = self.def.kinds.get(kind) else {
                 continue; // validate reports it
             };
-            if def.solid || def.cling {
+            if def.solid || def.cling || def.motion.is_some() {
                 let placed = self.place_shuffled(&mut world, kind, *n);
                 if placed < *n {
                     let room = if def.cling { "voxels against terrain" } else { "free cells" };
+                    let room = if def.motion.is_some() { "cells free of other moving things" } else { room };
                     errs.push(format!("engine.toml [spawn]: {kind} = {n}, but only {placed} {room}"));
                 }
                 continue;
@@ -1174,7 +1318,10 @@ impl Game {
             }
             let (state, props) = self.template(kind);
             let (x, y, z) = (cell % world.width, (cell / world.width) % world.height, cell / (world.width * world.height));
-            if world.can_enter(kind, x, y, z) && world.spawn3(kind, &state, x, y, z, props).is_some() {
+            // A moving thing never starts inside another: one per cell among moving kinds.
+            let taken = world.motion(kind).is_some()
+                && world.at3(x, y, z).iter().any(|id| world.get(*id).is_some_and(|e| world.motion(&e.kind).is_some()));
+            if !taken && world.can_enter(kind, x, y, z) && world.spawn3(kind, &state, x, y, z, props).is_some() {
                 placed += 1;
             }
         }
@@ -1466,8 +1613,26 @@ impl Game {
             let len = full.len();
             self.push_entity(full, world, e);
             self.bind(e, SENSE_SALT);
+            let _n = nscope(Some(self.nenv(e, None, Some(world.tick as i64))));
             for (name, ast) in senses {
                 bump(&self.work.evals);
+                let native = ast.native.as_ref().and_then(|n| {
+                    self.native(|env| {
+                        n.run_val(env).map(|v| match v {
+                            crate::native::Val::I(i) => Dynamic::from(i),
+                            crate::native::Val::B(b) => Dynamic::from(b),
+                        })
+                    })
+                });
+                if let Some(v) = native {
+                    if native_check() {
+                        CTX.with(|c| c.borrow_mut().calls = 0);
+                        let r = self.rhai.eval_ast_with_scope::<Dynamic>(full, ast).map(|d| format!("{d:?}")).map_err(|e| e.to_string());
+                        assert_eq!(r, Ok(format!("{v:?}")), "native check: sense `{}`", ast.src);
+                    }
+                    out.insert(name.as_str().into(), v);
+                    continue;
+                }
                 match self.rhai.eval_ast_with_scope::<Dynamic>(full, ast) {
                     Ok(v) => {
                         out.insert(name.as_str().into(), v);
@@ -1498,7 +1663,10 @@ impl Game {
         let values = b
             .inputs
             .iter()
-            .map(|(n, ast)| self.eval_int(&mut scope, ast).map_err(|m| format!("input '{n}': {m}")))
+            .map(|(n, ast)| {
+                bump(&self.work.evals);
+                self.eval_int_ast(&mut scope, ast).map_err(|m| format!("input '{n}': {m}"))
+            })
             .collect::<Result<Vec<i64>, String>>()?;
         let fresh;
         let genome = if e.genome.len() == b.genes {
@@ -1624,11 +1792,13 @@ impl Game {
             let scope = &mut scopes.full;
             let len = scope.len();
             self.push_seen(scope, world, e, plan.sees);
+            let _n = nscope(Some(self.nenv(e, None, Some(world.tick as i64))));
             let out = self.eval_entity_in(world, e, scope);
             scope.rewind(len);
             return out;
         }
         let (sense, errs) = self.sense_map(&mut scopes.full, world, e);
+        let _n = nscope(Some(self.nenv(e, Some(&sense), None)));
         let scope = &mut scopes.agent;
         let len = scope.len();
         self.push_seen(scope, world, e, plan.sees);
@@ -1745,7 +1915,9 @@ impl Game {
             return Ok(());
         }
         let len = scope.len();
-        scope.push_constant("roll", world.roll(who.me.id, salt));
+        let roll = world.roll(who.me.id, salt);
+        let _roll = nset(|n| n.roll = Some(roll));
+        scope.push_constant("roll", roll);
         self.bind(who.me, salt);
         let mut res = Ok(());
         'blocks: for &b in blocks {
@@ -1800,14 +1972,69 @@ impl Game {
         Ok(())
     }
 
-    fn eval_bool(&self, scope: &mut Scope, ast: &AST) -> Result<bool, String> {
+    fn eval_bool(&self, scope: &mut Scope, ex: &Ex) -> Result<bool, String> {
         bump(&self.work.evals);
-        self.rhai.eval_ast_with_scope::<bool>(scope, ast).map_err(|e| e.to_string())
+        let before = CTX.with(|c| c.borrow().calls);
+        if let Some(v) = ex.native.as_ref().and_then(|n| self.native(|env| n.bool(env))) {
+            if native_check() {
+                CTX.with(|c| c.borrow_mut().calls = before);
+                let r = self.rhai.eval_ast_with_scope::<bool>(scope, ex).map_err(|e| e.to_string());
+                assert_eq!(r, Ok(v), "native check: `{}`", ex.src);
+            }
+            return Ok(v);
+        }
+        self.rhai.eval_ast_with_scope::<bool>(scope, ex).map_err(|e| e.to_string())
     }
 
-    fn eval_int(&self, scope: &mut Scope, ast: &AST) -> Result<i64, String> {
+    fn eval_int(&self, scope: &mut Scope, ex: &Ex) -> Result<i64, String> {
         bump(&self.work.evals);
+        let before = CTX.with(|c| c.borrow().calls);
+        if let Some(v) = ex.native.as_ref().and_then(|n| self.native(|env| n.int(env))) {
+            if native_check() {
+                CTX.with(|c| c.borrow_mut().calls = before);
+                assert_eq!(self.eval_int_ast(scope, ex), Ok(v), "native check: `{}`", ex.src);
+            }
+            return Ok(v);
+        }
+        self.eval_int_ast(scope, ex)
+    }
+
+    fn eval_int_ast(&self, scope: &mut Scope, ast: &AST) -> Result<i64, String> {
         self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string())
+    }
+
+    /// A compiled expression's value, if the fast paths are on, this thread has a native shadow of the scope, and
+    /// the expression gets through without a surprise. On a `Fallback` the hidden `rand` counter is put back, so
+    /// the interpreter that answers instead sees exactly the calls it would have seen.
+    fn native<T>(&self, f: impl FnOnce(&NEnv) -> Result<T, crate::native::Fallback>) -> Option<T> {
+        if !self.fast.load(Ordering::Relaxed) {
+            return None;
+        }
+        NENV.with(|n| {
+            let b = n.borrow();
+            let env = b.as_ref()?;
+            let calls = CTX.with(|c| c.borrow().calls);
+            match f(env) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    CTX.with(|c| c.borrow_mut().calls = calls);
+                    None
+                }
+            }
+        })
+    }
+
+    /// The native shadow of an entity's scope: `me`, its senses (numbers and booleans), and `tick` if it sees it.
+    fn nenv(&self, e: &Entity, sense: Option<&Map>, tick: Option<i64>) -> NEnv {
+        let sense = sense
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| {
+                let v = if let Ok(i) = v.as_int() { crate::native::Val::I(i) } else { crate::native::Val::B(v.as_bool().ok()?) };
+                Some((k.to_string(), v))
+            })
+            .collect();
+        NEnv { me: NonNull::from(e), it: None, sense, roll: None, tick, tick_rate: self.cfg.run.tick_rate }
     }
 
     /// No copy: per-rule variables are pushed, then the scope is rewound.
@@ -1825,9 +2052,12 @@ impl Game {
         if native == Some(false) {
             return Ok(None);
         }
-        scope.push_constant("roll", world.roll(e.id, rule.salt));
+        let roll = world.roll(e.id, rule.salt);
+        scope.push_constant("roll", roll);
+        let _roll = nset(|n| n.roll = Some(roll));
         self.bind(e, rule.salt);
 
+        let mut _it = None;
         let it = match &rule.target {
             None => None,
             Some(t @ (Target::Nearest(_) | Target::NearestIn(..))) => {
@@ -1835,6 +2065,7 @@ impl Game {
                 let Some((t, d)) = nearest(world, e, t) else { return Ok(None) };
                 bump(&self.work.maps);
                 scope.push_constant("it", entity_map(t, Some(d)));
+                _it = Some(nset(|n| n.it = Some((NonNull::from(t), d))));
                 Some(t)
             }
             Some(t) => return Err(format!("target must be Nearest(kind) or NearestIn(kind, state), got {t:?}")),
@@ -1857,9 +2088,32 @@ impl Game {
 
         if let Some(script) = &rule.script {
             bump(&self.work.evals);
-            let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
-            for item in out {
-                effects.push(effect_from_map(e, item)?);
+            let before = CTX.with(|c| c.borrow().calls);
+            if let Some(list) = script.native.as_ref().and_then(|n| self.native(|env| n.effects(env))) {
+                if native_check() {
+                    CTX.with(|c| c.borrow_mut().calls = before);
+                    let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
+                    let rhai: Vec<Effect> = out.into_iter().map(|i| effect_from_map(e, i)).collect::<Result<_, _>>()?;
+                    let mine: Vec<Effect> = list
+                        .iter()
+                        .map(|(add, prop, v)| {
+                            if *add {
+                                Effect::Add { e: e.id, prop: prop.clone(), d: *v }
+                            } else {
+                                Effect::Set { e: e.id, prop: prop.clone(), v: *v }
+                            }
+                        })
+                        .collect();
+                    assert_eq!(format!("{rhai:?}"), format!("{mine:?}"), "native check: script `{}`", script.src);
+                }
+                for (add, prop, v) in list {
+                    effects.push(if add { Effect::Add { e: e.id, prop, d: v } } else { Effect::Set { e: e.id, prop, v } });
+                }
+            } else {
+                let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
+                for item in out {
+                    effects.push(effect_from_map(e, item)?);
+                }
             }
         }
 
@@ -2554,7 +2808,9 @@ impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
             return Ok(v);
         }
         let len = self.scope.len();
-        self.scope.push_constant("roll", self.world.roll(self.e.id, FSM_SALT + salt));
+        let roll = self.world.roll(self.e.id, FSM_SALT + salt);
+        let _roll = nset(|n| n.roll = Some(roll));
+        self.scope.push_constant("roll", roll);
         self.game.bind(self.e, FSM_SALT + salt);
         let r = self.game.eval_bool(self.scope, &self.game.exprs[*g]);
         self.scope.rewind(len);
@@ -2562,7 +2818,9 @@ impl Oracle<usize> for RhaiOracle<'_, '_, '_> {
     }
     fn score(&mut self, g: &usize, salt: u64) -> Result<i64, String> {
         let len = self.scope.len();
-        self.scope.push_constant("roll", self.world.roll(self.e.id, FSM_SALT + salt));
+        let roll = self.world.roll(self.e.id, FSM_SALT + salt);
+        let _roll = nset(|n| n.roll = Some(roll));
+        self.scope.push_constant("roll", roll);
         self.game.bind(self.e, FSM_SALT + salt);
         let r = self.game.eval_int(self.scope, &self.game.exprs[*g]);
         self.scope.rewind(len);

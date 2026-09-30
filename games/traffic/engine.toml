@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────
+#  STEAM ENGINE — operator panel (traffic)
+#  A four-lane road 1600 car lengths long; `car` is how many drive on it (the stress knob: PERF.md).
+# ─────────────────────────────────────────────────────────────
+
+[run]
+seed = 1
+max_ticks = 3600
+tick_rate = 60
+
+[world]
+width = 4
+height = 1600
+
+[spawn]
+car = 400

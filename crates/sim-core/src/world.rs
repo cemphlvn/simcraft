@@ -91,6 +91,21 @@ pub struct World {
     cling: BTreeSet<String>,
     /// Kinds that move continuously (fine positions, velocities), integrated every tick.
     motion: BTreeMap<String, Motion>,
+    /// The broadphase for moving kinds (derived, not hashed): per kind and column, (py, id) sorted along the road.
+    /// Built after a tick's motion; any change to the world drops it, and queries scan until it is built again.
+    index: Option<MotionIndex>,
+}
+
+/// Sweep and prune along one axis: for each moving kind, its entities by column (the cell their centre is in, across)
+/// sorted by position along the road. Footprint queries look at a few columns and walk outward from a binary search,
+/// instead of every entity of the kind.
+/// One mover in a column of the index: (py, id, px).
+type Slot = (i64, EntityId, i64);
+
+#[derive(Clone, Debug, Default)]
+struct MotionIndex {
+    /// kind → column → (py, id, px), sorted: positions are kept here too, so a query never looks them up by name.
+    cols: BTreeMap<String, BTreeMap<i64, Vec<Slot>>>,
 }
 
 impl World {
@@ -115,6 +130,7 @@ impl World {
             terrain: None,
             cling: BTreeSet::new(),
             motion: BTreeMap::new(),
+            index: None,
         }
     }
 
@@ -306,6 +322,7 @@ impl World {
 
     /// Nothing spawns inside terrain; a solid kind cannot spawn into an occupied voxel → None.
     pub fn spawn3(&mut self, kind: &str, state: &str, x: i64, y: i64, z: i64, props: BTreeMap<String, i64>) -> Option<EntityId> {
+        self.index = None;
         let (x, y, z) = self.clamp3(x, y, z);
         if self.is_terrain(x, y, z) || (self.solid.contains(kind) && self.blocked3(x, y, z)) {
             return None;
@@ -330,6 +347,7 @@ impl World {
     }
 
     pub fn despawn(&mut self, id: EntityId) -> Option<Entity> {
+        self.index = None;
         let e = self.entities.remove(&id)?;
         let c = self.cell(e.x, e.y, e.z);
         self.grid[c].retain(|&i| i != id);
@@ -369,6 +387,7 @@ impl World {
     /// Moves an entity to a voxel (the grid follows). `shift_fine`: a moving kind's fine position moves by the
     /// same whole cells (a discrete move); off when the fine position is what moved.
     fn relocate(&mut self, id: EntityId, x: i64, y: i64, z: i64, shift_fine: bool) {
+        self.index = None;
         let Some(e) = self.entities.get(&id) else { return };
         let (ox, oy) = (e.x, e.y);
         let from = self.cell(e.x, e.y, e.z);
@@ -408,6 +427,7 @@ impl World {
         if self.motion.is_empty() {
             return;
         }
+        self.index = None;
         let ids: Vec<EntityId> =
             self.motion.keys().filter_map(|k| self.by_kind.get(k)).flatten().copied().collect::<BTreeSet<_>>().into_iter().collect();
         let mut moved: BTreeMap<EntityId, (i64, i64)> = BTreeMap::new();
@@ -464,6 +484,41 @@ impl World {
         (nx - px, ny - py)
     }
 
+    /// Builds the broadphase for moving kinds (the engine does it after each tick's motion and physics). Queries give
+    /// the same answers with or without it; with it they cost a few columns and a binary search instead of a scan.
+    pub fn index_motion(&mut self) {
+        if self.motion.is_empty() {
+            return;
+        }
+        let mut idx = MotionIndex::default();
+        for kind in self.motion.keys() {
+            let cols = idx.cols.entry(kind.clone()).or_default();
+            for id in self.by_kind.get(kind).into_iter().flatten() {
+                let p = &self.entities[id].props;
+                let (Some(px), Some(py)) = (p.get("px"), p.get("py")) else { continue };
+                cols.entry(px.div_euclid(FINE)).or_default().push((*py, *id, *px));
+            }
+            for v in cols.values_mut() {
+                v.sort_unstable();
+            }
+        }
+        self.index = Some(idx);
+    }
+
+    /// Drops the broadphase: queries scan every entity (the reference the index must agree with).
+    pub fn unindex_motion(&mut self) {
+        self.index = None;
+    }
+
+    /// The indexed entities of `kind` in the columns that can reach across [lo, hi] (fine units), as sorted
+    /// (py, id) lists; `None` if there is no index (then callers scan).
+    fn columns(&self, kind: &str, lo: i64, hi: i64) -> Option<Vec<&[Slot]>> {
+        let cols = self.index.as_ref()?.cols.get(kind)?;
+        let hw = self.motion.get(kind).map_or(0, |m| m.size.0 / 2);
+        let (c0, c1) = ((lo - hw).div_euclid(FINE), (hi + hw).div_euclid(FINE));
+        Some(cols.range(c0..=c1).map(|(_, v)| v.as_slice()).collect())
+    }
+
     /// A moving entity's footprint: (left, right, back, front) in fine units, and the way it faces (+1 or -1).
     fn footprint(&self, e: &Entity) -> Option<([i64; 4], i64)> {
         let m = self.motion.get(&e.kind)?;
@@ -475,10 +530,52 @@ impl World {
     /// Gap along the road from `me` to the nearest moving `kind` in front (`dir` +1) or behind (-1) of it, relative to
     /// the way it faces, whose extent across overlaps its own shifted by `dx`. FAR if none; negative if they overlap.
     pub fn gap(&self, me: EntityId, kind: &str, dx: i64, dir: i64) -> i64 {
-        let Some(e) = self.entities.get(&me) else { return FAR };
-        let Some(([l, r, b, f], facing)) = self.footprint(e) else { return FAR };
+        self.gap_to(me, kind, dx, dir).0
+    }
+
+    /// `gap` and who it is to (0 if nobody): the gap, then the lowest id among equals.
+    pub fn gap_to(&self, me: EntityId, kind: &str, dx: i64, dir: i64) -> (i64, EntityId) {
+        let Some(e) = self.entities.get(&me) else { return (FAR, 0) };
+        let Some(([l, r, b, f], facing)) = self.footprint(e) else { return (FAR, 0) };
         let way = facing * dir;
-        let mut best = FAR;
+        let (mut best, mut who) = (FAR, 0);
+        if let Some(mut cols) = self.columns(kind, l + dx, r + dx) {
+            // Every entity of a kind has the same footprint, so along a column the nearest centre ahead has the
+            // nearest back edge. Walk each column outward from my centre: skip what does not overlap across, and
+            // stop as soon as nothing further out can beat the best so far (a fixed-radius search that shrinks).
+            // The column under the middle of the question goes first: it usually holds the answer.
+            let Some(m) = self.motion.get(kind) else { return (FAR, 0) };
+            let (hw, hl) = (m.size.0 / 2, m.size.1 / 2);
+            let (lo, hi, my) = (l + dx, r + dx, (b + f) / 2);
+            let mid = (lo + hi) / 2;
+            cols.sort_by_key(|c| c.first().map_or(i64::MAX, |(_, _, px)| (px.div_euclid(FINE) * FINE + FINE / 2 - mid).abs()));
+            for col in cols {
+                if way > 0 {
+                    let start = col.partition_point(|(py, _, _)| *py <= my);
+                    for &(py, id, px) in &col[start..] {
+                        let g = py - hl - f;
+                        if g > best {
+                            break;
+                        }
+                        if id != me && px + hw > lo && px - hw < hi && (g < best || id < who) {
+                            (best, who) = (g, id);
+                        }
+                    }
+                } else {
+                    let end = col.partition_point(|(py, _, _)| *py < my);
+                    for &(py, id, px) in col[..end].iter().rev() {
+                        let g = b - (py + hl);
+                        if g > best {
+                            break;
+                        }
+                        if id != me && px + hw > lo && px - hw < hi && (g < best || id < who) {
+                            (best, who) = (g, id);
+                        }
+                    }
+                }
+            }
+            return (best, who);
+        }
         for id in self.by_kind.get(kind).into_iter().flatten() {
             if *id == me {
                 continue;
@@ -491,10 +588,10 @@ impl World {
             // Ahead means its middle is ahead of mine.
             let ahead = if way > 0 { ob + of > b + f } else { ob + of < b + f };
             if ahead && g < best {
-                best = g;
+                (best, who) = (g, *id);
             }
         }
-        best
+        (best, who)
     }
 
     /// How many moving `kind` footprints overlap `me`'s.
@@ -504,6 +601,17 @@ impl World {
         let over = |id: &EntityId| {
             *id != me && self.footprint(&self.entities[id]).is_some_and(|([ol, or, ob, of], _)| or > l && ol < r && of > b && ob < f)
         };
+        if let Some(cols) = self.columns(kind, l, r) {
+            let hl = self.motion.get(kind).map_or(0, |m| m.size.1 / 2);
+            let (lo, hi) = (b - hl, f + hl);
+            return cols
+                .iter()
+                .map(|col| {
+                    let start = col.partition_point(|(py, _, _)| *py <= lo);
+                    col[start..].iter().take_while(|(py, _, _)| *py < hi).filter(|(_, id, _)| over(id)).count() as i64
+                })
+                .sum();
+        }
         self.by_kind.get(kind).into_iter().flatten().filter(|id| over(id)).count() as i64
     }
 
@@ -511,17 +619,26 @@ impl World {
     pub fn under(&self, me: EntityId, kind: &str) -> i64 {
         let Some(e) = self.entities.get(&me) else { return 0 };
         let (Some(px), Some(py)) = (e.props.get("px").copied(), e.props.get("py").copied()) else { return 0 };
-        self.by_kind
-            .get(kind)
-            .into_iter()
-            .flatten()
-            .find(|id| {
-                **id != me && self.footprint(&self.entities[id]).is_some_and(|([l, r, b, f], _)| px >= l && px < r && py >= b && py < f)
-            })
-            .map_or(0, |id| *id as i64)
+        let holds = |id: &EntityId| {
+            *id != me && self.footprint(&self.entities[id]).is_some_and(|([l, r, b, f], _)| px >= l && px < r && py >= b && py < f)
+        };
+        if let Some(cols) = self.columns(kind, px, px) {
+            let hl = self.motion.get(kind).map_or(0, |m| m.size.1 / 2);
+            return cols
+                .iter()
+                .flat_map(|col| {
+                    let start = col.partition_point(|(y, _, _)| *y < py - hl);
+                    col[start..].iter().take_while(move |(y, _, _)| *y <= py + hl).map(|(_, id, _)| *id)
+                })
+                .filter(holds)
+                .min()
+                .map_or(0, |id| id as i64);
+        }
+        self.by_kind.get(kind).into_iter().flatten().find(|id| holds(id)).map_or(0, |id| *id as i64)
     }
 
     pub fn props_mut(&mut self, id: EntityId) -> Option<&mut BTreeMap<String, i64>> {
+        self.index = None;
         self.entities.get_mut(&id).map(|e| &mut e.props)
     }
 
@@ -900,6 +1017,66 @@ mod nearest_tests {
                 let within = w.nearest_within(&from, kind, r, |_| true).map(|(e, d)| (e.id, d));
                 assert_eq!(within, all.filter(|(_, d)| *d <= r), "{kind} r={r}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    /// Random roads: cars (and riders) in random lanes and places, some driving the other way. Every footprint
+    /// question gets the same answer from the broadphase as from scanning every entity.
+    #[test]
+    fn the_broadphase_answers_exactly_what_a_scan_answers() {
+        let mut rng = 0x1234_5678_u64;
+        let mut next = |n: i64| {
+            rng = splitmix64(rng);
+            (rng % n as u64) as i64
+        };
+        for round in 0..40 {
+            let mut w = World::new(round, 5, 300);
+            let car = Motion { size: (600, 900), gravity: 0 };
+            let rider = Motion { size: (300, 400), gravity: 7 };
+            w.set_motion([("car".to_string(), car), ("rider".to_string(), rider)].into_iter().collect());
+            let n = 20 + next(200);
+            let mut ids = Vec::new();
+            for _ in 0..n {
+                let kind = if next(8) == 0 { "rider" } else { "car" };
+                let id = w.spawn(kind, "-", next(5), next(300), BTreeMap::new()).unwrap();
+                let p = w.props_mut(id).unwrap();
+                p.insert("px".into(), next(5000));
+                p.insert("py".into(), next(300_000));
+                p.insert("vy".into(), next(3) - 1);
+                ids.push(id);
+            }
+            // The cells follow the fine positions (as after a tick).
+            w.integrate_motion();
+            let mut asked = Vec::new();
+            for &me in &ids {
+                for kind in ["car", "rider"] {
+                    for dx in [-1000, 0, 1000] {
+                        for dir in [1, -1] {
+                            asked.push(format!("{:?}", w.gap_to(me, kind, dx, dir)));
+                        }
+                    }
+                    asked.push(format!("{} {}", w.touching(me, kind), w.under(me, kind)));
+                }
+            }
+            w.index_motion();
+            let mut indexed = Vec::new();
+            for &me in &ids {
+                for kind in ["car", "rider"] {
+                    for dx in [-1000, 0, 1000] {
+                        for dir in [1, -1] {
+                            indexed.push(format!("{:?}", w.gap_to(me, kind, dx, dir)));
+                        }
+                    }
+                    indexed.push(format!("{} {}", w.touching(me, kind), w.under(me, kind)));
+                }
+            }
+            assert!(w.index.is_some(), "the index was used");
+            assert_eq!(asked, indexed, "round {round}: the broadphase disagrees with the scan");
         }
     }
 }

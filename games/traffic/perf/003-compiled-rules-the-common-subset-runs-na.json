@@ -1,0 +1,28 @@
+{
+ "step": "compiled rules: the common subset runs natively (closure compilation)",
+ "kind": "car",
+ "ticks": 300,
+ "rows": [
+  {
+   "n": 100,
+   "alive": 100,
+   "ms_per_tick": 0.449,
+   "cpu_ms_per_tick": 1.619,
+   "hash": "7c47e58fbffd4c4b"
+  },
+  {
+   "n": 400,
+   "alive": 400,
+   "ms_per_tick": 1.072,
+   "cpu_ms_per_tick": 4.922,
+   "hash": "4506d485640c946a"
+  },
+  {
+   "n": 1600,
+   "alive": 1600,
+   "ms_per_tick": 4.974,
+   "cpu_ms_per_tick": 18.324,
+   "hash": "31206a7d144d07f3"
+  }
+ ]
+}

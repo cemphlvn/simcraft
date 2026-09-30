@@ -1,0 +1,28 @@
+{
+ "step": "the column walk stops when nothing further can be nearer; positions kept in the index",
+ "kind": "car",
+ "ticks": 300,
+ "rows": [
+  {
+   "n": 100,
+   "alive": 100,
+   "ms_per_tick": 0.515,
+   "cpu_ms_per_tick": 1.972,
+   "hash": "7c47e58fbffd4c4b"
+  },
+  {
+   "n": 400,
+   "alive": 400,
+   "ms_per_tick": 1.516,
+   "cpu_ms_per_tick": 9.764,
+   "hash": "4506d485640c946a"
+  },
+  {
+   "n": 1600,
+   "alive": 1600,
+   "ms_per_tick": 6.441,
+   "cpu_ms_per_tick": 40.562,
+   "hash": "31206a7d144d07f3"
+  }
+ ]
+}

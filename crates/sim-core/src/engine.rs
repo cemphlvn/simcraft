@@ -86,6 +86,7 @@ impl<R: Rules> Engine<Loaded, R> {
 impl<R: Rules> Engine<Validated, R> {
     pub fn start(self) -> Engine<Running, R> {
         let mut e: Engine<Running, R> = self.into_state();
+        e.world.index_motion();
         e.outcome = e.rules.outcome(&e.world);
         e
     }
@@ -113,6 +114,7 @@ impl<R: Rules> Engine<Running, R> {
         let world = World::from_snapshot(s.world).map_err(|e| vec![e])?;
         self.rules.check_world(&world)?;
         self.world = world;
+        self.world.index_motion();
         self.pending = s.pending;
         self.outcome = s.outcome;
         if !self.bus.is_empty() {
@@ -138,6 +140,7 @@ impl<R: Rules> Engine<Running, R> {
         let events = apply(&mut self.world, groups); // 2) write
         self.world.integrate_motion(); // 3) continuous motion (kinds with `motion`)
         self.rules.physics(&mut self.world); // 4) the world's own physics
+        self.world.index_motion(); // 5) the broadphase for the next tick's questions (derived, not hashed)
         self.world.tick += 1;
         self.outcome = self.rules.outcome(&self.world);
         let (tick, hash) = (self.world.tick, self.world.hash());

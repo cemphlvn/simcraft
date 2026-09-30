@@ -1,0 +1,16 @@
+---
+source: test/tests/all/work.rs
+assertion_line: 75
+expression: profile(&dir)
+---
+ticks 60, entities per tick 400.0
+per tick:        evals    2016.8  queries   2066.3  maps    400.0
+per entity-tick: evals      5.04  queries     5.17  maps     1.00
+hottest rules (checks per tick, % that fired):
+  born                         400.0    1.7%
+  count_down                   400.0   23.5%
+  crash                        400.0    0.0%
+  drive                        400.0   98.3%
+  wrap                         400.0    0.0%
+  want_left                    306.0    0.4%
+checked but never fired: crash

@@ -1,0 +1,28 @@
+{
+ "step": "baseline: every footprint query scans every car",
+ "kind": "car",
+ "ticks": 300,
+ "rows": [
+  {
+   "n": 100,
+   "alive": 100,
+   "ms_per_tick": 1.474,
+   "cpu_ms_per_tick": 5.565,
+   "hash": "7c47e58fbffd4c4b"
+  },
+  {
+   "n": 400,
+   "alive": 400,
+   "ms_per_tick": 12.643,
+   "cpu_ms_per_tick": 70.812,
+   "hash": "4506d485640c946a"
+  },
+  {
+   "n": 1600,
+   "alive": 1600,
+   "ms_per_tick": 257.233,
+   "cpu_ms_per_tick": 1850.925,
+   "hash": "31206a7d144d07f3"
+  }
+ ]
+}

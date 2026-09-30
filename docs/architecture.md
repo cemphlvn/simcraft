@@ -111,6 +111,13 @@ Everything that happens is published once, in order, on `Engine::bus()`: `start`
 | `On(Me \| It \| Nearest(kind), [...])` | Applies the nested actions to that entity instead of the owner |
 | `Need(prop, min)` | Guard: `prop >= min` on the subject. Checked at request/eval time and again at apply time against the live state; if it fails the whole group is dropped (`short`). Prevents double spending under simultaneous moves |
 
+**Compiled rules** (`sim_rules::native`): at load, every expression and script is also parsed into a native form
+when it is in the common subset (integer arithmetic, comparisons, `&& || !`, `if`, blocks with `let`, `me.* it.*
+sense.* p.*`, `roll`, `tick`, the engine functions, and script lists of `set`/`add` effect maps). Those run without
+the interpreter; anything else, and anything unexpected at run time (overflow, a missing prop), is answered by Rhai.
+Same order of evaluation and calls (so `rand` sees the same dice); `fast_paths_change_nothing` compares every game
+both ways, `SIMCRAFT_NATIVE_CHECK=1` checks every compiled answer against the interpreter.
+
 **B. Rhai script (escape hatch):** the `script:` field returns an array of effect maps:
 `#{op: "set"|"add", prop, value}`, `#{op: "emit", name}`, `#{op: "move", dx, dy}`, `#{op: "despawn"}`.
 
@@ -290,6 +297,10 @@ weighed: `docs/research/continuous-time.md`. Kinds without `motion` are untouche
 
 - **`SpawnAt(kind, dx, dy)`** spawns `kind` at my cell offset by (`dx`, `dy`) cells (expressions): traffic
   made ahead of and behind a player instead of a whole road laid out at the start.
+- **Broadphase:** footprint queries use a sweep-and-prune index (per kind and column, sorted along the road), built
+  after each tick's motion; any change drops it and queries scan until it is rebuilt. Same answers either way
+  (`the_broadphase_answers_exactly_what_a_scan_answers`). `ahead_id(kind [, dx])` / `behind_id` give who is there.
+  At the start, moving kinds from `[spawn]` take one cell each.
 - **Checked:** a moving kind cannot be `solid` or `cling` (it moves by velocity, not by steps), and its game
   cannot declare the engine-owned props itself.
 

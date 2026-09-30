@@ -1,0 +1,98 @@
+#![enable(implicit_some)]
+// Experimental: traffic. A car-driving sandbox and the engine's stress test for moving things that ask about each
+// other (PERF.md). A four-lane highway; every car drives itself with the Intelligent Driver Model (Treiber, Hennecke
+// and Helbing, 2000): it speeds up toward its own desired speed and keeps a safe, speed-dependent distance to the
+// car ahead, braking harder the faster it closes in. A car stuck behind a slower one signals for a second and moves
+// over when the next lane has room ahead and behind (a light version of MOBIL, Kesting, Treiber and Helbing, 2007).
+// Nothing in these rules says "make a traffic jam"; the evals watch whether stop-and-go waves appear anyway.
+// Units: positions in fine units (1000 to a cell, a cell is a car length), speeds in fine units a tick (60 a
+// second), accelerations in thousandths of a fine unit a tick squared (IDM needs that resolution in integers).
+// The road is open at both ends: a car reaching the end comes back at the start of its lane (a seam, like a ring
+// road that cannot see across its join: the first disturbance on an empty road).
+Game(
+    name: "traffic",
+    perception: Senses,
+
+    kinds: {
+        "car": (glyph: 'c', fsm: "car", motion: (size: (600, 900)),
+                props: { "v0": -1, "vfrac": 0, "lane_to": -1, "timer": 0, "slow": 0 }),
+    },
+
+    params: {
+        "lanes": 4, "length": 1600,
+        // IDM: desired speed (fine units a tick) and its spread between drivers, maximum acceleration and comfortable
+        // braking (thousandths), 2·sqrt(a·b) (thousandths), time headway (ticks: 1.2 s), minimum gap (fine units),
+        // and the hardest braking a car can do (thousandths).
+        "v0": 100, "v0_spread": 30, "a": 600, "b": 900, "two_sqrt_ab": 1470, "headway": 72, "s0": 500,
+        "brake_max": 6000,
+        // Changing lanes: a car this much slower than it wants to be, closer than `crowded` to the car ahead,
+        // looks for a lane with `room_ahead` and `room_behind` free; it signals for `signal_ticks` first.
+        "unhappy": 80, "crowded": 6000, "room_ahead": 5000, "room_behind": 3000, "signal_ticks": 60,
+        "steer_k": 10, "steer_acc": 4, "steer_max": 30,
+        // A car below this share (%) of its desired speed counts as stuck in a jam.
+        "jam": 30,
+    },
+
+    fsms: {
+        "car": (
+            initial: "Cruise",
+            states: { "Cruise": (), "Signal": (), "Changing": () },
+            transitions: [
+                // Still room when the blinker has blinked long enough: go; else give up.
+                (from: "Signal", to: "Changing",
+                 when: "me.timer == 0 && ahead(\"car\", (me.lane_to - me.x) * 1000) > p.room_ahead / 2 && behind(\"car\", (me.lane_to - me.x) * 1000) > p.room_behind / 2",
+                 then: [ Emit("changed_lane") ]),
+                (from: "Signal", to: "Cruise", when: "me.timer == 0", then: [ Set("lane_to", "me.x"), Emit("gave_up") ]),
+                (from: "Changing", to: "Cruise", when: "me.px == me.lane_to * 1000 + 500 && me.vx == 0"),
+            ],
+        ),
+    },
+
+    rules: [
+        // First tick: a driver of its own (desired speed), on its lane.
+        (name: "born", for: "car", when: "me.v0 < 0",
+         then: [ Set("v0", "p.v0 - p.v0_spread / 2 + rand(p.v0_spread + 1)"), Set("lane_to", "me.x"),
+                 Set("vy", "p.v0 / 2") ]),
+        // The Intelligent Driver Model, in integers.
+        (name: "drive", for: "car", when: "me.v0 > 0",
+         script: r#"
+            let v = me.vy;
+            let s = ahead("car");
+            let lead = ahead_id("car");
+            let dv = if lead > 0 { v - prop_of(lead, "vy", v) } else { 0 };
+            let r = v * 1000 / me.v0;
+            let free = r * r / 1000 * r / 1000 * r / 1000;
+            let inter = if lead == 0 {
+                0
+            } else {
+                let want = max(p.s0 + v * p.headway + v * dv * 1000 / p.two_sqrt_ab, p.s0);
+                let q = want * 1000 / max(s, 1);
+                min(q * q / 1000, 100000)
+            };
+            let acc = max(p.a * (1000 - free - inter) / 1000, -p.brake_max);
+            let total = max(v * 1000 + me.vfrac + acc, 0);
+            let slow = if total / 1000 * 100 < me.v0 * p.jam { 1 } else { 0 };
+            [ #{ op: "set", prop: "vy", value: total / 1000 }, #{ op: "set", prop: "vfrac", value: total % 1000 },
+              #{ op: "set", prop: "slow", value: slow } ]
+         "#),
+        (name: "count_down", for: "car", when: "me.timer > 0", then: [ Add("timer", "-1") ]),
+        // Stuck behind a slower car: signal toward a lane with room (left first, the overtaking lane).
+        (name: "want_left", for: "car", state: "Cruise",
+         when: "me.x > 0 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind",
+         then: [ Set("lane_to", "me.x - 1"), Set("timer", "p.signal_ticks"), Goto("Signal"), Emit("signal") ]),
+        (name: "want_right", for: "car", state: "Cruise",
+         when: "me.x < p.lanes - 1 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && !(me.x > 0 && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind) && ahead(\"car\", 1000) > p.room_ahead && behind(\"car\", 1000) > p.room_behind",
+         then: [ Set("lane_to", "me.x + 1"), Set("timer", "p.signal_ticks"), Goto("Signal"), Emit("signal") ]),
+        // Moving over: steer to the lane's centre, easing in and out.
+        (name: "steer", for: "car", state: "Changing",
+         when: "!((me.lane_to * 1000 + 500 - me.px) * (me.lane_to * 1000 + 500 - me.px) < 25 && me.vx * me.vx <= p.steer_acc * p.steer_acc)",
+         then: [ Set("vx", "me.vx + clamp(clamp((me.lane_to * 1000 + 500 - me.px) * p.steer_k / 100, -p.steer_max, p.steer_max) - me.vx, -p.steer_acc, p.steer_acc)") ]),
+        (name: "settle", for: "car", state: "Changing",
+         when: "(me.lane_to * 1000 + 500 - me.px) * (me.lane_to * 1000 + 500 - me.px) < 25 && me.vx * me.vx <= p.steer_acc * p.steer_acc",
+         then: [ Set("vx", "0"), Set("px", "me.lane_to * 1000 + 500") ]),
+        // The end of the road: back to its start (the seam).
+        (name: "wrap", for: "car", when: "me.y >= p.length - 2", then: [ Set("py", "500"), Emit("lap") ]),
+        // Two cars overlapping: a crash (IDM should never let it happen; lane changes and the seam might).
+        (name: "crash", for: "car", when: "touching(\"car\") > 0", then: [ Emit("crash") ]),
+    ],
+)
