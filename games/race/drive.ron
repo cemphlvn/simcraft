@@ -37,6 +37,30 @@ Drive(
         pit_road: (-300.0, 240.0),
         stands: [ (from: -300.0, to: 240.0, depth: 44.0, rise: 0.52, tower: true),
                   (from: 700.0, to: 1000.0, depth: 30.0, rise: 0.5, tower: false) ],
+        // Photographs (assets/race/, assets/src/README.md "Race"); a missing one keeps the view's own picture.
+        // `size`: metres a tile for ground, the height for strips along the walls, degrees round for the sky.
+        textures: {
+            "asphalt": (file: "race/asphalt.jpg", size: 4.0),
+            "groove": (file: "race/groove.jpg", size: 6.0),
+            "apron": (file: "race/apron.jpg", size: 4.0),
+            "pit": (file: "race/pit.jpg", size: 5.0),
+            "grass": (file: "race/grass.jpg", size: 12.0),
+            "safer": (file: "race/safer.jpg", size: 1.0),
+            "concrete": (file: "race/concrete.jpg", size: 1.25),
+            "crowd": (file: "race/crowd.jpg", size: 10.0),
+            "suites": (file: "race/suites.jpg", size: 6.5),
+            "sky": (file: "race/sky.jpg", size: 90.0),
+            "trees": (file: "race/trees.png", size: 22.0),
+            "dash": (file: "race/dash.jpg", size: 0.68),
+            "wheel": (file: "race/wheel.png", size: 0.35),
+            "banner": (file: "race/banner.jpg", size: 4.0),
+            "sponsors": (file: "race/sponsors.jpg", size: 3.0),
+            "logo": (file: "race/logo.png", size: 48.0),
+        },
+        // Sponsor boards on the fence every 45 m (six in the picture); the emblem behind the haulers and on the
+        // backstretch infield.
+        boards: (45.0, 6),
+        logos: [ (-30.0, 14.0), (1207.0, 8.0) ],
     ),
     units: "mph",
     screen: (1440, 810),

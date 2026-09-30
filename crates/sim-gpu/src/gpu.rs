@@ -667,7 +667,8 @@ impl Gpu {
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::MipmapFilterMode::Linear,
-                anisotropy_clamp: 1,
+                // Anisotropic: ground and walls seen at a grazing angle stay sharp along their length.
+                anisotropy_clamp: 8,
                 ..Default::default()
             })
         };

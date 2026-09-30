@@ -695,12 +695,12 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
     if let Some(out) = &a.shot {
         let instance = wgpu::Instance::default();
         let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
-        sim_gpu::drive::upload_textures(&mut gpu);
         let (w, h) = match drive.screen {
             Some((sw, sh)) if !a.sized => (sw * 2, sh * 2),
             _ => a.size,
         };
         let mut play = DrivePlay::new(engine, drive, track);
+        play.upload(&mut gpu);
         play.auto_you = a.auto && script.is_none();
         play.script = script;
         play.rig.view = a.view;
@@ -774,12 +774,12 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
 fn bench_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Track, a: &Args) -> Result<(), String> {
     let instance = wgpu::Instance::default();
     let mut gpu = pollster::block_on(Gpu::new(&instance, None, None))?;
-    sim_gpu::drive::upload_textures(&mut gpu);
     let (w, h) = match drive.screen {
         Some(s) if !a.sized => s,
         _ => a.size,
     };
     let mut play = DrivePlay::new(engine, drive, track);
+    play.upload(&mut gpu);
     play.auto_you = true;
     play.rig.view = a.view;
     play.watch = a.watch;
@@ -1571,9 +1571,9 @@ impl ApplicationHandler for App {
                 Session::Roam(Box::new(RoamPlay::new(engine, roam)))
             }
             Start::Drive(b) => {
-                sim_gpu::drive::upload_textures(&mut gpu);
                 let (engine, drive, track, auto, script, view) = *b;
                 let mut p = DrivePlay::new(engine, drive, track);
+                p.upload(&mut gpu);
                 p.rig.view = view;
                 p.auto_you = auto && script.is_none();
                 p.script = script;

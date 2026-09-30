@@ -4,6 +4,7 @@
 //! roll cage, A-pillars, the window net, the rear-view mirror, the windshield with its sun strip).
 
 use super::geom::{Builder, FONT, Frame, MIRROR, NET, char_w, rgb, rgba, text3};
+use super::photos::{Found, Photos};
 use super::{Cockpit, MirrorLook};
 use crate::math::{Eye, V3};
 use crate::stage::{BLOB, WHITE, Wrap};
@@ -211,20 +212,11 @@ pub fn mirror_eye(fr: &Frame, m: &MirrorLook, eye: V3) -> Eye {
     e
 }
 
-/// The cockpit, into five builders drawn in this order: `solid` (untextured), `text` (the font), `net`, `mirror`
-/// (the mirror's picture), `glass` (the windshield, last: it is see-through).
-#[allow(clippy::too_many_arguments)]
-pub fn cockpit(
-    solid: &mut Builder,
-    text: &mut Builder,
-    net: &mut Builder,
-    mirror: &mut Builder,
-    glass: &mut Builder,
-    fr: &Frame,
-    c: &Cockpit,
-    look: &CarLook,
-    dash: &Dash,
-) {
+/// The cockpit, into the builders of `Parts` (drawn in their order): `solid` (untextured), the dash's and the
+/// wheel's photographs when the game has them, `text` (the font), `net`, `mirror` (the mirror's picture), `glass`
+/// (the windshield, last: it is see-through).
+pub fn cockpit(parts: &mut Parts, fr: &Frame, c: &Cockpit, look: &CarLook, dash: &Dash) {
+    let Parts { solid, text, net, mirror, glass, dash_photo, wheel_photo, .. } = parts;
     let p = |x: f32, y: f32, z: f32| fr.at(V3(x, y, z));
     let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
     let black = [0.045, 0.045, 0.05];
@@ -234,14 +226,27 @@ pub fn cockpit(
     // Dash top (flocked, so it does not reflect in the glass) and its face.
     solid.quad([p(-0.85, 0.86, 0.33), p(0.85, 0.86, 0.33), p(0.88, 0.90, 0.95), p(-0.88, 0.90, 0.95)], uv, flock, 1.0);
     solid.quad([p(-0.85, 0.55, 0.33), p(0.85, 0.55, 0.33), p(0.85, 0.86, 0.33), p(-0.85, 0.86, 0.33)], uv, black, 1.0);
-    // The display in front of the driver: a black glass panel, the gear big in the middle, speed and rpm beside it.
-    let (dw, dh, dz) = (0.27, 0.11, 0.326);
-    let (dx0, dy0) = (ex - dw / 2.0, 0.835);
-    solid.glow(
-        [p(dx0, dy0, dz + 0.002), p(dx0 + dw, dy0, dz + 0.002), p(dx0 + dw, dy0 - dh, dz + 0.002), p(dx0, dy0 - dh, dz + 0.002)],
-        uv,
-        [0.01, 0.012, 0.015, 1.0],
-    );
+    // The display in front of the driver: a black glass panel, the gear big in the middle, speed and rpm beside it;
+    // on the dash's photograph, in the screen the picture has (`cockpit.display`), under its LEDs (`lights`).
+    let (mut dw, mut dh, dz) = (0.27, 0.11, 0.326);
+    let (mut dx0, mut dy0) = (ex - dw / 2.0, 0.835);
+    let mut leds = (ex - 0.12, 0.0267, 0.848);
+    match dash_photo {
+        Some((b, f)) => {
+            let (w, h, top) = (f.size, f.size / f.aspect(), c.dash_top);
+            let x0 = ex - w / 2.0;
+            b.quad([p(x0, top, 0.329), p(x0 + w, top, 0.329), p(x0 + w, top - h, 0.329), p(x0, top - h, 0.329)], uv, [1.0; 3], 1.0);
+            let (u0, v0, u1, v1) = c.display;
+            (dx0, dy0, dw, dh) = (x0 + w * u0, top - h * v0, w * (u1 - u0), h * (v1 - v0));
+            let (l0, lv, l1) = c.lights;
+            leds = (x0 + w * l0, w * (l1 - l0) / 9.0, top - h * lv);
+        }
+        None => solid.glow(
+            [p(dx0, dy0, dz + 0.002), p(dx0 + dw, dy0, dz + 0.002), p(dx0 + dw, dy0 - dh, dz + 0.002), p(dx0, dy0 - dh, dz + 0.002)],
+            uv,
+            [0.01, 0.012, 0.015, 1.0],
+        ),
+    }
     let right = |h: f32| fr.dir(V3(char_w(h), 0.0, 0.0));
     let down = |h: f32| fr.dir(V3(0.0, -h, 0.0));
     let gear = match dash.gear {
@@ -250,7 +255,8 @@ pub fn cockpit(
         g => g.to_string(),
     };
     let gh = 0.06;
-    text3(text, &gear, p(ex - char_w(gh) / 2.0, dy0 - 0.018, dz), right(gh), down(gh), [1.0, 1.0, 1.0, 1.0]);
+    let mid = dx0 + dw / 2.0;
+    text3(text, &gear, p(mid - char_w(gh) / 2.0, dy0 - dh / 2.0 + gh / 2.0, dz), right(gh), down(gh), [1.0, 1.0, 1.0, 1.0]);
     let sh = 0.024;
     let spd = format!("{:>3}", dash.speed_shown.round() as i64);
     text3(text, &spd, p(dx0 + 0.012, dy0 - 0.03, dz), right(sh), down(sh), [0.95, 0.95, 0.95, 1.0]);
@@ -265,7 +271,7 @@ pub fn cockpit(
     let (lit, flash) = shift_lights(dash.rpm, c.shift_lights.0, c.shift_lights.1, n);
     let blink_on = (dash.time * 10.0).fract() < 0.5;
     for i in 0..n {
-        let x = ex - 0.12 + i as f32 * 0.0267;
+        let x = leds.0 + i as f32 * leds.1;
         let col = if i < 4 {
             [0.1, 0.95, 0.2]
         } else if i < 7 {
@@ -280,7 +286,7 @@ pub fn cockpit(
         } else {
             [col[0] * 0.12, col[1] * 0.12, col[2] * 0.12, 1.0]
         };
-        let (y0, s) = (0.848, 0.008);
+        let (y0, s) = (leds.2, 0.006);
         solid.glow([p(x - s, y0 + s, 0.327), p(x + s, y0 + s, 0.327), p(x + s, y0 - s, 0.327), p(x - s, y0 - s, 0.327)], uv, c4);
     }
     // The switch panel right of centre: rows of toggles, two lit.
@@ -330,27 +336,42 @@ pub fn cockpit(
         let a = alpha - turn;
         centre + e_up.scale(a.cos() * w.radius) + e_right.scale(a.sin() * w.radius)
     };
-    let segs = 28;
-    for i in 0..segs {
-        let (a0, a1) = (i as f32 / segs as f32 * std::f32::consts::TAU, (i + 1) as f32 / segs as f32 * std::f32::consts::TAU);
-        let mid = (a0 + a1) / 2.0;
-        let marker = !(0.2..std::f32::consts::TAU - 0.2).contains(&mid);
-        let col = if marker { [1.0, 0.55, 0.05] } else { [0.06, 0.06, 0.065] };
-        solid.tube(fr, on_rim(a0), on_rim(a1), 0.017, 6, col);
+    match wheel_photo {
+        // The wheel's photograph in the wheel's plane, turned with it (its top at 12 o'clock).
+        Some((b, f)) => {
+            let half = f.size / 2.0;
+            let (st, ct) = turn.sin_cos();
+            let (up, rt) = (e_up.scale(ct) - e_right.scale(st), e_right.scale(ct) + e_up.scale(st));
+            let q = |x: f32, y: f32| fr.at(centre + rt.scale(x * half) + up.scale(y * half));
+            let uvw = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            b.quad([q(-1.0, 1.0), q(1.0, 1.0), q(1.0, -1.0), q(-1.0, -1.0)], uvw, [1.0; 3], 1.0);
+        }
+        None => {
+            let segs = 28;
+            for i in 0..segs {
+                let (a0, a1) = (i as f32 / segs as f32 * std::f32::consts::TAU, (i + 1) as f32 / segs as f32 * std::f32::consts::TAU);
+                let mid = (a0 + a1) / 2.0;
+                let marker = !(0.2..std::f32::consts::TAU - 0.2).contains(&mid);
+                let col = if marker { [1.0, 0.55, 0.05] } else { [0.06, 0.06, 0.065] };
+                solid.tube(fr, on_rim(a0), on_rim(a1), 0.017, 6, col);
+            }
+            for alpha in [std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 3.0 * std::f32::consts::FRAC_PI_2] {
+                solid.tube(fr, centre, on_rim(alpha), 0.009, 4, [0.62, 0.63, 0.66]);
+            }
+            solid.tube(fr, centre - axis.scale(0.01), centre + axis.scale(0.045), 0.042, 8, [0.1, 0.1, 0.11]);
+        }
     }
-    for alpha in [std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 3.0 * std::f32::consts::FRAC_PI_2] {
-        solid.tube(fr, centre, on_rim(alpha), 0.009, 4, [0.62, 0.63, 0.66]);
-    }
-    solid.tube(fr, centre - axis.scale(0.01), centre + axis.scale(0.045), 0.042, 8, [0.1, 0.1, 0.11]);
     solid.tube(fr, centre + axis.scale(0.045), centre + V3(0.0, -0.12, 0.38), 0.024, 6, [0.25, 0.25, 0.27]);
     // Gloved hands at a quarter to three, and the forearms back to the elbows.
     let suit = look.paint;
     for (alpha, elbow) in
         [(3.0 * std::f32::consts::FRAC_PI_2, V3(ex - 0.26, 0.72, -0.16)), (std::f32::consts::FRAC_PI_2, V3(ex + 0.26, 0.72, -0.16))]
     {
-        let h = on_rim(alpha) - axis.scale(0.02);
+        // On the driver's side of the rim (a photographed wheel is a flat picture in its plane).
+        let to_eye = (V3(c.eye.0, c.eye.1, c.eye.2) - centre).norm();
+        let h = on_rim(alpha) + to_eye.scale(0.03);
         solid.tube(fr, h - e_up.scale(0.045), h + e_up.scale(0.05), 0.034, 6, [0.08, 0.08, 0.09]);
-        solid.tube(fr, h - axis.scale(0.03), elbow, 0.042, 6, suit);
+        solid.tube(fr, h + to_eye.scale(0.02), elbow, 0.042, 6, suit);
     }
     // The floor, the rear bulkhead under the rear window, and the seat's back (the mirror sees them).
     solid.quad([p(-0.9, 0.2, 0.9), p(0.9, 0.2, 0.9), p(0.9, 0.2, -1.1), p(-0.9, 0.2, -1.1)], uv, [0.12, 0.12, 0.12], 1.0);
@@ -395,6 +416,9 @@ pub struct Parts {
     pub shadows: Builder,
     pub bodies: Builder,
     pub solid: Builder,
+    /// The dash's and the wheel's photographs (with the picture's size), when the game has them.
+    pub dash_photo: Option<(Builder, Found)>,
+    pub wheel_photo: Option<(Builder, Found)>,
     pub text: Builder,
     pub net: Builder,
     pub mirror: Builder,
@@ -402,11 +426,14 @@ pub struct Parts {
 }
 
 impl Parts {
-    pub fn new(sun: V3) -> Parts {
+    pub fn new(sun: V3, photos: &Photos) -> Parts {
+        let photo = |k: &str| photos.get(k).map(|f| (Builder::new(&f.texture, Wrap::Clamp, sun), f.clone()));
         Parts {
             shadows: Builder::new(BLOB, Wrap::Clamp, sun),
             bodies: Builder::new(WHITE, Wrap::Clamp, sun),
             solid: Builder::new(WHITE, Wrap::Clamp, sun),
+            dash_photo: photo("dash"),
+            wheel_photo: photo("wheel"),
             text: Builder::new(FONT, Wrap::Clamp, sun),
             net: Builder::new(NET, Wrap::Repeat, sun),
             mirror: Builder::new(MIRROR, Wrap::Clamp, sun),
@@ -417,8 +444,13 @@ impl Parts {
     /// The meshes, and how many of them (from the start) the mirror's own picture may show (not the mirror itself,
     /// nor the glass in front of it).
     pub fn meshes(self) -> (Vec<crate::gpu::Mesh>, usize) {
-        let all = vec![self.shadows, self.bodies, self.solid, self.text, self.net, self.mirror, self.glass];
-        (all.into_iter().map(Builder::mesh).collect(), 5)
+        let mut all = vec![self.shadows, self.bodies, self.solid];
+        all.extend(self.dash_photo.map(|d| d.0));
+        all.extend(self.wheel_photo.map(|d| d.0));
+        all.extend([self.text, self.net]);
+        let seen = all.len();
+        all.extend([self.mirror, self.glass]);
+        (all.into_iter().map(Builder::mesh).collect(), seen)
     }
 }
 

@@ -135,7 +135,10 @@ while its rear is realistic; the riders are side-on, not from behind.
 
 Higgsfield project "Race: stock-car oval assets" (e4d407cd-55a9-4724-a25d-ecead7dab0fe), 2026-09-30. Sources in
 `assets/src/race/` (git-ignored); the game uses `assets/race/`. All brands are fictional ("Piedmont Motor
-Speedway", the six sponsors); the car has no logos.
+Speedway", the six sponsors); the car has no logos. Opaque photographs are JPEG (quality 90, 29 → 4.5 MB); the
+tree line and the wheel keep their alpha as PNG, and the logo's white background was keyed out to alpha (flood fill
+from the corners, 1 px soft edge, 768 px) so it lies painted on the infield grass. The drive view maps them in
+`games/race/drive.ron` (`look.textures`).
 
 | game file | made from | job id |
 |---|---|---|

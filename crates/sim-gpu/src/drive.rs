@@ -13,10 +13,11 @@
 
 pub mod car;
 pub mod geom;
+pub mod photos;
 pub mod scene;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use sim_core::{Entity, EntityId, World};
@@ -29,6 +30,7 @@ use crate::math::{Eye, V3};
 use crate::stage::{BLOB, Quad, WHITE, Wrap};
 use car::{CarLook, Dash, Parts};
 use geom::{Frame, MIRROR, rect, rgb, text};
+use photos::Photos;
 use scene::{Centre, Ground, Scene, centre, fl, fx};
 
 pub const G: f32 = 9.81;
@@ -77,6 +79,9 @@ pub struct Drive {
     /// The window's size (logical pixels) and shots' (twice it), unless `--size` says otherwise.
     #[serde(default)]
     pub screen: Option<(u32, u32)>,
+    /// The game's folder (pictures, the car's model and recordings are found from it).
+    #[serde(skip)]
+    pub dir: PathBuf,
 }
 
 fn mph() -> String {
@@ -161,6 +166,13 @@ pub struct Cockpit {
     /// The roll cage's paint.
     pub cage: (u8, u8, u8),
     pub net: bool,
+    /// On the dash's photograph (`look.textures.dash`): where its screen is (u0, v0, u1, v1: fractions of the
+    /// picture), and its row of ten LEDs (first u, v, last u). The display and the shift lights are drawn there.
+    pub display: (f32, f32, f32, f32),
+    pub lights: (f32, f32, f32),
+    /// How high the dash photograph's top edge stands (m, car frame): high enough that its screen shows through the
+    /// wheel, above the hub.
+    pub dash_top: f32,
 }
 
 impl Default for Cockpit {
@@ -175,6 +187,9 @@ impl Default for Cockpit {
             shift_lights: (7800.0, 9200.0),
             cage: (190, 192, 190),
             net: true,
+            display: (0.303, 0.104, 0.698, 0.39),
+            lights: (0.356, 0.073, 0.64),
+            dash_top: 0.925,
         }
     }
 }
@@ -354,6 +369,17 @@ pub struct Look {
     pub car_colors: Vec<(u8, u8, u8)>,
     /// A tree line this far outside the wall (m; 0: none).
     pub trees: f32,
+    /// Photographs for the surfaces (`photos::SURFACES`: asphalt, groove, grass, crowd, sky, ...), by name:
+    /// `(file, size)`. A surface without one keeps the picture the view makes itself.
+    pub textures: BTreeMap<String, photos::Photo>,
+    /// Sponsor boards on the catch fence: one every this many metres (0: none), and how many panels side by side
+    /// the `sponsors` picture holds (each board shows the next).
+    pub boards: (f32, u32),
+    /// The track's emblem (`logo`) on the infield grass: where (m along the track from the start line), and how
+    /// far in from the foot of the apron's grass slope its near edge lies (m).
+    pub logos: Vec<(f32, f32)>,
+    /// The banner (`banner`) over the track on a gantry: where (m along the track from the start line).
+    pub banner_at: f32,
 }
 
 impl Default for Look {
@@ -384,6 +410,10 @@ impl Default for Look {
             stands: vec![Stands::default()],
             car_colors: vec![(200, 30, 36), (30, 80, 190), (250, 196, 30), (20, 20, 22), (240, 240, 240), (30, 150, 70), (240, 110, 20)],
             trees: 320.0,
+            textures: BTreeMap::new(),
+            boards: (45.0, 6),
+            logos: Vec::new(),
+            banner_at: 0.0,
         }
     }
 }
@@ -499,6 +529,12 @@ pub fn load(dir: &Path, game: &Game) -> Result<(Drive, Track), String> {
         .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
         .from_str(&src)
         .map_err(|e| format!("{}: {e}", path.display()))?;
+    drive.dir = dir.to_path_buf();
+    let unknown = photos::unknown(&drive.look.textures);
+    if !unknown.is_empty() {
+        let known: Vec<&str> = photos::SURFACES.iter().map(|s| s.0).collect();
+        return Err(format!("drive.ron: look.textures: no surface {unknown:?} (the surfaces are {known:?})"));
+    }
     let file = match (&game.def.track, &drive.track) {
         (Some(t), Some(mine)) if *mine != t.file => {
             return Err(format!("drive.ron: track '{mine}', but the game races on '{}' (drop `track` from drive.ron)", t.file));
@@ -678,6 +714,7 @@ pub struct Composer<'a> {
     pub drive: &'a Drive,
     pub track: &'a Track,
     pub ground: &'a Ground,
+    pub photos: &'a Photos,
     pub sun: V3,
     pub w: f32,
     pub h: f32,
@@ -712,6 +749,67 @@ impl DriveFrame {
         world.light.sun = self.sun_color;
         world
     }
+}
+
+/// The sky's panorama as seen by `eye`: slices of a cylinder round the eye (its bottom on the horizon, as high as
+/// the picture's proportions make it), each a quad whose picture is the azimuths it covers, so the sky stays put as
+/// the view turns and tilts with the horizon. `size` is the degrees of the horizon one copy spans; the picture is
+/// mirrored from one copy to the next (so 360 / size should be even, or the sky jumps where the angles wrap).
+pub fn sky_photo(eye: &Eye, w: f32, h: f32, f: &photos::Found) -> Vec<Quad> {
+    let (r0, u0, fwd) = eye.basis();
+    let fh = V3(fwd.0, 0.0, fwd.2);
+    if fh.dot(fh) < 1e-6 {
+        return Vec::new();
+    }
+    let fh = fh.norm();
+    let far = |d: V3| eye.pos + d.scale(4000.0);
+    let rh = V3(0.0, 1.0, 0.0).cross(fh);
+    let (Some((hx, hy)), Some((px, py))) = (eye.project(far(fh), w, h), eye.project(far(fh + rh.scale(0.3)), w, h)) else {
+        return Vec::new();
+    };
+    let rot = (py - hy).atan2(px - hx);
+    let (dx, dy) = (rot.cos(), rot.sin());
+    let (ux, uy) = (dy, -dx);
+    let sy = 1.0 / (eye.fov.to_radians() / 2.0).tan();
+    let sx = sy / (w / h.max(1.0));
+    let dir_at = |x: f32, y: f32| fwd + r0.scale((x / w * 2.0 - 1.0) / sx) + u0.scale((1.0 - y / h * 2.0) / sy);
+    let az = |d: V3| d.2.atan2(d.0);
+    let span = f.size.to_radians().max(0.01);
+    let elev = (span / f.aspect()).min(1.5);
+    let diag = (w * w + h * h).sqrt();
+    let n = 32;
+    let t = |k: usize| diag * (-0.75 + 1.5 * k as f32 / n as f32);
+    let mut out = Vec::with_capacity(n);
+    let mut a0 = az(dir_at(hx + dx * t(0), hy + dy * t(0)));
+    for k in 0..n {
+        let (t0, t1) = (t(k), t(k + 1));
+        let (x0, y0, x1, y1) = (hx + dx * t0, hy + dy * t0, hx + dx * t1, hy + dy * t1);
+        let a1 = a0 + wrap_pi(az(dir_at(x1, y1)) - a0);
+        let am = (a0 + a1) / 2.0;
+        let (top, hor) = (V3(elev.cos() * am.cos(), elev.sin(), elev.cos() * am.sin()), V3(am.cos(), 0.0, am.sin()));
+        if let (Some(pt), Some(ph)) = (eye.project(far(top), w, h), eye.project(far(hor), w, h)) {
+            let hq = ((pt.0 - ph.0) * ux + (pt.1 - ph.1) * uy).max(1.0);
+            let wq = (t1 - t0) + 1.0;
+            let (cx, cy) = ((x0 + x1) / 2.0 + ux * hq / 2.0, (y0 + y1) / 2.0 + uy * hq / 2.0);
+            // Azimuth grows to the left on screen (render space is left-handed), the picture to the right.
+            out.push(Quad {
+                image: f.texture.clone(),
+                x: cx - wq / 2.0,
+                y: cy - hq / 2.0,
+                w: wq,
+                h: hq,
+                uv: [-a0 / span, 0.0, -a1 / span, 1.0],
+                top: [1.0; 4],
+                bottom: [1.0; 4],
+                blur: 0.0,
+                desat: 0.0,
+                wrap: Wrap::MirrorX,
+                rot: rot.to_degrees(),
+            });
+        }
+        a0 = a1;
+    }
+    out
 }
 
 /// The spotter's call, and everything else the HUD shows.
@@ -875,6 +973,10 @@ impl Composer<'_> {
                 rot: rot.to_degrees(),
             });
         }
+        // The sky's photograph over the gradient, from the horizon up.
+        if let Some(f) = self.photos.get("sky") {
+            out.extend(sky_photo(eye, w, h, f));
+        }
         // The sun: a glow, a halo, a hot core; and a veil of glare when you drive into it.
         let sun = self.sun;
         let sc = rgb(look.sun_color);
@@ -944,7 +1046,7 @@ impl Composer<'_> {
             }
             None => (Eye { pos: V3(0.0, 30.0, -60.0), target: V3(0.0, 0.0, 0.0), roll: 0.0, fov: 50.0, near: 0.1, far: 6000.0 }, None),
         };
-        let mut parts = Parts::new(self.sun);
+        let mut parts = Parts::new(self.sun, self.photos);
         for c in cars {
             let mine = c.you && you_frame.is_some();
             let fr = if mine { you_frame.expect("checked") } else { seat(self.track, self.ground, c, c.body.unwrap_or((0.0, 0.0))) };
@@ -952,17 +1054,7 @@ impl Composer<'_> {
             if mine && rig.view == 0 {
                 car::body(&mut parts.bodies, &mut parts.text, &fr, &cl, c.steer, true);
                 let dash = self.dash(c, hud, time);
-                car::cockpit(
-                    &mut parts.solid,
-                    &mut parts.text,
-                    &mut parts.net,
-                    &mut parts.mirror,
-                    &mut parts.glass,
-                    &fr,
-                    &self.drive.cockpit,
-                    &cl,
-                    &dash,
-                );
+                car::cockpit(&mut parts, &fr, &self.drive.cockpit, &cl, &dash);
             } else {
                 // Far cars are skipped (they would be a pixel in the haze).
                 let d = fr.o - eye.pos;
@@ -1164,6 +1256,8 @@ pub struct DrivePlay {
     pub drive: Drive,
     pub track: Track,
     pub scene: Scene,
+    /// The game's photographs (found when the view starts, decoded when uploaded).
+    pub photos: Photos,
     pub rig: Rig,
     pub time: f32,
     /// How far into the current tick the frame is (0..1).
@@ -1190,13 +1284,15 @@ pub struct DrivePlay {
 impl DrivePlay {
     pub fn new(mut engine: sim_core::Engine<sim_core::Running, Game>, drive: Drive, track: Track) -> DrivePlay {
         engine.hash_every_tick(false);
-        let scene = scene::build(&track, &drive.look);
+        let photos = Photos::resolve(&drive.dir, &drive.look.textures);
+        let scene = scene::build(&track, &drive.look, &photos);
         let rate = engine.rules().cfg.run.tick_rate.max(1) as f32;
         let mut p = DrivePlay {
             engine,
             drive,
             track,
             scene,
+            photos,
             rig: Rig::default(),
             time: 0.0,
             alpha: 1.0,
@@ -1485,7 +1581,15 @@ impl DrivePlay {
         }
         let cars = self.cars();
         let hud = self.hud(&cars);
-        let composer = Composer { drive: &self.drive, track: &self.track, ground: &self.scene.ground, sun: self.scene.sun, w, h };
+        let composer = Composer {
+            drive: &self.drive,
+            track: &self.track,
+            ground: &self.scene.ground,
+            photos: &self.photos,
+            sun: self.scene.sun,
+            w,
+            h,
+        };
         composer.compose(&cars, &self.kin, &hud, &mut self.rig, self.time, dt)
     }
 
@@ -1626,6 +1730,14 @@ impl DrivePlay {
 pub fn upload_textures(gpu: &mut Gpu) {
     for (name, img) in geom::textures() {
         gpu.upload(&name, &img, 1024);
+    }
+}
+
+impl DrivePlay {
+    /// Everything the view draws with onto the GPU: its own pictures and the game's photographs.
+    pub fn upload(&self, gpu: &mut Gpu) {
+        upload_textures(gpu);
+        self.photos.upload(gpu);
     }
 }
 

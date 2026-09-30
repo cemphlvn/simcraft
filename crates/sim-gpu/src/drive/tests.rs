@@ -116,7 +116,7 @@ fn a_car_sits_on_the_banking_facing_any_way_and_its_up_leans_into_the_turn() {
 }
 
 fn composer<'a>(d: &'a Drive, t: &'a Track, g: &'a Ground) -> Composer<'a> {
-    Composer { drive: d, track: t, ground: g, sun: scene::sun_dir(&d.look), w: 1600.0, h: 900.0 }
+    Composer { drive: d, track: t, ground: g, photos: &photos::NONE, sun: scene::sun_dir(&d.look), w: 1600.0, h: 900.0 }
 }
 
 fn drive() -> Drive {

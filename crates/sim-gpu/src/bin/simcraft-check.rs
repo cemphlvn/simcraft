@@ -188,6 +188,18 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
     if let Some(a) = &d.autopilot {
         want("autopilot".into(), &a.action, vec![&a.arg]);
     }
+    // Pictures: a named one that is not there is a mistake (the surface quietly goes plain); the rest is listed.
+    let photos = sim_gpu::drive::photos::Photos::resolve(&d.dir, &d.look.textures);
+    for (k, why) in &photos.missing {
+        r.warn(format!("drive.ron: look.textures.{k}: {why} (drawn with the view's own picture instead)"));
+    }
+    let own: Vec<&str> = sim_gpu::drive::photos::SURFACES.iter().map(|s| s.0).filter(|k| photos.get(k).is_none()).collect();
+    r.notes.push(format!(
+        "drive photos: {} ({}); the view's own picture: {}",
+        photos.found.len(),
+        photos.found.keys().cloned().collect::<Vec<_>>().join(", "),
+        if own.is_empty() { "none".to_string() } else { own.join(", ") }
+    ));
     presses
 }
 
