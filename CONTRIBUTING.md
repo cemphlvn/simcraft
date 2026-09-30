@@ -57,6 +57,38 @@ A skill tells an AI how to help a human with one job. Keep the roles clear (the 
 implements and reports) and **point to the repo instead of copying it**: link `docs/architecture.md`, example games
 and scripts, so the skill never drifts from the engine.
 
+## Commit messages
+
+A commit message tells the next person what changed for them. Write it for someone who makes games, not for
+whoever wrote the code.
+
+**Subject line**
+
+- Say what changed in plain words: what a player, designer or developer can now do or see. Keep it to about 72
+  characters, with no full stop.
+- Describe the change itself, never how it came about: no "as asked", no "following the research", no "in the style
+  of …", no "fix review comments".
+- Name an area when that helps: `README: …`, `Race: …`, `Drive view: …`.
+
+**Body**
+
+- Bullets, one concrete change each, in the order someone would read the diff.
+- Call a technique by its established name, so readers can look it up: "sweep and prune", "sequential impulses",
+  "dirty flag (Game Programming Patterns)".
+- Put measured numbers in, before → after: `2,000 random hits conserve momentum`, `257 → 2.72 ms at 1,600 cars`.
+- Keep what was tried and dropped when it teaches something ("feeding the gradient into the corrections made
+  lane changes weave at 75 m/s").
+- Leave out tool or assistant attribution lines.
+
+**One change per commit.** A commit should build and pass `tools/check.sh --quick` on its own. Push after
+`git fetch` (others push to `main` too), oldest commit first. Reword a message before pushing if it reads like
+notes to yourself.
+
+| Instead of | Write |
+|---|---|
+| `Fix stuff in drive.rs` | `Race: line steering reads its own stick axis (it crawled at 0.36 m/s at speed)` |
+| `Implement feature per plan step 3` | `Drivetrain: the engine turns through a sequential gearbox, and RPM and gear reach the game` |
+
 ## Pull requests
 
 - One idea per PR, small enough to review in one sitting.

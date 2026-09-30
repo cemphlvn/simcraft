@@ -58,6 +58,41 @@ Bir skill, yapay zekâya bir insana tek bir işte nasıl yardım edeceğini anla
 karar verir, yapay zekâ uygular ve raporlar) ve **repoyu kopyalamak yerine ona işaret et**: `docs/architecture.md`'ye,
 örnek oyunlara ve script'lere bağlantı ver ki skill motordan kopmasın.
 
+## Commit mesajları
+
+Commit mesajı, bir sonraki kişiye onun için neyin değiştiğini söyler. Kodu yazan için değil, oyun yapan biri için
+yaz.
+
+**Başlık satırı**
+
+- Neyin değiştiğini düz sözlerle söyle: bir oyuncu, tasarımcı ya da geliştirici artık ne yapabilir, ne görür.
+  Yaklaşık 72 karakter, sonda nokta yok.
+- Değişikliğin kendisini anlat, nasıl ortaya çıktığını değil: "istendiği gibi", "araştırmaya göre",
+  "… tarzında", "review düzeltmeleri" yok.
+- İşe yarıyorsa bir alan adı ver: `README: …`, `Race: …`, `Drive view: …`.
+
+**Gövde**
+
+- Maddeler; her biri somut bir değişiklik, diff'i okuyacak birinin sırasıyla.
+- Bir tekniği yerleşik adıyla an ki okuyan arayıp bulabilsin: "sweep and prune", "sequential impulses",
+  "dirty flag (Game Programming Patterns)".
+- Ölçülen sayıları öncesi → sonrası diye yaz: `2.000 rastgele çarpışma momentumu korur`,
+  `1.600 arabada 257 → 2.72 ms`.
+- Denenip bırakılanı, bir şey öğretiyorsa tut ("gradyanı düzeltmelere de katmak 75 m/s'de şerit değişimini
+  sallantıya soktu").
+- Araç ya da asistan atıf satırları ekleme.
+
+**Commit başına tek değişiklik.** Her commit tek başına derlenmeli ve `tools/check.sh --quick`'ten geçmeli.
+`git fetch`'ten sonra push et (başkaları da `main`'e push ediyor), en eski commit önce. Kendine not gibi okunan bir
+mesajı push etmeden önce yeniden yaz.
+
+| Bunun yerine | Bunu yaz |
+|---|---|
+| `Fix stuff in drive.rs` | `Race: line steering reads its own stick axis (it crawled at 0.36 m/s at speed)` |
+| `Implement feature per plan step 3` | `Drivetrain: the engine turns through a sequential gearbox, and RPM and gear reach the game` |
+
+(Commit mesajları, kod gibi, İngilizce yazılır.)
+
 ## Pull request'ler
 
 - Her PR'da tek fikir, tek oturumda incelenebilecek kadar küçük.
