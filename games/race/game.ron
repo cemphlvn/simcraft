@@ -1,0 +1,13 @@
+#![enable(implicit_some)]
+// Race: a first-person stock-car race on a 1.5-mile banked oval (tracks/charlotte.ron). The cars are data
+// (assets/vehicles/stock_car.ron) driven by the engine's vehicle physics (crates/sim-physics); this file is the
+// shell until the core steps vehicles natively (docs/plans/physics-and-vehicles.md). Units: 1 m cells, so fine
+// units are millimetres.
+Game(
+    name: "race",
+    perception: Senses,
+    kinds: {
+        "car": (glyph: 'c', motion: (size: (1996, 4912)), props: { "human": 0 }),
+    },
+    rules: [],
+)

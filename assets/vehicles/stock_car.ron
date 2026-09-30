@@ -1,0 +1,27 @@
+// A NASCAR Cup Series "Next Gen" car in the 670 hp oval package. Published figures are marked (pub); the rest are
+// estimates for the class (est), each a candidate for better data: teams do not publish downforce, drag, tyre grip
+// or the torque curve. Sources: Wikipedia "Next Gen (NASCAR)"; NASCAR.com 2021-12-21 rules configuration.
+(
+    mass: 1542,               // kg, the 3,400 lb minimum with driver and fuel (pub)
+    wheelbase: 2794,          // mm, 110 in (pub)
+    weight_front: 52,         // % (est)
+    cg_height: 420,           // mm (est: low, wide race car)
+    track_width: 1700,        // mm (est)
+    wheel_radius: 350,        // mm (est: 18 in wheel (pub) with a ~28 in tyre)
+    steer_lock: 1600,         // hundredths of a degree (est)
+    engine: (
+        idle: 1500, redline: 9500,
+        // (rpm, Nm): shaped so peak power is the published 670 hp (500 kW) near 8,500 rpm; the shape is est.
+        torque_curve: [(3000, 500), (5000, 600), (6500, 640), (7500, 610), (8500, 561), (9500, 480)],
+    ),
+    gears: [2800, 2000, 1500, 1200, 1000],       // × 1000, 5-speed sequential (pub); ratios est
+    final_drive: 3750,                            // × 1000 (est: ~9,000 rpm near 200 mph in top)
+    drive: rwd,                                   // (pub)
+    brake_torque: 8000,       // Nm (est)
+    brake_front: 55,          // % (est)
+    tyre: (friction: 1450, cornering: 300, slide: 850),   // Goodyear racing slick (est: grip peaks near 5° of slip)
+    drag: 330,                // Cd × 1000 (est)
+    frontal_area: 2300,       // m² × 1000 (est: 1,996 mm wide × 1,280 mm high (pub) × 0.9)
+    downforce: 1500,          // Cl·A, m² × 1000 (est)
+    aero_front: 40,           // % (est)
+)

@@ -218,6 +218,14 @@ impl Track {
         from + Angle(((to - from).0 as i128 * into.0 as i128 / self.blend.0.max(1) as i128) as i64)
     }
 
+    /// How sharply the centreline turns at `s`: 1 / radius, positive turning left, 0 on a straight.
+    pub fn curvature(&self, s: Fx) -> Fx {
+        match self.segs[self.seg_at(self.wrap(s))].kind {
+            Kind::Straight => Fx::ZERO,
+            Kind::Arc { radius, sign, .. } => Fx::ONE / radius * sign,
+        }
+    }
+
     /// The surface at `s` along the centreline, `offset` to its left.
     pub fn pose(&self, s: Fx, offset: Fx) -> Pose {
         let s = self.wrap(s);

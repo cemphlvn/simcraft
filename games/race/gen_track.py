@@ -23,7 +23,7 @@ BACK = 1500 * FT
 FRONT = 1980 * FT
 L12, L34 = 2400 * FT, 2040 * FT
 ENTRY = 1.6
-DOGLEG_R = 300.0
+DOGLEG_R = 500.0
 WIDTH = 18.0  # m, assumed (not published)
 TURN_BANK, STRAIGHT_BANK = 24.0, 5.0
 BLEND = 120.0
@@ -86,15 +86,42 @@ def solve():
     return a, b, k
 
 
+def rounded(a, b, k):
+    """The layout as the file stores it (whole mm, hundredths of a degree), still closing to the millimetre: round
+    every angle, make them add up to exactly 360.00° (the largest arc takes the remainder), then solve the two
+    straights again for the rounded angles (the end point is linear in them)."""
+    pieces = layout(a, b, k)
+    cd = [round(math.degrees(p[2]) * 100) if p[0] == "L" else None for p in pieces]
+    turns = [i for i, c in enumerate(cd) if c is not None]
+    biggest = max(turns, key=lambda i: cd[i])
+    cd[biggest] += 36000 - sum(cd[i] for i in turns)
+    exact = [("L", p[1], math.radians(c / 100)) if c is not None else p for p, c in zip(pieces, cd)]
+    ia, ib = 9, 1  # indices of the straights a and b in layout()
+    exact[ia], exact[ib] = ("S", 0.0), ("S", 0.0)
+    x0, y0, _ = walk(exact)
+    ha = sum(p[2] for p in exact[:ia] if p[0] == "L")
+    hb = sum(p[2] for p in exact[:ib] if p[0] == "L")
+    # x0 + a·cos ha + b·cos hb = 0, y0 + a·sin ha + b·sin hb = 0.
+    det = math.cos(ha) * math.sin(hb) - math.sin(ha) * math.cos(hb)
+    na = (-x0 * math.sin(hb) + y0 * math.cos(hb)) / det
+    nb = (-y0 * math.cos(ha) + x0 * math.sin(ha)) / det
+    exact[ia], exact[ib] = ("S", na), ("S", nb)
+    return exact
+
+
 def main():
     a, b, k = solve()
     assert a > 0 and b > 0 and 0 < k < 0.5, (a, b, k)
+    pieces = rounded(a, b, k)
+    x, y, _ = walk([("S", round(p[1] * 1000) / 1000) if p[0] == "S" else ("L", round(p[1] * 1000) / 1000, p[2])
+                    for p in pieces])
+    assert math.hypot(x, y) < 0.005, f"closes {math.hypot(x, y) * 1000:.1f} mm off"
     mm = lambda m: round(m * 1000)
     cd = lambda rad: round(math.degrees(rad) * 100)
     names = ["Tri-oval (start/finish)", "Frontstretch", "Turn 1", "Turns 1-2", "Turn 2", "Backstretch", "Turn 3",
              "Turns 3-4", "Turn 4", "Frontstretch", "Tri-oval"]
     segs = []
-    for piece, name in zip(layout(a, b, k), names):
+    for piece, name in zip(pieces, names):
         bank = TURN_BANK if name.startswith("Turn") else STRAIGHT_BANK
         if piece[0] == "S":
             segs.append(("Straight", piece[1], None, bank, name))
@@ -116,7 +143,7 @@ def main():
         f"    blend: {mm(BLEND)},\n"
         "    segments: [\n" + "\n".join(lines) + "\n    ],\n)\n"
     )
-    lap = sum(p[1] if p[0] == "S" else p[1] * p[2] for p in layout(a, b, k))
+    lap = sum(p[1] if p[0] == "S" else p[1] * p[2] for p in pieces)
     print(f"lap {lap:.1f} m (published {LAP:.1f}); frontstretch straights {a:.1f} + {b:.1f} m, "
           f"dogleg {math.degrees(2 * k):.1f}°; wrote {out}")
 
