@@ -130,3 +130,22 @@ pure white background, no shadow*; vehicles *straight-on rear view* / *straight-
 
 Known weak spots: the CYBERRUN runner is dark on a dark road (hard to see); the front elephant is cartoon-coloured
 while its rear is realistic; the riders are side-on, not from behind.
+
+## Race (`assets/race/`, the stock-car oval)
+
+Higgsfield project "Race: stock-car oval assets" (e4d407cd-55a9-4724-a25d-ecead7dab0fe), 2026-09-30. Sources in
+`assets/src/race/` (git-ignored); the game uses `assets/race/`. All brands are fictional ("Piedmont Motor
+Speedway", the six sponsors); the car has no logos.
+
+| game file | made from | job id |
+|---|---|---|
+| `stock_car.glb` | `gpt_image_2_5` white stock car (3/4 view) → Meshy `image_to_3d` (textured, PBR, 40k tris, symmetric); textures re-encoded to 2048 px (14 → 5.2 MB) | image e8964937-a2fa-43ee-a2cd-68cc2f72482d, 3D aabdfc4a-f247-4547-b145-19532daeaf35 |
+| `asphalt`, `groove`, `apron`, `grass`, `pit` | `gpt_image_2_5` top-down photos → `tools/tileable.py` (1024) | 192ed53b, ee693074, 05a94417, b31bf1e9, 12038b91 |
+| `safer`, `concrete`, `crowd`, `suites` | `gpt_image_2_5` front elevations → seamless left to right | bb947fd6, 09926139, d0ad02b7, 945368e2 |
+| `sky` | `gpt_image_2_5` panorama | 4aefc7c1 |
+| `trees`, `wheel` | `gpt_image_2_5` → background remover | bab0715c → 2b696c74; 145b5449 → db0973ca |
+| `banner`, `logo`, `sponsors`, `dash` | `gpt_image_2_5` | 8ea9c5e6, 624d66cb, f33f59bb, 0193da91 |
+| `voice/*.mp3` | `seed_audio` (voice "Grady"), trimmed, radio band-pass 300–3400 Hz, compressed (ffmpeg) | ed44170f, d6171d55, bf6b40d8, 45f0c7eb, 39d710f7, f2ecabdc, 3831637b, 4adf26df, 49e0eb67, 9416e78e, 8838adbe, 70df8718 |
+
+Engine, effects and music: CC0 recordings, downloaded by hand (`assets/src/race/audio/README.md` lists what and
+where); Higgsfield's music and effects models are only for its own game pipeline.
