@@ -46,6 +46,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | Crate | Contents | Knows the game? |
 |---|---|---|
 | `sim-core` | `World` (entities + cell grid + per-kind index, mutation only via methods), `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash, snapshot/restore | No |
+| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). Plan: `docs/plans/physics-and-vehicles.md` | No |
 | `sim-state` | State charts: nested states, layers, reusable machines, remember, interrupt/back, pick; memory encoding; selectors; step distances. Guards and actions are generic (`G`, `A`) | No (not even Rhai) |
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "crates/sim-gpu", "kernel", "test"]
+members = ["crates/sim-core", "crates/sim-physics", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "crates/sim-gpu", "kernel", "test"]
 
 [workspace.package]
 edition = "2024"
@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 sim-core = { path = "crates/sim-core" }
+sim-physics = { path = "crates/sim-physics" }
 sim-rules = { path = "crates/sim-rules" }
 sim-state = { path = "crates/sim-state" }
 sim-kernel = { path = "kernel" }

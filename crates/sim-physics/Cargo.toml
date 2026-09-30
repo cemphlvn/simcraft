@@ -1,0 +1,12 @@
+[package]
+name = "sim-physics"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# The physics layer: plain data in, a fixed step, plain data out. It knows nothing about the world, the rules or any
+# game (docs/plans/physics-and-vehicles.md); sim-core calls it.
+[dependencies]
+
+[lints]
+workspace = true

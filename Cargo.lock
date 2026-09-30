@@ -2429,6 +2429,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-physics"
+version = "0.1.0"
+
+[[package]]
 name = "sim-render"
 version = "0.1.0"
 dependencies = [
