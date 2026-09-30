@@ -31,10 +31,16 @@ Drive(
             (key: "z", action: "shift", args: { "dir": -1 }),
             // Reverse in, and out on the next press.
             (key: "backspace", action: "reverse", toggle: "on"),
-            // Assisted steering (3, how the game starts you) and manual (0), in turn.
-            (key: "t", action: "assist", toggle: "mode", values: (3, 0)),
+            // The play mode: CONTROL (0) → GUIDED (2) → AUTOPILOT (1) → CONTROL (the button on screen does the same).
+            (key: "g", action: "mode", cycle: (arg: "mode", prop: "pilot", values: [0, 2, 1])),
         ],
     ),
+    // The play mode, on a button at the bottom left: what `pilot` is on your car.
+    badge: (prop: "pilot", key: "g", labels: [
+        (0, "CONTROL", (255, 214, 64)),
+        (2, "GUIDED", (90, 200, 255)),
+        (1, "AUTOPILOT", (150, 255, 140)),
+    ]),
     // From outside, the line you steer by, faint on the road ahead (while line steering is on).
     line_marker: (prop: "line", when: ("pilot", 2)),
     // O and `--auto`: the game's own driver takes your car, and gives it back.

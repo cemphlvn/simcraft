@@ -4,13 +4,13 @@ assertion_line: 75
 expression: profile(&dir)
 ---
 ticks 60, entities per tick 8.0
-per tick:        evals      33.8  queries      0.0  maps      0.0
-per entity-tick: evals      4.22  queries     0.00  maps     0.00
+per tick:        evals      24.8  queries      0.0  maps      0.0
+per entity-tick: evals      3.10  queries     0.00  maps     0.00
 hottest rules (checks per tick, % that fired):
   grid                           8.0    1.7%
   groove                         8.0    0.0%
-  hold                           8.0   12.3%
   lap                            8.0    0.0%
   odometer                       8.0  100.0%
-  assist                         0.0    0.0%
+  autopilot                      0.0    0.0%
+  drive                          0.0    0.0%
 checked but never fired: groove, lap

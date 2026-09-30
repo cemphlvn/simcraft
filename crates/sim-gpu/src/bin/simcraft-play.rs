@@ -1745,7 +1745,11 @@ impl ApplicationHandler for App {
                             self.swipe_from = Some(self.cursor);
                         }
                     }
-                    Session::Roam(_) | Session::Drive(_) => {}
+                    // Driving: a click on the mode button changes the play mode.
+                    Session::Drive(p) => {
+                        p.click(cw, ch, self.cursor.0, self.cursor.1);
+                    }
+                    Session::Roam(_) => {}
                 }
             }
             // A mouse drag is a swipe (the same code as a finger): its direction picks the move, a short one is a tap.

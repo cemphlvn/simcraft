@@ -161,6 +161,7 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
             }
         }
     }
+    let mut later = Vec::new();
     let mut want = |what: String, action: &str, args: Vec<&String>| {
         let Some(a) = game.def.actions.iter().find(|a| a.name == action) else {
             r.error(format!("drive.ron: {what} names action '{action}', which the game does not declare"));
@@ -179,14 +180,38 @@ fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mu
         let full: BTreeMap<String, i64> = c.axes.keys().map(|k| (k.clone(), if k.contains("brake") { 0 } else { 600 })).collect();
         presses.push((d.cars.clone(), c.action.clone(), full));
         for b in &c.buttons {
-            want(format!("key '{}'", b.key), &b.action, b.args.keys().chain(b.toggle.iter()).collect());
+            let cycle_arg = b.cycle.as_ref().map(|c| &c.arg);
+            want(format!("key '{}'", b.key), &b.action, b.args.keys().chain(b.toggle.iter()).chain(cycle_arg).collect());
             let mut args = b.args.clone();
             args.extend(b.toggle.iter().map(|t| (t.clone(), b.values.map_or(1, |v| v.1))));
+            if let Some(c) = &b.cycle {
+                // Every value it cycles through must be one the action takes (pressed below, one by one).
+                if !k_props(game, &d.cars).contains(&c.prop) {
+                    later.push(format!("drive.ron: key '{}' cycles by prop '{}', which '{}' does not have", b.key, c.prop, d.cars));
+                }
+                for v in &c.values {
+                    let mut a = b.args.clone();
+                    a.insert(c.arg.clone(), *v);
+                    presses.push((d.cars.clone(), b.action.clone(), a));
+                }
+            }
             presses.push((d.cars.clone(), b.action.clone(), args));
         }
     }
     if let Some(a) = &d.autopilot {
         want("autopilot".into(), &a.action, vec![&a.arg]);
+    }
+    for e in later {
+        r.error(e);
+    }
+    // The badge: its prop exists on the cars, and its key is one of the buttons.
+    if let Some(b) = &d.badge {
+        if !k_props(game, &d.cars).contains(&b.prop) {
+            r.error(format!("drive.ron: the badge shows prop '{}', which '{}' does not have", b.prop, d.cars));
+        }
+        if !d.controls.as_ref().is_some_and(|c| c.buttons.iter().any(|x| x.key == b.key)) {
+            r.error(format!("drive.ron: the badge presses key '{}', which no button has", b.key));
+        }
     }
     // The cars' model: loads and fits, or the view falls back to box cars (a mistake worth a warning).
     match sim_gpu::drive::load_car_model(d, game) {
@@ -457,4 +482,17 @@ fn main() {
         println!("note  {}: {n}", dir.display());
     }
     std::process::exit(if r.errors.is_empty() { 0 } else { 1 });
+}
+
+/// The props a kind's entities carry: its own, plus what the engine gives a moving kind and a vehicle.
+fn k_props(game: &sim_rules::Game, kind: &str) -> Vec<String> {
+    let Some(k) = game.def.kinds.get(kind) else { return Vec::new() };
+    let mut p: Vec<String> = k.props.keys().cloned().collect();
+    if k.motion.is_some() {
+        p.extend(sim_core::MOTION_PROPS.iter().map(|s| s.to_string()));
+    }
+    if k.vehicle.is_some() {
+        p.extend(sim_core::VEHICLE_PROPS.iter().chain(&sim_core::VEHICLE_INPUTS).map(|s| s.to_string()));
+    }
+    p
 }

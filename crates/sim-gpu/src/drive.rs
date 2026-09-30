@@ -65,6 +65,9 @@ pub struct Drive {
     pub chase: Chase,
     #[serde(default)]
     pub top: Top,
+    /// A play-mode button on the HUD.
+    #[serde(default)]
+    pub badge: Option<Badge>,
     #[serde(default)]
     pub look: Look,
     #[serde(default)]
@@ -484,6 +487,35 @@ pub struct KeyAction {
     /// The toggle's two values (off, on) when they are not (0, 1): the first press sends `on`.
     #[serde(default)]
     pub values: Option<(i64, i64)>,
+    /// Each press sends the next of several values: the one after the car's own `prop` (so the key agrees with
+    /// whatever else changed it).
+    #[serde(default)]
+    pub cycle: Option<Cycle>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cycle {
+    pub arg: String,
+    pub prop: String,
+    pub values: Vec<i64>,
+}
+
+/// A button on the screen that shows a prop of your car by name (a play mode) and, clicked, presses `key`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Badge {
+    pub prop: String,
+    /// (value, name, colour): what each value is called on the button.
+    pub labels: Vec<(i64, String, (u8, u8, u8))>,
+    pub key: String,
+}
+
+/// Where the badge sits: bottom left, (x, y, width, height) in pixels.
+pub fn badge_rect(w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let _ = w;
+    let s = (h / 900.0).max(0.4);
+    (16.0 * s, h - 96.0 * s, 330.0 * s, 76.0 * s)
 }
 
 /// One analog value from keys: a held key ramps it up over `rise_ms`, letting go brings it back over `fall_ms`.
@@ -875,6 +907,8 @@ pub struct Hud {
     pub replay: bool,
     /// Seconds to the green flag, while the field waits on the grid.
     pub countdown: Option<f32>,
+    /// The play mode's name, colour and key (the badge).
+    pub mode: Option<(String, [f32; 4], String)>,
 }
 
 fn lap_text(t: f32) -> String {
@@ -1263,7 +1297,15 @@ impl Composer<'_> {
             rect(out, w / 2.0 - tw / 2.0 - 20.0 * s, h * 0.3 - 12.0 * s, tw + 40.0 * s, size + 24.0 * s, [0.0, 0.0, 0.0, 0.5]);
             text(out, &t, w / 2.0 - tw / 2.0, h * 0.3, size, [0.4, 1.0, 0.45, 0.98]);
         }
-        if hud.auto {
+        if let Some((name, col, key)) = &hud.mode {
+            let (x, y, bw, bh) = badge_rect(w, h);
+            rect(out, x, y, bw, bh, [0.0, 0.0, 0.0, 0.55]);
+            rect(out, x, y, 8.0 * s, bh, *col);
+            text(out, "MODE", x + 22.0 * s, y + 10.0 * s, 14.0 * s, grey);
+            text(out, name, x + 22.0 * s, y + 32.0 * s, 30.0 * s, *col);
+            let hint = format!("[{}]", key.to_uppercase());
+            text(out, &hint, x + bw - geom::char_w(16.0 * s) * hint.len() as f32 - 12.0 * s, y + 12.0 * s, 16.0 * s, grey);
+        } else if hud.auto {
             text(out, "AUTO", 16.0 * s, h - 40.0 * s, 20.0 * s, [0.6, 0.8, 1.0, 0.9]);
         }
         if hud.replay {
@@ -1682,6 +1724,13 @@ impl DrivePlay {
         }
     }
 
+    /// A click at (x, y) on a window w × h: on the badge, its key. True if it was taken.
+    pub fn click(&mut self, w: f32, h: f32, x: f32, y: f32) -> bool {
+        let Some(b) = self.drive.badge.clone() else { return false };
+        let (bx, by, bw, bh) = badge_rect(w, h);
+        (x >= bx && x <= bx + bw && y >= by && y <= by + bh) && self.key(&b.key)
+    }
+
     /// A button's key: its action for your car.
     pub fn key(&mut self, key: &str) -> bool {
         let Some(c) = &self.drive.controls else { return false };
@@ -1691,6 +1740,17 @@ impl DrivePlay {
         }
         if let Some(id) = self.driver() {
             let mut args = b.args.clone();
+            // A cycle sends the value after the car's current one.
+            if let Some(c) = &b.cycle {
+                let now = self.engine.world().get(id).and_then(|e| e.props.get(&c.prop).copied());
+                let at = now.and_then(|v| c.values.iter().position(|&x| x == v));
+                let next = at.map_or(0, |i| (i + 1) % c.values.len().max(1));
+                if let Some(&v) = c.values.get(next) {
+                    args.insert(c.arg.clone(), v);
+                    self.send(id, &b.action, args);
+                }
+                return true;
+            }
             // A toggle flips its arg between 1 and 0 each press (reverse in, reverse out).
             if let Some(t) = &b.toggle {
                 let on = !self.toggled.get(key).copied().unwrap_or(false);
@@ -1851,6 +1911,12 @@ impl DrivePlay {
             auto: self.auto_you,
             replay: self.script.is_some(),
             countdown: (self.time < self.green_at).then_some(self.green_at - self.time),
+            mode: self.drive.badge.as_ref().and_then(|b| {
+                let v = self.world().get(you.id)?.props.get(&b.prop).copied()?;
+                let (_, name, (r, g, bl)) = b.labels.iter().find(|l| l.0 == v)?;
+                let c = |x: u8| x as f32 / 255.0;
+                Some((name.clone(), [c(*r), c(*g), c(*bl), 0.98], b.key.clone()))
+            }),
         }
     }
 

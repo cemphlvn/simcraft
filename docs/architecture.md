@@ -1017,6 +1017,10 @@ Drive(
 - **Line steering** (a game's choice, `games/race`): `T` toggles a button whose `toggle` sends two given `values`;
   `line_marker: (prop, when)` draws the line the car steers by as a faint ribbon on the road ahead from outside.
 
+- **Play modes and badges:** a `cycle` button sends the next of several values after the car's own prop (G: CONTROL →
+  GUIDED → AUTOPILOT, reading `pilot`), so it agrees with whatever else changed it; a `badge` shows a prop by name
+  and colour on a clickable button bottom left (a click presses its key). `simcraft-check` checks both.
+
 ## Input: actions, schemes and contexts (`input.ron`)
 
 What the player presses is an abstraction, like everything else: devices produce **actions**, and actions go to
