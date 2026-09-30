@@ -2,281 +2,293 @@
 
 # simcraft
 
-**You design and develop. Your AI implements. simcraft keeps both of you honest.**
-
-A deterministic simulation engine for game makers who build with AI.<br>
-One readable game file, checked before it runs, built to run the same in the terminal, Unity and Unreal.
+**A deterministic simulation and game engine with its own integer physics engine.**<br>
+Games are readable data files, checked before they run, replayed bit for bit, and built with AI.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
 [![Agent Skills](https://img.shields.io/badge/AI-agent%20skills-8A2BE2.svg)](skills/)
 
-[Quick start](#quick-start) · [Build with your AI](#build-a-game-with-your-ai) · [Games](games/) · [Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md) · [Türkçe](README.tr.md)
+[Getting started](#getting-started) · [Features](#features) · [Architecture](#architecture) · [Who it is for](#who-it-is-for) · [Docs](docs/architecture.md) · [Contributing](CONTRIBUTING.md) · [Türkçe](README.tr.md)
 
 </div>
 
 <p align="center">
   <img src="docs/media/race_chase.jpg" alt="games/race: eight stock cars on a banked oval, chase camera" width="100%">
 </p>
-<sub><code>games/race</code>: a stock-car race on a 1.5-mile banked oval, driven by simcraft's own physics engine. Eight cars
-are data, seven drive themselves, and you drive the eighth.</sub>
+<sub><code>games/race</code>: stock cars on a 1.5-mile banked oval. Every car is data, stepped by simcraft's own vehicle
+physics at 480 Hz; seven drive themselves, you drive the eighth.</sub>
 
-## Why simcraft
+## Design considerations
 
-- **You stay the designer.** The game is one text file you can read, review and version: kinds, states, rules, what players may do. Your AI writes it; you decide what it says.
-- **Mistakes stop at the door.** A typo in a rule, state or parameter stops the engine at load time, with every error listed at once in words an AI can fix.
-- **Same seed, same game.** Integer maths, no shared randomness: every run can be replayed and verified tick by tick, so experiments are evidence.
-- **Behaviour you can see.** State machines with nested states, layers, memory and interrupts, in the vocabulary of Unity's Animator and Unreal's StateTree.
-- **Hosts display, the core decides.** The same `game.ron` runs headless for experiments and inside Unity or Unreal.
+- **Deterministic simulation.** Integer arithmetic end to end (no floats in the simulation), a fixed timestep, no
+  shared randomness, no hash-map iteration order. Same seed and inputs, same world, on every machine and core
+  count: runs replay bit for bit and every experiment is evidence.
+- **Data first.** A game is a `game.ron` (kinds, state machines, rules, actions) and an `engine.toml` (seed,
+  population, parameters). A car is a vehicle file, a track a track file. Designers change numbers, not code.
+- **Checked before it runs.** Every expression is compiled and dry-run at load; every error is listed at once, with
+  the rule, state or field it belongs to, in words a person or an AI can fix.
+- **Measured, not assumed.** Physics is tested against closed-form answers, performance against saved baselines
+  with the world's hash compared at every step, game feel with a probe of what the camera actually drew.
+- **Physics behind a narrow boundary.** `sim-physics` knows nothing about games or the world: plain data in, a
+  fixed step, plain data out. The same split Unity, Unreal and Godot make with their physics libraries.
+
+## Features
+
+### Physics (`sim-physics`)
+
+- **Numerics:** Q48.16 fixed point with 128-bit intermediates, exact integer square root, binary angles (2³² per
+  turn), sine and cosine from a table built at compile time with integer maths, `atan2` by CORDIC.
+- **Vehicle dynamics:**
+  - a dynamic bicycle model with slip-angle tyres (linear to the limit, then sliding);
+  - a friction circle shared by drive, brakes and cornering;
+  - load transfer, downforce and banking;
+  - a kinematic model at walking pace.
+- **Drivetrain:**
+  - an engine torque curve read from dyno points;
+  - a slipping clutch, a rev limiter and engine braking;
+  - a sequential gearbox, automatic at the optimal shift points or manual;
+  - a reverse gear.
+- **Driver aids:** traction control and ABS.
+- **Time stepping:** 60 Hz ticks with 8 sub-steps each (480 Hz), semi-implicit Euler.
+- **Collision:**
+  - a sweep-and-prune broad phase;
+  - a separating axis test between oriented boxes as the narrow phase, with an averaged contact manifold;
+  - sequential impulses with accumulated clamping, restitution and Coulomb friction;
+  - walls from the track's edges.
+- **Tracks as data:** straights, circular arcs and clothoid-eased turns (transition spirals) with banking.
+  `pose(s, offset)` and `locate(x, y)` answer where things are.
+- **Driver AI:**
+  - a quasi-steady-state lap plan;
+  - pure-pursuit steering with understeer-gradient feed-forward;
+  - racecraft (passing and following at a speed-dependent gap);
+  - spin recovery.
+
+### Simulation (`sim-core`, `sim-state`, `sim-rules`)
+
+- **World:** a grid world (2D or voxels) with continuous motion on top: sub-cell positions and velocities, gravity,
+  mounts that carry riders, footprint queries (`ahead`, `behind`, `touching`, `under`), and vehicles.
+- **Behaviour:** state charts with nesting, parallel layers, reusable machines, remember, interrupt/back and pick
+  (the vocabulary of Unity's Animator and Unreal's StateTree).
+- **Rules:** rules as data, compiled once. A native evaluator runs the common subset (closure compilation), and
+  [Rhai](https://rhai.rs) scripts handle the rest.
+- **Queries:** a sweep-and-prune index for moving kinds, and bounded nearest-neighbour search.
+- **State:** snapshots and restore, a replay log, and a message bus to observe a run live.
+
+### Rendering and play (`sim-gpu`, `sim-render`)
+
+- **GPU renderer** (wgpu):
+  - a 2.5D stage view;
+  - a first-person track view;
+  - a first-person voxel view;
+  - the drive view, with cockpit, chase and top-down cameras, a live mirror, glTF models in instanced liveries, and
+    photographed materials.
+- **Camera feel as data:** a spring-damped head that leans with g-forces, speed-scaled effects and hitstop.
+- **Input as data:** analog keyboard axes with rise and fall times, speed-sensitive steering, and cycling buttons.
+- **Audio:** a mixer with buses. Engine loops are crossfaded by RPM, other cars get distance attenuation and the
+  Doppler effect, and a spotter calls on the radio.
+- **Terminal renderer:** ASCII and pixel art, for headless machines and quick looks.
+
+### Tooling
+
+- **Agent protocol:** the same JSON-lines protocol for humans, scripts and AI agents; a C API (`sim-ffi`) for hosts.
+- **Measurement:** eval-driven development (`tools/eval.py`), scaling benchmarks with a world-hash check
+  (`tools/perf.py`), physics benchmark scenes (`simcraft-physics-bench`), and a feel probe (`--feel`).
+- **AI agent skills:** your AI writes the game, runs the checks and reports what happened
+  ([`skills/`](skills/)).
 
 ## Featured game: `games/race`
 
-<table>
-<tr>
-<td width="33%"><img src="docs/media/race_cockpit.jpg" alt="cockpit view"></td>
-<td width="33%"><img src="docs/media/race_grid.jpg" alt="the starting grid from above"></td>
-<td width="33%"><img src="docs/media/race_banner.jpg" alt="the start/finish line, chase view"></td>
-</tr>
-<tr>
-<td align="center"><sub>From the seat: dash, wheel, live mirror</sub></td>
-<td align="center"><sub>The grid from above: 8 liveries</sub></td>
-<td align="center"><sub>Start/finish, and the play mode button</sub></td>
-</tr>
-</table>
-
 A stock-car race on a 1.5-mile quad-oval with Charlotte Motor Speedway's published length, turn radii, turn
-lengths and 24° banking (the dogleg's exact shape is approximate). You start from the back of an 8-car field:
+lengths and 24° banking (the shape of the dogleg is approximate). You start from the back of an 8-car field.
 
 ```bash
-cargo build --release -p sim-gpu
-target/release/simcraft-play games/race           # C: cockpit → chase → top-down
+cargo build --release -p sim-gpu && target/release/simcraft-play games/race
 ```
 
 | Key | |
 |---|---|
 | ↑ ↓ ← → | throttle, brake, steering (analog ramps from the keyboard) |
-| **G** or the MODE button | **CONTROL** (you steer; traction control and ABS) → **GUIDED** (you pick your line, the car follows it and keeps you within its grip) → **AUTOPILOT** |
-| A / Z · Backspace | shift up / down (a sequential gearbox, automatic until you shift) · reverse |
+| **G** or the MODE button | **CONTROL** (you steer; traction control and ABS) → **GUIDED** (you choose your line; the car follows it and keeps you within its grip) → **AUTOPILOT** |
+| C · A / Z · Backspace | camera (cockpit, chase, top-down) · shift up / down · reverse |
 | Tab · M · R | ride on board another car · mute · restart |
 
-**It runs on simcraft's own physics engine** (`crates/sim-physics`), written for this: deterministic, integer-only
-(Q48.16 fixed point, binary angles, CORDIC), so every race replays bit for bit. No third-party physics library.
+### How it's made
 
-- **Cars are data** (`assets/vehicles/*.ron`): mass, geometry, a dyno torque curve, gears, brakes, tyres, aero. The
-  Next Gen Cup car uses its published figures; everything else is marked as an estimate.
-- **The model:**
-  - a dynamic bicycle model with slip-angle tyres and a friction circle;
-  - load transfer, downforce and banking;
-  - a drivetrain with an automatic gearbox that shifts at the optimal points;
-  - driver aids (traction control, ABS);
-  - contact between cars and walls (separating axis test, sequential impulses);
-  - 8 physics steps per 60 Hz tick.
-- **Tracks are data:** straights and turns eased by transition spirals (clothoids), with banking along them.
-- **The rivals' driver:**
-  - a quasi-steady-state lap plan;
-  - pure-pursuit steering with understeer compensation;
-  - racecraft (passing, following) and spin recovery.
+Nothing in the engine knows this is a race. Each thing on screen comes from a few lines of data, and the engine
+supplies the general machinery: physics, tracks, cameras, input. Here is what produced each picture.
 
-Measured, not assumed:
+<table>
+<tr>
+<td width="44%"><img src="docs/media/race_chase.jpg" alt="the pack in the banking"></td>
+<td>
 
-| | Result |
+**Eight cars through a banked turn.** Each car is a spec sheet in a file,
+[`assets/vehicles/stock_car.ron`](assets/vehicles/stock_car.ron): mass, wheelbase, a torque curve as dyno points,
+gear ratios, brakes, tyre grip, drag and downforce. The game only says which kind of thing is a car:
+`vehicle: "stock_car"`. The physics engine turns those numbers into speed, grip, slides and gear changes, so a
+truck or a hatchback is a different file, not different code.
+
+</td>
+</tr>
+<tr>
+<td><img src="docs/media/race_grid.jpg" alt="the starting grid from above"></td>
+<td>
+
+**The grid.** The track is a file of straights and turns with their banking,
+[`games/race/tracks/charlotte.ron`](games/race/tracks/charlotte.ron), generated from the speedway's published
+figures. One rule in [`game.ron`](games/race/game.ron) runs on the first tick: every car gets a grid slot, a pace
+and a line, and seven get the engine's autopilot. The paint schemes are a list in
+[`drive.ron`](games/race/drive.ron) that tints one 3D model.
+
+</td>
+</tr>
+<tr>
+<td><img src="docs/media/race_cockpit.jpg" alt="the cockpit"></td>
+<td>
+
+**From the seat.** The cockpit is a description in `drive.ron`: where the driver's eye is, how stiff the neck
+springs are, where the mirror sits. The physics engine reports the g-forces the driver feels, and the head leans
+against them; the dash shows the engine's rpm and gear. The same camera works for any game with cars.
+
+</td>
+</tr>
+<tr>
+<td><img src="docs/media/race_line.jpg" alt="GUIDED mode, the line on the road"></td>
+<td>
+
+**GUIDED: you pick the line.** The three play modes are one number on your car (who drives: you, you plus the
+autopilot, or the autopilot). A rule moves your line when you press left or right, and the engine's autopilot
+steers along it. The faint line on the road and the MODE button are two lines in `drive.ron` that show that
+number.
+
+</td>
+</tr>
+<tr>
+<td><img src="docs/media/race_banner.jpg" alt="the start/finish line"></td>
+<td>
+
+**Start/finish.** The banner, the crowd, the SAFER barrier and the asphalt are pictures named in `drive.ron`. The
+laps and lap times shown are two short rules in `game.ron`: crossing the line counts a lap, and the rule remembers
+the best one.
+
+</td>
+</tr>
+</table>
+
+| Measured | Result |
 |---|---|
-| Autopilot lap in the Next Gen car | **30.75 s**; the real pole in 2024 was **29.355 s** ([log of every step](games/race/LAPS.md)) |
-| Physics tests against textbook answers | steady-turn geometry, understeer gradient, skidpad limit μ·g, a banked turn held by the slope alone, braking distance, top speed, gear shifts; 2,000 random collisions conserve momentum and never create energy |
-| Frame time, 8 cars + mirror | ~5 ms GPU per frame (1440×810) |
+| Autopilot lap in the Next Gen car | **30.75 s**, against a real 2024 pole of **29.355 s** ([every step in the log](games/race/LAPS.md)) |
+| Physics against closed-form answers | turning circle, understeer gradient, skidpad limit μ·g, a banked turn held by the slope alone, braking distance, top speed, gear shifts |
+| Collision property test | 2,000 random car-to-car hits conserve momentum and never create energy |
 
-Assets are generated (Higgsfield) and all brands are fictional: a 3D car model with PBR materials in 8 liveries,
-photographed track surfaces, a crowd, signage, and a spotter on the radio. Engine sounds and music are CC0
-recordings you add (`assets/src/race/audio/README.md`); until then the engine note is synthesised.
+The assets are generated (Higgsfield), and all brands are fictional. The engine sound and music are CC0 recordings
+you add ([list](assets/src/race/audio/README.md)); until then the engine note is synthesised.
 
-## Quick start
+## Getting started
 
-Needs [Rust](https://rustup.rs) and Python 3.
+Needs [Rust](https://rustup.rs) (and Python 3 for the scripted players and tools).
 
 ```bash
 git clone https://github.com/cemphlvn/simcraft && cd simcraft
-cargo build --release -p sim-agent
-python3 agents/play_market.py        # trade wood for stone against a bot, 150 days
+cargo build --release -p sim-gpu -p sim-agent
+target/release/simcraft-play games/race                                    # drive
+echo '{"cmd":"step","n":600}' | target/release/simcraft-agent games/race   # the same race, headless
+tools/check.sh --quick                                                     # fmt, clippy, tests, every game checked
 ```
 
-Then change one number in `games/market/engine.toml` (or a `params` value in `game.ron`), play again, and see a different game.
-
-## Build a game with your AI
-
-```bash
-skills/install.sh          # Claude Code in this repo;  --user for every project
-```
-
-Then ask, in your own words: *"make a game where …"*.
-
-| Skill | What your AI does |
-|---|---|
-| [`simcraft-game`](skills/simcraft-game/SKILL.md) | Treats you as the designer: asks what the player should feel and decide, writes `game.ron`, runs the engine's check, fixes every error, runs the game and tells you what happened |
-| [`simcraft-experiment`](skills/simcraft-experiment/SKILL.md) | Answers *"what happens if …"*: runs the game many times across settings and seeds and shows you the evidence |
-| [`simcraft-eval`](skills/simcraft-eval/SKILL.md) | Eval-driven development: you define what "better" means, every change is one measured step on fixed seeds, and a log keeps what you learned ([`docs/evals.md`](docs/evals.md)) |
-
-Other AI tools: point them at `skills/<name>/SKILL.md` (Agent Skills format) and at [`docs/architecture.md`](docs/architecture.md). New skill: `skills/new.sh <name>`.
-
-## Pick your path
-
-| You study / love | Start here | You will touch |
-|---|---|---|
-| **Game design** | [`games/`](games/) (smallest first: `wolf_sheep`), the skills above | `game.ron`, `engine.toml`: rules, state machines, balancing. No Rust needed |
-| **Computer engineering** | [`docs/architecture.md`](docs/architecture.md), then [`CONTRIBUTING.md`](CONTRIBUTING.md) | The Rust core: rules compiler, state charts, determinism, the C API |
-| **Art and design** | [`adapters/unity`](adapters/unity/com.simcraft.core), [`adapters/unreal`](adapters/unreal/Simcraft) | Prefabs and actors per kind, a look per state (`glyphs`): what the player sees while the core decides |
-
-**Ten games so far:** `wolf_sheep` (predators and prey), `forest_fire` (fires of every size), `mercy_dungeon` (fight or spare),
-`market` (two players trading), `gamedev` (a studio building games on its own engine), `colony` (ants, scent trails
-and winter, built [eval-driven](games/colony/EVALS.md)), `colony3d` (the same colony underground: a physical nest,
-temperature and scent as fields), `forage` (ants born with a brain and nothing else learn to forage by natural
-selection, [eval-driven](games/forage/EVALS.md)), `lanes` (*experimental*; first person in a car: 1 2 3 4 are positions across the road,
-space jumps, Enter dashes; the feel of moving between positions is tuned as data), `mound` (*experimental*; you are a termite, in
-first person with WASD and the mouse, among a colony that builds a mound with no plan: each mud ball smells, and
-carriers drop where it smells; built [eval-driven](games/mound/EVALS.md), its feel [too](games/mound/FEEL.md)). How the engine grew out of
-them, change by change: [`docs/emergence.md`](docs/emergence.md).
-
-## Tour
-
-### The two files
-
-```
-games/wolf_sheep/
-├── game.ron      # the world: kinds, states, rules, what players may do   (the designer's file)
-└── engine.toml   # the panel: seed, population, switches, parameters      (the operator's file)
-```
-
-### Talk to the engine
-
-```bash
-cargo run -q -p sim-agent            # wolf/sheep; add a path for another game: -- games/market
-```
-
-Talk to it over stdin, one JSON line at a time:
-
-```json
-{"cmd":"info"}
-{"cmd":"observe"}
-{"cmd":"act","actions":[{"entity":41,"do":"move","args":{"dx":1,"dy":1}}]}
-{"cmd":"step","n":10}
-```
-
-It answers one JSON line at a time. Humans, scripts and AI agents all play it the same way.
-Scripted players live in `agents/` (e.g. `python3 agents/market.py speculator builder`).
-Play the market yourself against a bot: `python3 agents/play_market.py`.
-
-### A rule
+### A game in data
 
 ```ron
+// games/wolf_sheep/game.ron: a rule
 (name: "predation", for: "wolf", when: "near.sheep <= 1",
  then: [ Despawn(Nearest("sheep")), Set("hunger", "0"), Emit("kill") ]),
+
+// games/race/game.ron: a kind that is a car, on a track
+kinds: { "car": (motion: (size: (1996, 4912)), vehicle: "stock_car", props: { ... }) },
+track: (file: "tracks/charlotte.ron", origin: (650000, 50000), grid: (spacing: 9000, columns: 2, gap: 5000)),
 ```
 
-When a rule doesn't fit the built-in actions, write it in [Rhai](https://rhai.rs) instead.
+Talk to any game over stdin, one JSON line at a time (`{"cmd":"observe"}`, `{"cmd":"act",...}`,
+`{"cmd":"step","n":10}`), from a script, a test or an AI. Build a new one with your AI: `skills/install.sh`, then
+*"make a game where …"*.
 
-### A state machine
+## Architecture
 
-States inside states, layers side by side, reusable machines, remember, interrupt and back, pick:
-
-```ron
-"Work": (
-    remember: true, recheck: true,
-    pick: First([ ("Commute", "me.x != me.hx"), ("Build", r#"near_in("project", "Production") == 0"#) ]),
-    states: { "Commute": (...), "Build": (use: "focus", rules: [ ... ]) },
-),
+```
+            game.ron   engine.toml   vehicles/*.ron   tracks/*.ron      (data: what the designer writes)
+                                 │
+                            sim-rules ─── compiles and checks the game, runs its rules
+                                 │
+      sim-state ───────── sim-core ─── world, tick loop, effects, determinism, snapshots
+    (state charts)               │
+                           sim-physics ─── vehicles, contact, tracks, numerics (depends on nothing else)
+                                 │
+   sim-agent (JSON protocol) · sim-ffi (C API: Unity, Unreal) · sim-gpu / sim-render (windows, terminals)
 ```
 
-Rules bind to states by inheritance (`state: "Work"`), composition (rules written inside a state)
-and distance (`depth`, `steps_to("Shipped")`, `around("dev", "Burnout", 6)`).
+| Crate | What it does | Knows the game? |
+|---|---|---|
+| `sim-physics` | Fixed-point numerics, vehicle dynamics and drivetrain, contact, tracks, the driver AI, benchmark scenes | No (not even the world) |
+| `sim-core` | The world (entities, grid, per-kind index, continuous motion, vehicles), effects, the tick loop, hashing, snapshots | No |
+| `sim-state` | State charts: nesting, layers, reusable machines, remember, interrupt/back, pick | No |
+| `sim-rules` | Loads `game.ron` and `engine.toml`, compiles rules (native subset + Rhai), dry-runs and validates | The schema, not the content |
+| `sim-agent` | `simcraft-agent`: the JSON-lines protocol, replays, observation | No |
+| `sim-ffi` | The C library and header for host engines | No |
+| `sim-gpu` | wgpu renderer and `simcraft-play`: stage, track, voxel and drive views, audio, feel probe; `simcraft-check` | No |
+| `sim-render` | Terminal renderer and `simcraft-view` | No |
+| `kernel` | An integer tensor machine for ONNX graphs (learning agents) | No |
+| `test` (`simtest`) | Scenario files, golden hashes, snapshots, property tests | No |
 
-### A switch
+The single source of truth is [`docs/architecture.md`](docs/architecture.md). How each feature grew out of a game
+is in [`docs/emergence.md`](docs/emergence.md).
 
-```toml
-[switches]
-predation = false
-```
+## Who it is for
 
-### Watch and replay
+**Game designers.** You work in `game.ron`, `engine.toml` and data files, and no Rust is needed. You describe what
+the player should feel and decide; your AI writes the rules; the engine refuses anything it cannot run and says
+why. Every change can be measured on fixed seeds ([`skills/simcraft-eval`](skills/simcraft-eval/SKILL.md)).
+*How you improve the engine:* design games that push it. When a game hits a wall (a rule you cannot express, a feel
+you cannot tune), that wall becomes the next engine feature, recorded with its evidence in
+[`docs/emergence.md`](docs/emergence.md). Most features in simcraft started that way.
 
-```toml
-[bus]
-log = "runs/market.jsonl"          # every act, event and tick hash
-listen = "127.0.0.1:7878"          # the same, live: nc 127.0.0.1 7878
-```
+**Game developers.** You get a deterministic core that runs headless for tests and bots, a C API for Unity and
+Unreal, a GPU player with cameras, input, audio and glTF models as data, and replays that reproduce a bug exactly.
+*How you improve the engine:* build views, controls, cameras and host adapters (`sim-gpu`, `adapters/`); bring
+assets; play the games and report what feels wrong, with a `--feel` probe or a replay file to show it.
 
-```bash
-cargo run -q -p sim-agent -- games/market --replay runs/market.jsonl
-# {"ok":true,"verified_ticks":150,"acts":234,...}
-```
+**Engineers.** You get an integer physics engine small enough to read, a rules compiler, state charts, and a
+measurement culture: every optimisation is a saved step with the world's hash unchanged
+([`games/traffic/PERF.md`](games/traffic/PERF.md): 94× faster at 1,600 cars, step by step).
+*How you improve the engine:* the physics layer's next steps are planned in
+[`docs/plans/physics-and-vehicles.md`](docs/plans/physics-and-vehicles.md): suspension with sub-stepped springs,
+general rigid bodies, islands and sleeping, a structure-of-arrays state. Tests come first (`test/`, and oracle
+tests in `sim-physics`), and `tools/check.sh` must stay green. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-### See it
+## Performance
 
-```bash
-cargo run --release -p sim-render -- games/colony3d     # surface, nest cross-section, 3D; tab selects an ant
-```
+Measured on an Apple Silicon laptop (release builds):
 
-A pixel-art ant farm, with parallax hills and seasons (true pixels in Ghostty, kitty and WezTerm; half-blocks elsewhere):
-`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/diorama.ron`
-(procedural backdrops) or `views/generated.ron` (Higgsfield-generated backdrops, pixelated with `simcraft-pixelate`).
+| | |
+|---|---|
+| Vehicle physics, full model with 8 sub-steps | ~150 ns per car per tick (1,000 cars: 0.15 ms) |
+| `games/traffic`, 1,600 cars with rules and queries | 2.72 ms per tick (from 257 ms, [PERF.md](games/traffic/PERF.md)) |
+| `games/race` drive view, 8 cars + mirror, 1440×810 | ~5 ms GPU per frame |
+| Autopilot lap, simulated headless | ~13,000× faster than real time |
 
-Layered 2.5D, with perspective states you define and switch by clicking:
-`cargo run --release -p sim-render -- games/colony3d --view games/colony3d/views/layers.ron`.
+## Supported platforms
 
-Play the dungeon yourself: `cargo run --release -p sim-render -- games/mercy_dungeon` (WASD walks the hero, F fights,
-R spares; `--scheme left_hand` for IJKL). Controls are data too (`games/<name>/input.ron`): schemes for either hand,
-and contexts that follow the game, so the same keys walk the hero or pan the view depending on what is selected.
-
-The interface is data too: `games/colony3d/view.ron` lays out components (world views in 2D, 2.5D, 3D or any
-cross-section, inspector, trends) with a theme and an asset pack (`assets/ants.ron`).
-
-## Save and load
-
-`{"cmd":"snapshot"}` returns the whole game; `{"cmd":"restore",...}` goes back to it, and the future is bit-identical.
-
-### Unity and Unreal
-
-The core is also a C library (`libsimcraft`, header `crates/sim-ffi/include/simcraft.h`).
-`adapters/build-native.sh` builds it for the host adapters:
-
-- Unity: `adapters/unity/com.simcraft.core` (UPM package, `SimcraftWorld` component)
-- Unreal: `adapters/unreal/Simcraft` (plugin, `ASimcraftWorld` actor, Blueprint-callable)
-
-Hosts display; the core decides. The same `game.ron` runs everywhere.
-
-## Test it
-
-A game is tested by playing it, in a file (`test/scenarios/*.ron`): step, act as a player, expect things about the
-world, snapshot what you saw. No Rust needed; engine developers use the same library (`test/`, crate `simtest`)
-with [insta](https://github.com/mitsuhiko/insta) snapshots and [proptest](https://github.com/proptest-rs/proptest)
-properties.
-
-```ron
-Scenario(
-    name: "wolf_sheep: predation off means no kills",
-    game: "games/wolf_sheep",
-    switches: { "predation": false },
-    steps: [ Step(150), Expect("events.kill == 0") ],
-)
-```
-
-```bash
-cargo run -p simtest          # every scenario, with a report
-cargo test                    # everything, including snapshots and properties
-```
+- **Simulation core** (`sim-core`, `sim-state`, `sim-rules`, `sim-physics`): native and `wasm32`.
+- **`simcraft-play`:** developed and tested on macOS (Metal). wgpu also targets Vulkan and DX12; Linux and Windows
+  builds are planned.
+- **Host adapters:** the C API, the C++ wrapper and the C# `Simulation` are tested. The Unity `SimcraftWorld`
+  component and the Unreal module are written, but not yet compiled in their editors.
 
 ## Status
 
-simcraft is young. What works today, and what does not yet:
-
-- **Worlds are grids with continuous motion on top:** positions and velocities finer than a cell, and vehicles driven
-  by simcraft's own physics engine (`sim-physics`). There are no general rigid bodies yet (stacks, ragdolls), and no
-  suspension yet.
-- **Renderers:** the terminal (ASCII and pixel art) and a GPU renderer (`sim-gpu`, wgpu): stages, tracks,
-  first-person voxel worlds, and the drive view that `games/race` uses. Hosts (Unity, Unreal) can draw instead.
-- **Host adapters:** the C API, the C++ wrapper and the C# `Simulation` are tested; the Unity `SimcraftWorld` component
-  and the Unreal module are written but not yet compiled in their editors.
-- **Breaking changes will happen** before 1.0. Golden hashes make sure they never happen silently to existing games.
-
-More detail: [`docs/architecture.md`](docs/architecture.md). Want to change the engine? [`CONTRIBUTING.md`](CONTRIBUTING.md).
+simcraft is young, and breaking changes will happen before 1.0. Golden hashes make sure they never happen silently
+to existing games. The physics engine has vehicles, contact and tracks. It does not yet have suspension, general
+rigid bodies (stacks, joints, ragdolls) or continuous collision detection.
 
 ## License
 
