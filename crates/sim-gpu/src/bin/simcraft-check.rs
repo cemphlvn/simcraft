@@ -140,6 +140,57 @@ fn check_roam(roam: &sim_gpu::roam::Roam, engine: &Engine<Running, Game>, r: &mu
     }
 }
 
+/// A drive view names its cars' kind (moving, controllable), an action whose args are exactly its axes, buttons
+/// and an autopilot switch that are declared actions with the args they pass. Returns what a player would press.
+fn check_drive(d: &sim_gpu::drive::Drive, engine: &Engine<Running, Game>, r: &mut Report) -> Vec<(String, String, BTreeMap<String, i64>)> {
+    let game = engine.rules();
+    let mut presses = Vec::new();
+    match game.def.kinds.get(&d.cars) {
+        None => r.error(format!("drive.ron: cars are kind '{}', which the game does not have", d.cars)),
+        Some(k) => {
+            if k.motion.is_none() {
+                r.error(format!("drive.ron: kind '{}' has no `motion` (the view reads px, py and yaw)", d.cars));
+            }
+            if !game.cfg.agent.controllable.contains(&d.cars) {
+                r.warn(format!("drive.ron: '{}' is not controllable (engine.toml [agent]): the keys will be refused", d.cars));
+            }
+            if let Some((p, _)) = &d.you
+                && !k.props.contains_key(p)
+            {
+                r.error(format!("drive.ron: you are the car whose '{p}' matches, and '{}' has no such prop", d.cars));
+            }
+        }
+    }
+    let mut want = |what: String, action: &str, args: Vec<&String>| {
+        let Some(a) = game.def.actions.iter().find(|a| a.name == action) else {
+            r.error(format!("drive.ron: {what} names action '{action}', which the game does not declare"));
+            return;
+        };
+        let mut have: Vec<&String> = args;
+        have.sort();
+        let mut takes: Vec<&String> = a.args.iter().collect();
+        takes.sort();
+        if have != takes {
+            r.error(format!("drive.ron: {what} passes {have:?} to '{action}', which takes {takes:?}"));
+        }
+    };
+    if let Some(c) = &d.controls {
+        want("controls".into(), &c.action, c.axes.keys().collect());
+        let full: BTreeMap<String, i64> = c.axes.keys().map(|k| (k.clone(), if k.contains("brake") { 0 } else { 600 })).collect();
+        presses.push((d.cars.clone(), c.action.clone(), full));
+        for b in &c.buttons {
+            want(format!("key '{}'", b.key), &b.action, b.args.keys().chain(b.toggle.iter()).collect());
+            let mut args = b.args.clone();
+            args.extend(b.toggle.iter().map(|t| (t.clone(), 1)));
+            presses.push((d.cars.clone(), b.action.clone(), args));
+        }
+    }
+    if let Some(a) = &d.autopilot {
+        want("autopilot".into(), &a.action, vec![&a.arg]);
+    }
+    presses
+}
+
 fn run(dir: &Path, ticks: u32) -> Report {
     let mut r = Report { errors: Vec::new(), warns: Vec::new(), notes: Vec::new() };
     let panels: Vec<PathBuf> = ["engine.toml", "play.toml"].iter().map(|p| dir.join(p)).filter(|p| p.exists()).collect();
@@ -204,6 +255,12 @@ fn run(dir: &Path, ticks: u32) -> Report {
                         }
                     }
                     Err(e) => r.error(format!("track.ron: {e}")),
+                }
+            }
+            if dir.join("drive.ron").exists() {
+                match sim_gpu::drive::load(dir, engine.rules()) {
+                    Ok((drive, _)) => presses.extend(check_drive(&drive, &engine, &mut r)),
+                    Err(e) => r.error(format!("drive.ron: {e}")),
                 }
             }
             if dir.join("roam.ron").exists() {

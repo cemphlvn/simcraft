@@ -49,5 +49,10 @@ Game(
         (name: "drive", for: "car", args: ["throttle", "brake", "steer"], when: "me.human == 1",
          then: [ Set("throttle", "clamp(arg.throttle, 0, 1000)"), Set("brake", "clamp(arg.brake, 0, 1000)"),
                  Set("steer", "clamp(arg.steer, -1000, 1000)") ]),
+        // Reverse in (1) or out (0); and handing your car to the autopilot (1) or taking it back (0), aids on.
+        (name: "reverse", for: "car", args: ["on"], when: "me.human == 1 && (arg.on == 0 || arg.on == 1)",
+         then: [ Set("reverse", "arg.on") ]),
+        (name: "autopilot", for: "car", args: ["on"], when: "me.human == 1 && (arg.on == 0 || arg.on == 1)",
+         then: [ Set("pilot", "arg.on"), Set("aids", "1") ]),
     ],
 )

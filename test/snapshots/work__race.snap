@@ -1,6 +1,5 @@
 ---
 source: test/tests/all/work.rs
-assertion_line: 75
 expression: profile(&dir)
 ---
 ticks 60, entities per tick 8.0
@@ -10,6 +9,7 @@ hottest rules (checks per tick, % that fired):
   grid                           8.0    1.7%
   lap                            8.0    0.0%
   odometer                       8.0  100.0%
+  autopilot                      0.0    0.0%
   drive                          0.0    0.0%
-  shift                          0.0    0.0%
+  reverse                        0.0    0.0%
 checked but never fired: lap

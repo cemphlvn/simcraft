@@ -64,6 +64,7 @@ pub struct Drive {
     #[serde(default)]
     pub sound: Sound,
     #[serde(default)]
+    /// The game's own driver for your car (`O`, `--auto`).
     pub autopilot: Option<Autopilot>,
     /// Speed on the dash: "mph" or "kmh".
     #[serde(default = "mph")]
@@ -110,6 +111,8 @@ pub struct Props {
     pub position: String,
     /// The number painted on the car (else its id).
     pub number: String,
+    /// A knock from contact this tick (N·s): the head jolts.
+    pub impact: String,
 }
 
 impl Default for Props {
@@ -132,6 +135,7 @@ impl Default for Props {
             best_lap_ms: s("best_lap_ms"),
             position: s("position"),
             number: s("number"),
+            impact: s("impact"),
         }
     }
 }
@@ -196,6 +200,8 @@ pub struct Head {
     /// Buzz from the road at 80 m/s (m, grows with the square of speed), and bumps fixed to the track (m).
     pub vibration: f32,
     pub bumps: f32,
+    /// How hard contact throws the head: m/s per N·s of `impact`.
+    pub jolt: f32,
 }
 
 impl Default for Head {
@@ -214,6 +220,7 @@ impl Default for Head {
             look_stiffness: 10.0,
             vibration: 0.0012,
             bumps: 0.004,
+            jolt: 0.00012,
         }
     }
 }
@@ -399,6 +406,9 @@ pub struct KeyAction {
     pub action: String,
     #[serde(default)]
     pub args: BTreeMap<String, i64>,
+    /// This arg flips between 1 and 0 on each press.
+    #[serde(default)]
+    pub toggle: Option<String>,
 }
 
 /// One analog value from keys: a held key ramps it up over `rise_ms`, letting go brings it back over `fall_ms`.
@@ -450,47 +460,13 @@ impl Default for Sound {
     }
 }
 
-/// A driver the view can lend to cars (the others in a demo, yours in `--auto`, measured runs): it follows the
-/// groove at a pace the grip allows, through the same action as your keys, so its inputs land in replays too.
+/// Handing your car to the game's own driver (its autopilot, with racecraft): the action and its arg, sent
+/// with 1 to hand over and 0 to take back.
 #[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct Autopilot {
-    /// Top speed it aims for (m/s) and the sideways grip it trusts (m/s²).
-    pub speed: f32,
-    pub grip: f32,
-    /// Seconds ahead it looks.
-    pub lookahead: f32,
-    /// Steer (1000 = full) per unit of path curvature (1/m): the car's steering gain, as the driver learnt it.
-    pub steer_per_curvature: f32,
-    /// Steer per metre off its line where the car is now.
-    pub offset_gain: f32,
-    /// Metres between lanes of different cars.
-    pub lanes: f32,
-    /// It shifts up past `shift_up` rpm and down below `shift_down`, with these actions (none: the car shifts itself).
-    pub shift_up: f32,
-    pub shift_down: f32,
-    pub upshift: Option<KeyAction>,
-    pub downshift: Option<KeyAction>,
-    /// Who it drives in a window: "others", "all" or "none".
-    pub drives: String,
-}
-
-impl Default for Autopilot {
-    fn default() -> Self {
-        Autopilot {
-            speed: 84.0,
-            grip: 27.0,
-            lookahead: 0.9,
-            steer_per_curvature: 23900.0,
-            offset_gain: 6.0,
-            lanes: 2.4,
-            shift_up: 9300.0,
-            shift_down: 5200.0,
-            upshift: None,
-            downshift: None,
-            drives: "others".into(),
-        }
-    }
+    pub action: String,
+    pub arg: String,
 }
 
 /// Loads `drive.ron` and the track: the game's own (`track:` in game.ron), else the one drive.ron names.
@@ -552,6 +528,8 @@ pub struct CarView {
     pub best_lap_ms: Option<i64>,
     pub position: Option<i64>,
     pub number: i64,
+    /// Contact this tick (N·s).
+    pub impact: f32,
     /// Accelerations it reports (m/s²: forward, left) and its body motion (radians: nose up, right side down).
     pub accel: Option<(f32, f32)>,
     pub body: Option<(f32, f32)>,
@@ -765,6 +743,14 @@ impl Composer<'_> {
         let fr = seat(self.track, self.ground, you, body);
         let f = felt_in(&fr);
         let hf = spring(h.stiffness, h.damping);
+        // Contact: a knock throws the head (m/s per N·s), sideways and up, then the springs bring it back.
+        if you.impact > 0.0 {
+            let kick = (you.impact * h.jolt).min(1.2);
+            let side = if (time * 97.0).fract() < 0.5 { 1.0 } else { -1.0 };
+            rig.head[0].vel += kick * side;
+            rig.head[1].vel += kick * 0.4;
+            rig.pitch.vel += kick * 30.0;
+        }
         let head = V3(
             rig.head[0].update(h.lateral * f.0 / G, dt, hf),
             rig.head[1].update(-h.vertical * (f.1 - G) / G, dt, hf),
@@ -1084,60 +1070,6 @@ impl Axes {
     }
 }
 
-// ---------------------------------------------------------------- the autopilot
-
-/// The autopilot's inputs for car `c` (its action's args, and a shift if it wants one).
-pub fn autopilot<'a>(
-    ap: &'a Autopilot,
-    track: &Track,
-    ground: &Ground,
-    look: &Look,
-    c: &CarView,
-    lane: f32,
-) -> (BTreeMap<String, i64>, Option<&'a KeyAction>) {
-    let v = c.speed.max(5.0);
-    let ahead = (v * ap.lookahead).max(14.0);
-    let target_s = c.s + ahead;
-    let tc = centre(track, target_s);
-    let line = (scene::groove_centre(look, ground, tc.bank) + lane).clamp(-ground.half + 2.2, ground.half - 1.5);
-    let tp = ground.point(&tc, line, 0.0);
-    let (dx, dy) = (tp.0 - c.x, tp.2 - c.y);
-    let (fx, fy) = (c.yaw.cos(), c.yaw.sin());
-    let (fwd, left) = (dx * fx + dy * fy, -dx * fy + dy * fx);
-    let kappa = 2.0 * left / (fwd * fwd + left * left).max(1.0);
-    // Pure pursuit, plus a pull back toward the line where the car is now (it understeers at speed).
-    let here = centre(track, c.s);
-    let line_here = (scene::groove_centre(look, ground, here.bank) + lane).clamp(-ground.half + 2.2, ground.half - 1.5);
-    let steer = (kappa * ap.steer_per_curvature + (line_here - c.offset) * ap.offset_gain).clamp(-1000.0, 1000.0);
-    // The pace: the slowest the grip allows over the road ahead, less what braking can take off before it (6 m/s²).
-    let mut pace = ap.speed;
-    let mut d = 0.0f32;
-    while d < v * 3.0 + 40.0 {
-        let (c0, c1) = (centre(track, c.s + d), centre(track, c.s + d + 10.0));
-        let curv = (wrap_pi(c1.heading - c0.heading) / 10.0).abs();
-        if curv > 1e-5 {
-            // Banking lends grip: the road pushes the car round as well as the tyres.
-            let corner = (ap.grip * (1.0 + 1.2 * c0.bank.sin().abs()) / curv).sqrt();
-            pace = pace.min((corner * corner + 2.0 * 6.0 * d).sqrt());
-        }
-        d += 10.0;
-    }
-    // Gentle feet: lift before braking, and never stamp on either pedal at the limit.
-    let err = pace - c.speed;
-    let throttle = if err > 0.0 { (0.55 + err * 0.15).clamp(0.0, 1.0) } else { (0.35 + err * 0.12).clamp(0.0, 1.0) };
-    let brake = if err < -3.0 { ((-err - 3.0) * 0.05).clamp(0.0, 0.35) } else { 0.0 };
-    let mut args = BTreeMap::new();
-    args.insert("throttle".to_string(), (throttle * 1000.0).round() as i64);
-    args.insert("brake".to_string(), (brake * 1000.0).round() as i64);
-    args.insert("steer".to_string(), steer.round() as i64);
-    let shift = match (c.rpm, c.gear) {
-        (Some(r), Some(_)) if r >= ap.shift_up && throttle > 0.5 => ap.upshift.as_ref(),
-        (Some(r), Some(g)) if r < ap.shift_down && g > 1 => ap.downshift.as_ref(),
-        _ => None,
-    };
-    (args, shift)
-}
-
 // ---------------------------------------------------------------- playing it
 
 /// One accepted input: when, whose, what (a run is its seed and these).
@@ -1203,6 +1135,9 @@ pub struct DrivePlay {
     pub script: Option<Vec<DrivePress>>,
     /// The autopilot drives your car too.
     pub auto_you: bool,
+    auto_sent: Option<bool>,
+    /// Toggle keys that are on.
+    toggled: BTreeMap<String, bool>,
     spotter: Spotter,
     pub refused: Option<(String, String, f32)>,
     /// Seconds a tick lasts.
@@ -1229,6 +1164,8 @@ impl DrivePlay {
             log: Vec::new(),
             script: None,
             auto_you: false,
+            auto_sent: None,
+            toggled: BTreeMap::new(),
             spotter: Spotter::default(),
             refused: None,
             tick_dt: 1.0 / rate,
@@ -1293,6 +1230,7 @@ impl DrivePlay {
                     best_lap_ms: n(&pr.best_lap_ms),
                     position: n(&pr.position),
                     number: n(&pr.number).unwrap_or(e.id as i64),
+                    impact: f(&pr.impact, 1.0).unwrap_or(0.0),
                     accel: match (f(&pr.g_long, 0.001), f(&pr.g_lat, 0.001)) {
                         (Some(l), Some(t)) => Some((l, t)),
                         _ => None,
@@ -1402,23 +1340,8 @@ impl DrivePlay {
         }
     }
 
-    /// Who the autopilot drives now.
-    fn bots(&self) -> Vec<EntityId> {
-        let Some(ap) = &self.drive.autopilot else { return Vec::new() };
-        let me = self.you();
-        self.world()
-            .of_kind(&self.drive.cars)
-            .map(|e| e.id)
-            .filter(|&id| match ap.drives.as_str() {
-                "all" => true,
-                "others" => Some(id) != me || self.auto_you,
-                _ => Some(id) == me && self.auto_you,
-            })
-            .collect()
-    }
-
-    /// Inputs for the tick about to run: yours from the axes (or the autopilot), the autopilot's for the others; only
-    /// what changed is sent.
+    /// Inputs for the tick about to run: the autopilot switched on or off when asked, else yours from the axes;
+    /// only what changed is sent.
     fn inputs(&mut self) {
         let tick = self.world().tick;
         if let Some(script) = &self.script {
@@ -1428,27 +1351,25 @@ impl DrivePlay {
             }
             return;
         }
-        let cars = self.cars();
-        let me = self.you();
-        if let (Some(c), Some(id), false) = (self.drive.controls.clone(), me, self.auto_you) {
-            let speed = cars.iter().find(|v| v.id == id).map_or(0.0, |v| v.speed);
+        let Some(id) = self.you() else { return };
+        if let Some(ap) = self.drive.autopilot.clone()
+            && self.auto_sent != Some(self.auto_you)
+        {
+            let args = BTreeMap::from([(ap.arg.clone(), self.auto_you as i64)]);
+            if self.send(id, &ap.action, args) {
+                self.auto_sent = Some(self.auto_you);
+                // Taking the wheel back: the pedals and the wheel are sent again as they are now.
+                self.cars.entry(id).or_default().sent.clear();
+            }
+        }
+        if self.auto_you {
+            return;
+        }
+        if let Some(c) = self.drive.controls.clone() {
+            let speed = self.cars().iter().find(|v| v.id == id).map_or(0.0, |v| v.speed);
             let args = self.axes.args(&c, speed);
             if self.cars.get(&id).is_none_or(|s| s.sent != args) && self.send(id, &c.action, args.clone()) {
                 self.cars.entry(id).or_default().sent = args;
-            }
-        }
-        let bots = self.bots();
-        let Some(ap) = self.drive.autopilot.clone() else { return };
-        let action = self.drive.controls.as_ref().map_or_else(|| "drive".to_string(), |c| c.action.clone());
-        for (i, id) in bots.iter().enumerate() {
-            let Some(c) = cars.iter().find(|v| v.id == *id) else { continue };
-            let lane = if Some(*id) == me { 0.0 } else { ((i % 3) as f32 - 1.0) * ap.lanes };
-            let (args, shift) = autopilot(&ap, &self.track, &self.scene.ground, &self.drive.look, c, lane);
-            if self.cars.get(id).is_none_or(|s| s.sent != args) && self.send(*id, &action, args.clone()) {
-                self.cars.entry(*id).or_default().sent = args;
-            }
-            if let Some(sh) = shift {
-                self.send(*id, &sh.action, sh.args.clone());
             }
         }
     }
@@ -1461,7 +1382,17 @@ impl DrivePlay {
             return true;
         }
         if let Some(id) = self.you() {
-            self.send(id, &b.action, b.args);
+            let mut args = b.args.clone();
+            // A toggle flips its arg between 1 and 0 each press (reverse in, reverse out).
+            if let Some(t) = &b.toggle {
+                let on = !self.toggled.get(key).copied().unwrap_or(false);
+                args.insert(t.clone(), on as i64);
+                if self.send(id, &b.action, args) {
+                    self.toggled.insert(key.to_string(), on);
+                }
+            } else {
+                self.send(id, &b.action, args);
+            }
         }
         true
     }
@@ -1480,6 +1411,8 @@ impl DrivePlay {
         self.script = None;
         self.spotter = Spotter::default();
         self.refused = None;
+        self.auto_sent = None;
+        self.toggled.clear();
         self.observe();
     }
 
@@ -1644,7 +1577,9 @@ pub struct DriveFeel {
     /// Frames where your car was moving but the eye did not (waiting for a tick): 0 = it glides.
     pub stall: f32,
     /// Largest change of the eye's velocity between frames (m a frame), vibration left out.
+    /// (99th percentile; the largest, which contact makes, beside it.)
     pub eye_jerk: f32,
+    pub eye_jerk_max: f32,
     /// How long the head takes to answer a sideways g-force (ms, the lag of best correlation).
     pub head_g_lag: f32,
     /// How far the horizon drawn is from where the neck aims it (degrees, mean), and its largest tilt.
@@ -1722,6 +1657,9 @@ pub fn feel_probe(play: &mut DrivePlay, frames: u32, fps: f32) -> DriveFeel {
         .filter(|w| len(w[1] - w[0]) < 10.0 && len(w[2] - w[1]) < 10.0)
         .map(|w| len((w[2] - w[1]) - (w[1] - w[0])))
         .fold(0.0, f32::max);
+    let mut jerks: Vec<f32> = eyes.windows(3).map(|w| len((w[2] - w[1]) - (w[1] - w[0]))).collect();
+    jerks.sort_by(f32::total_cmp);
+    let jerk_p99 = jerks.get(jerks.len() * 99 / 100).copied().unwrap_or(0.0);
     // Lag: the shift (frames) that best lines the head's sideways offset up with the sideways g felt.
     let corr = |k: usize| -> f32 {
         let n = lat.len().saturating_sub(k);
@@ -1740,13 +1678,15 @@ pub fn feel_probe(play: &mut DrivePlay, frames: u32, fps: f32) -> DriveFeel {
     };
     let best = (0..(fps as usize / 2)).max_by(|a, b| corr(*a).total_cmp(&corr(*b))).unwrap_or(0);
     let me = play.you();
-    let lap = me.and_then(|id| play.cars.get(&id)).and_then(|s| s.best_lap).unwrap_or(0.0);
+    let best_prop = play.cars().into_iter().find(|c| c.you).and_then(|c| c.best_lap_ms).filter(|m| *m > 0).map(|m| m as f32 / 1000.0);
+    let lap = best_prop.or_else(|| me.and_then(|id| play.cars.get(&id)).and_then(|s| s.best_lap)).unwrap_or(0.0);
     let r = |v: f32| (v * 1000.0).round() / 1000.0;
     let mut sorted = costs.clone();
     sorted.sort_by(f64::total_cmp);
     DriveFeel {
         stall: r(stalled as f32 / moving.max(1) as f32),
-        eye_jerk: r(jerk),
+        eye_jerk: r(jerk_p99),
+        eye_jerk_max: r(jerk),
         head_g_lag: r(best as f32 * 1000.0 / fps),
         horizon_error: r(horizon.iter().sum::<f32>() / horizon.len().max(1) as f32),
         horizon_deg: r(rolls.iter().cloned().fold(0.0, f32::max)),

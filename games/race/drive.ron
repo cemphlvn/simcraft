@@ -1,7 +1,7 @@
-// The race from the driver's seat of car 1 (the drive view, docs/architecture.md). The track and where it sits in the
-// world come from game.ron (`track:`); this file says how it looks, how the head moves, and how the keys drive.
-// Keys: up throttle, down brake, left/right steer (ramped, less at speed), A/Z paddles up/down, C cockpit/chase,
-// O autopilot, P pause, R restart, M mute, Esc quit.
+// The race from the driver's seat of your car (the drive view, docs/architecture.md). The track and where it sits in
+// the world come from game.ron (`track:`); this file says how it looks, how the head moves, and how the keys drive.
+// Keys: up throttle, down brake, left/right steer (ramped, less at speed), A/Z paddles up/down, Backspace reverse,
+// C cockpit/chase, O autopilot, P pause, R restart, M mute, Esc quit.
 Drive(
     cars: "car",
     you: ("human", 1),
@@ -25,10 +25,12 @@ Drive(
         buttons: [
             (key: "a", action: "shift", args: { "dir": 1 }),
             (key: "z", action: "shift", args: { "dir": -1 }),
+            // Reverse in, and out on the next press.
+            (key: "backspace", action: "reverse", toggle: "on"),
         ],
     ),
-    // For `--auto` and measured laps: pure pursuit on the groove. The car shifts itself (automatic until a paddle).
-    autopilot: (speed: 88.0, grip: 19.0, lookahead: 0.8, steer_per_curvature: 13000.0, offset_gain: 6.0, drives: "none"),
+    // O and `--auto`: the game's own driver takes your car, and gives it back.
+    autopilot: (action: "autopilot", arg: "on"),
     look: (
         // Charlotte on race day: late afternoon, the sun low over turn 2.
         sun: (205.0, 24.0),

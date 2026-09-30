@@ -1292,6 +1292,7 @@ fn drive_key(k: &Key) -> Option<String> {
         Key::Named(NamedKey::Shift) => "shift".into(),
         Key::Named(NamedKey::Enter) => "enter".into(),
         Key::Named(NamedKey::Escape) => "esc".into(),
+        Key::Named(NamedKey::Backspace) => "backspace".into(),
         Key::Character(c) => c.to_lowercase(),
         _ => return None,
     })

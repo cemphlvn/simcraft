@@ -51,7 +51,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 | `sim-ffi` | `cdylib` + `staticlib`, C header; the agent protocol behind `extern "C"` | No |
-| `sim-gpu` | HD renderer (`wgpu` 29 + `winit` 0.30): a game's side-view `stage.ron` (2.5D quads) or first-person `track.ron` (3D: perspective camera, depth, fog), composed without a GPU (`stage`, `track`, tested) and drawn by `gpu`; camera effects driven by game events (`fx`); `simcraft-play` (window, `--shot`, `--record`, `--bench`), `simcraft-import` | No |
+| `sim-gpu` | HD renderer (`wgpu` 29 + `winit` 0.30): a game's side-view `stage.ron` (2.5D quads), first-person `track.ron` (3D: perspective camera, depth, fog) or the driver's seat `drive.ron` (a cockpit on a TrackDef), composed without a GPU (`stage`, `track`, `drive`, tested) and drawn by `gpu`; camera effects driven by game events (`fx`); `simcraft-play` (window, `--shot`, `--record`, `--bench`), `simcraft-import` | No |
 | `sim-kernel` (`kernel/`) | 32-bit integer tensor machine that runs ONNX graphs (brains, rules as graphs); `Graph` builds models in code; `genome`/`mutate` for learning | No |
 | `sim-render` | Terminal renderer (cell buffer, diff, frame loop), primitives, 3D voxel view, `view.ron`; `simcraft-view` | No |
 
@@ -913,6 +913,61 @@ Track(
   the camera's effects keep playing. **Screen**: `screen: (w, h)` shapes the window and shots (portrait for a phone);
   `--size` overrides it. Arrow keys are `left right up down`.
 
+## Driving from the seat (`games/<name>/drive.ron`, `sim_gpu::drive`)
+
+A game whose cars are free-moving kinds on a TrackDef (`games/race`) is played from the driver's seat. The view only
+reads: cars' `px`, `py` (mm) and `yaw` (65536 a turn), and, when they exist, props named in `props` (`speed`, `rpm`,
+`gear`, `steer`, `throttle`, `brake`, `g_long`/`g_lat` as felt, `pitch`/`roll`, `lap`, lap times, `position`,
+`number`, `impact`). What a car does not report the view derives (speed and g from motion, body roll and pitch from g,
+laps and the running order from progress round the track) or leaves out. `simcraft-play` picks it when the game has a
+`drive.ron`.
+
+```ron
+Drive(
+    cars: "car", you: ("human", 1),                     // the kind; which one is yours
+    props: (last_lap_ms: "lap_ms", best_lap_ms: "best_ms"),
+    cockpit: (fov: 50.0, wheel: (lock: 190.0), shift_lights: (7800.0, 9200.0)),   // eye, head, body, mirror...
+    controls: (action: "drive",
+               axes: { "throttle": (key: "up", rise_ms: 180.0, fall_ms: 120.0),
+                       "steer": (neg: "right", pos: "left", speed_sensitive: (60.0, 0.1)) },
+               buttons: [ (key: "a", action: "shift", args: { "dir": 1 }), (key: "backspace", action: "reverse", toggle: "on") ]),
+    autopilot: (action: "autopilot", arg: "on"),       // O and --auto hand your car to the game's own driver
+    look: (sun: (205.0, 24.0), pit_road: (-300.0, 240.0), stands: [...]),
+)
+```
+
+- **The track** is the game's (`track:` in game.ron, file and origin); `drive.ron` may name one only for a game
+  that has none. Built once from `Track::pose` (`drive::scene`) and kept on the GPU: banked asphalt with paving seams
+  and a darker groove (low in the turns, high on the straights), a flatter apron with white and double yellow lines,
+  the start/finish line and pit stalls as strips of the grid (never decals that flicker), the SAFER barrier on a
+  concrete wall, the catch fence leaning in, pit road behind its wall, grandstands with a crowd and a suite tower,
+  a mowed infield, haulers, land and a tree line in the haze. Every picture is generated (`drive::geom`); cars sit on
+  the surface there (height and tilt from `locate` and the ground's slope, so on the apron too).
+- **The cockpit camera** (`C`: chase): a fixed field of view (no zoom with speed); the head a spring-damper leaning
+  against the felt g by millimetres (a Cup seat holds it), nodding under braking, jolted by `impact`; the horizon
+  tilting with the banking, `level` of it taken back by the neck on a spring (the vestibular reflex); buzz growing
+  with the square of speed and bumps fixed to places on the track; the eyes a few degrees into the turn from the yaw
+  rate. Geometry around it: dash, dot-matrix display (gear, speed, rpm, position) with shift lights, switch panel,
+  a wheel turning `steer × lock` with gloved hands, roll cage, A-pillars and the centre post, window net, windshield
+  with its sun strip, and a rear-view mirror: the driver's eye mirrored in its glass renders the scene into a texture
+  every frame (`Gpu::render_into`, drawn before the frame that shows it).
+- **HUD**: position, gaps ahead and behind (seconds), lap, current, last and best lap; spotter calls (car low, car
+  high, three wide, still there, clear) from who overlaps you along the track.
+- **Controls** (analog, keyboard now): each arg of `action` is an axis; held keys ramp it over `rise_ms`, release
+  over `fall_ms`, `speed_sensitive: (at, keep)` leaves `keep` of it from `at` m/s. The values go through the declared
+  action once a tick when they change, like any press, so they land in the run log (`runs/`, `--replay`). Buttons are
+  actions with fixed args or a `toggle` arg. The ramp takes a target in -1..1 per axis, so a gamepad or a wheel will
+  set the target directly.
+- **Sound** (the host, never the simulation): the engine note synthesised from rpm and throttle (harmonics of the
+  four-stroke cycle, the firing order strongest, a V8's half order; a load-dependent rasp pulsed at the firing rate)
+  and wind with the square of speed, through `rodio`; `M` mutes.
+- **Measured** (`simcraft-play <game> --feel [--record N]`, `drive::feel_probe`, the autopilot driving you at 60
+  frames a second): `stall`, `eye_jerk` (99th percentile; `eye_jerk_max` is contact), `head_g_lag` (ms by which the
+  head follows sideways g), `horizon_error` (degrees between the drawn roll and the neck's aim), `horizon_deg`,
+  `head_max_mm`, `felt_g_max`, `offset` (where the car ran across the track), tick and frame cost, `p99_ms`,
+  `over_8ms`. `simcraft-check` checks the kind (moving, controllable), that the action's args are the axes, the
+  buttons' and the autopilot's actions and args.
+
 ## Input: actions, schemes and contexts (`input.ron`)
 
 What the player presses is an abstraction, like everything else: devices produce **actions**, and actions go to
@@ -1013,6 +1068,8 @@ Grid → world: `x → X`, `y → −Z` (Unity) / `−Y` (Unreal), times `CellSi
 - [ ] Capabilities: pick renderer and quality per machine
 - [x] HD stage: `sim-gpu` (wgpu), `stage.ron`, `simcraft-play`, `simcraft-import`; colony3d in natural-history art
 - [x] First person: `track.ron`, 3D camera and fog, views, built-in camera effects, tunable position switch (game 8, `games/lanes`)
+- [x] Driving from the seat: `drive.ron`, a cockpit that moves like a head, the track built from its TrackDef, analog
+  keyboard axes into a declared action, a mirror rendered to a texture, a synthesised engine note (`games/race`)
 - [x] First person in a voxel world: `roam.ron`, WASD and mouse, crawlers (`cling`), exact reach (`SetFieldAt`), the
   `field` request and structure evals (game 9, `games/mound`)
 - [x] Models: glTF import, instanced GPU skinning with PBR, the state-machine contract, `simcraft-model`, a rigged

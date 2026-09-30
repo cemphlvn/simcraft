@@ -80,6 +80,7 @@ fn car_at(track: &Track, s: f32, offset: f32, yaw_off: f32) -> CarView {
         best_lap_ms: None,
         position: None,
         number: 24,
+        impact: 0.0,
         accel: None,
         body: None,
         s,
