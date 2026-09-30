@@ -58,6 +58,8 @@ pub struct Drive {
     #[serde(default)]
     pub chase: Chase,
     #[serde(default)]
+    pub top: Top,
+    #[serde(default)]
     pub look: Look,
     #[serde(default)]
     pub controls: Option<Controls>,
@@ -289,6 +291,26 @@ pub struct Chase {
 impl Default for Chase {
     fn default() -> Self {
         Chase { height: 2.3, back: 8.5, fov: 55.0, stiffness: 25.0 }
+    }
+}
+
+/// The top-down camera: high above the car, a little behind it, nose up the screen (the heading on a spring), and
+/// rising with speed so there is always room to see the next corner coming.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Top {
+    /// Height at rest, and extra height per m/s (m).
+    pub height: f32,
+    pub per_speed: f32,
+    /// Look this far ahead of the car, as a share of the height (the car sits low on the screen).
+    pub lead: f32,
+    pub fov: f32,
+    pub stiffness: f32,
+}
+
+impl Default for Top {
+    fn default() -> Self {
+        Top { height: 45.0, per_speed: 0.9, lead: 0.35, fov: 50.0, stiffness: 12.0 }
     }
 }
 
@@ -613,7 +635,7 @@ pub struct RigOut {
 
 #[derive(Clone, Debug, Default)]
 pub struct Rig {
-    /// 0: cockpit, 1: chase.
+    /// 0: cockpit, 1: chase, 2: top-down.
     pub view: usize,
     head: [Spring; 3],
     pitch: Spring,
@@ -763,6 +785,9 @@ impl Composer<'_> {
         if rig.view == 1 {
             return (self.chase(you, &fr, rig, dt), fr);
         }
+        if rig.view == 2 {
+            return (self.top(you, &fr, rig, dt), fr);
+        }
         // The head's frame: the car's, turned into the turn and nodded.
         let (sl, cl) = look.to_radians().sin_cos();
         let f1 = fwd.scale(cl) - fr.r.scale(sl);
@@ -793,6 +818,22 @@ impl Composer<'_> {
         rig.out.eye_base = pos;
         rig.out.roll = 0.0;
         Eye { pos, target, roll: roll_of(pos, (target - pos).norm(), fr.u) * 0.3, fov: ch.fov, near: 0.1, far: 6000.0 }
+    }
+
+    fn top(&self, you: &CarView, fr: &Frame, rig: &mut Rig, dt: f32) -> Eye {
+        let t = &self.drive.top;
+        let last = rig.chase_unwrapped.unwrap_or(you.yaw);
+        let yaw = last + wrap_pi(you.yaw - last);
+        rig.chase_unwrapped = Some(yaw);
+        let y = rig.chase_yaw.update(yaw, dt, spring(t.stiffness, 1.0));
+        let fh = V3(y.cos(), 0.0, y.sin());
+        let h = t.height + t.per_speed * you.speed.abs();
+        // Almost straight down (a hair of tilt keeps "up the screen" defined): nose up, the car low on the screen.
+        let pos = fr.o + V3(0.0, h, 0.0) - fh.scale(h * 0.05);
+        let target = fr.o + fh.scale(h * t.lead);
+        rig.out.eye_base = pos;
+        rig.out.roll = 0.0;
+        Eye { pos, target, roll: 0.0, fov: t.fov, near: 0.5, far: 8000.0 }
     }
 
     /// The sky behind everything: a gradient that tilts with the horizon, the sun and its glare.
@@ -1539,7 +1580,7 @@ impl DrivePlay {
     }
 
     pub fn cycle_view(&mut self) {
-        self.rig.view = (self.rig.view + 1) % 2;
+        self.rig.view = (self.rig.view + 1) % 3;
     }
 
     pub fn title(&self, speed: f32, paused: bool) -> String {

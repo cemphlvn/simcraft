@@ -8,6 +8,7 @@
 //! A game with a `roam.ron` is first person in a voxel world: WASD, the mouse (click to capture it; esc lets it
 //! go), shift runs, space jumps, walking into a wall climbs it, left click drops, right click digs, f smells.
 //! `--shot` there looks at the tallest thing built after `--ticks`; `--feel` prints how moving feels (FEEL.md).
+//! A game with a `drive.ron` is driven from the seat (c: cockpit → chase → top-down; `--view 2` starts top-down).
 //! A game with a `track.ron` plays in first person (keys: its buttons', e.g. 1–4, space, Enter; c camera view;
 //! p pauses; R or N starts a new run, V watches the run just ended again; `--view N` starts a shot in view N; `--replay runs/X.jsonl`
 //! plays a saved run, in a window or into `--shot`/`--record`). Runs are saved to `runs/<game>-<time>.jsonl`.
@@ -742,7 +743,7 @@ fn run_drive(engine: Engine<Running, Game>, drive: Drive, track: sim_physics::Tr
     el.set_control_flow(ControlFlow::Poll);
     let window_size = if a.sized { Some(a.size) } else { drive.screen };
     let mut app = App {
-        play: Some(Start::Drive(Box::new((engine, drive, track, a.auto, script)))),
+        play: Some(Start::Drive(Box::new((engine, drive, track, a.auto, script, a.view)))),
         assets: Assets::default(),
         window: None,
         speed: rate * a.speed,
@@ -1079,11 +1080,11 @@ enum Start {
     Stage(Box<(Engine<Running, Game>, Stage)>),
     Track(Box<(Engine<Running, Game>, Track)>),
     Roam(Box<(Engine<Running, Game>, Roam)>),
-    /// The drive view, whether the autopilot drives you, a run to replay.
+    /// The drive view, whether the autopilot drives you, a run to replay, the camera to start in.
     Drive(Box<DriveStart>),
 }
 
-type DriveStart = (Engine<Running, Game>, Drive, sim_physics::Track, bool, Option<Vec<DrivePress>>);
+type DriveStart = (Engine<Running, Game>, Drive, sim_physics::Track, bool, Option<Vec<DrivePress>>, usize);
 
 /// A track's music: its current loop, found next to the game or in an `assets/` folder above it. No sound device,
 /// no music, no error: the game plays silently.
@@ -1499,8 +1500,9 @@ impl ApplicationHandler for App {
             }
             Start::Drive(b) => {
                 sim_gpu::drive::upload_textures(&mut gpu);
-                let (engine, drive, track, auto, script) = *b;
+                let (engine, drive, track, auto, script, view) = *b;
                 let mut p = DrivePlay::new(engine, drive, track);
+                p.rig.view = view;
                 p.auto_you = auto && script.is_none();
                 p.script = script;
                 self.engine_sound = EngineSound::new(&p.drive.sound);
