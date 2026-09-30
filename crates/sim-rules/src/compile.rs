@@ -247,6 +247,8 @@ struct NEnv {
     roll: Option<i64>,
     tick: Option<i64>,
     tick_rate: i64,
+    /// The interpreter scope has no `me`, `sense` or `it` (a bare kind): a fallback builds them for itself.
+    bare: bool,
 }
 
 /// Restores the previous native shadow when dropped.
@@ -437,10 +439,13 @@ struct Plan {
     guarded: bool,
     /// Which per-entity maps to build.
     sees: Sees,
+    /// Everything this kind evaluates is compiled (`crate::native`): no interpreter scope is built for it (no `me`,
+    /// `sense` or `it` maps); if a compiled expression falls back, the maps are made for that one expression.
+    bare: bool,
 }
 
 impl Plan {
-    const FULL: Plan = Plan { idle: false, guarded: false, sees: Sees { me: true, near: true } };
+    const FULL: Plan = Plan { idle: false, guarded: false, sees: Sees { me: true, near: true }, bare: false };
 }
 
 /// Does a piece of source mention `me` / `near`? Read from the text, so it can only err towards building
@@ -1755,13 +1760,38 @@ impl Game {
                         let r = rules.iter().fold(Sees::default(), |a, r| a.or(r.sees));
                         r.or(if chart { machines } else { Sees::default() }).or(Sees::of(&format!("{def:?}")))
                     };
-                    let plan =
-                        Plan { idle: plain && !chart && rules.is_empty(), guarded: plain && rules.iter().all(|r| r.guard.is_some()), sees };
+                    let bare = !sees.near
+                        && !native
+                        && !self.brains.contains_key(k)
+                        && std::env::var_os("SIMCRAFT_NO_BARE").is_none()
+                        && self.all_compiled(k, &rules);
+                    let plan = Plan {
+                        idle: plain && !chart && rules.is_empty(),
+                        guarded: plain && rules.iter().all(|r| r.guard.is_some()),
+                        sees,
+                        bare,
+                    };
                     (k.clone(), plan)
                 })
                 .collect()
         });
         plans.get(kind).copied().unwrap_or(Plan::FULL)
+    }
+
+    /// Is everything a kind evaluates compiled: its senses, its machine's conditions and actions, and its rules'
+    /// conditions, actions and scripts?
+    fn all_compiled(&self, kind: &str, rules: &[&CompiledRule]) -> bool {
+        let ex_ok = |x: &Ex| x.native.is_some();
+        let do_ok = |d: &CDo| {
+            let mut v = Vec::new();
+            d.int_exprs(&mut v);
+            v.into_iter().all(ex_ok)
+        };
+        let senses = self.senses.get(kind).into_iter().flatten().all(|(_, x)| ex_ok(x));
+        let machine = !self.kind_charts.contains_key(kind) || (self.exprs.iter().all(ex_ok) && self.blocks.iter().flatten().all(do_ok));
+        let rules_ok =
+            rules.iter().all(|r| r.when.as_ref().is_none_or(ex_ok) && r.then.iter().all(do_ok) && r.script.as_ref().is_none_or(ex_ok));
+        senses && machine && rules_ok
     }
 
     /// A guarded kind produces nothing here if its machine (checked natively) stays put and every rule's guard is
@@ -1787,6 +1817,13 @@ impl Game {
         let plan = self.plan(&e.kind);
         if plan.idle || (plan.guarded && self.all_guards_false(e)) {
             return Vec::new();
+        }
+        if plan.bare
+            && let Some(env) = self.bare_env(world, e)
+        {
+            let _n = nscope(Some(env));
+            let scope = if self.agent_view(&e.kind) { &mut scopes.agent } else { &mut scopes.full };
+            return self.eval_entity_in(world, e, scope);
         }
         if !self.agent_view(&e.kind) {
             let scope = &mut scopes.full;
@@ -1978,12 +2015,19 @@ impl Game {
         if let Some(v) = ex.native.as_ref().and_then(|n| self.native(|env| n.bool(env))) {
             if native_check() {
                 CTX.with(|c| c.borrow_mut().calls = before);
+                let len = scope.len();
+                self.dress(scope);
                 let r = self.rhai.eval_ast_with_scope::<bool>(scope, ex).map_err(|e| e.to_string());
+                scope.rewind(len);
                 assert_eq!(r, Ok(v), "native check: `{}`", ex.src);
             }
             return Ok(v);
         }
-        self.rhai.eval_ast_with_scope::<bool>(scope, ex).map_err(|e| e.to_string())
+        let len = scope.len();
+        self.dress(scope);
+        let r = self.rhai.eval_ast_with_scope::<bool>(scope, ex).map_err(|e| e.to_string());
+        scope.rewind(len);
+        r
     }
 
     fn eval_int(&self, scope: &mut Scope, ex: &Ex) -> Result<i64, String> {
@@ -2000,7 +2044,38 @@ impl Game {
     }
 
     fn eval_int_ast(&self, scope: &mut Scope, ast: &AST) -> Result<i64, String> {
-        self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string())
+        let len = scope.len();
+        self.dress(scope);
+        let r = self.rhai.eval_ast_with_scope::<i64>(scope, ast).map_err(|e| e.to_string());
+        scope.rewind(len);
+        r
+    }
+
+    /// A bare kind's scope has no `me`, `sense` or `it`: before the interpreter answers for it, they are made from
+    /// the native shadow (the caller rewinds after). Nothing happens for kinds with a full scope.
+    fn dress(&self, scope: &mut Scope) {
+        NENV.with(|n| {
+            let b = n.borrow();
+            let Some(env) = b.as_ref().filter(|e| e.bare) else { return };
+            bump(&self.work.maps);
+            // SAFETY: the shadow's pointers live as long as the evaluation (see `NEnv`).
+            scope.push_constant("me", entity_map(unsafe { env.me.as_ref() }, None));
+            let sense: Map = env
+                .sense
+                .iter()
+                .map(|(k, v)| {
+                    let d = match v {
+                        crate::native::Val::I(i) => Dynamic::from(*i),
+                        crate::native::Val::B(b) => Dynamic::from(*b),
+                    };
+                    (k.as_str().into(), d)
+                })
+                .collect();
+            scope.push_constant("sense", sense);
+            if let Some((it, d)) = env.it {
+                scope.push_constant("it", entity_map(unsafe { it.as_ref() }, Some(d)));
+            }
+        });
     }
 
     /// A compiled expression's value, if the fast paths are on, this thread has a native shadow of the scope, and
@@ -2024,6 +2099,25 @@ impl Game {
         })
     }
 
+    /// A bare kind's native shadow, its senses computed natively; None if one of them falls back (then the entity
+    /// takes the full path this tick).
+    fn bare_env(&self, world: &World, e: &Entity) -> Option<NEnv> {
+        let tick = (!self.agent_view(&e.kind)).then_some(world.tick as i64);
+        let mut env = self.nenv(e, None, tick);
+        env.bare = true;
+        if let Some(senses) = self.senses.get(&e.kind) {
+            let probe = NEnv { tick: Some(world.tick as i64), ..env.clone() };
+            let _n = nscope(Some(probe));
+            self.bind(e, SENSE_SALT);
+            for (name, x) in senses {
+                bump(&self.work.evals);
+                let v = x.native.as_ref().and_then(|n| self.native(|env| n.run_val(env)))?;
+                env.sense.push((name.clone(), v));
+            }
+        }
+        Some(env)
+    }
+
     /// The native shadow of an entity's scope: `me`, its senses (numbers and booleans), and `tick` if it sees it.
     fn nenv(&self, e: &Entity, sense: Option<&Map>, tick: Option<i64>) -> NEnv {
         let sense = sense
@@ -2034,7 +2128,7 @@ impl Game {
                 Some((k.to_string(), v))
             })
             .collect();
-        NEnv { me: NonNull::from(e), it: None, sense, roll: None, tick, tick_rate: self.cfg.run.tick_rate }
+        NEnv { me: NonNull::from(e), it: None, sense, roll: None, tick, tick_rate: self.cfg.run.tick_rate, bare: false }
     }
 
     /// No copy: per-rule variables are pushed, then the scope is rewound.
@@ -2063,8 +2157,11 @@ impl Game {
             Some(t @ (Target::Nearest(_) | Target::NearestIn(..))) => {
                 bump(&self.work.queries);
                 let Some((t, d)) = nearest(world, e, t) else { return Ok(None) };
-                bump(&self.work.maps);
-                scope.push_constant("it", entity_map(t, Some(d)));
+                let bare = NENV.with(|n| n.borrow().as_ref().is_some_and(|e| e.bare));
+                if !bare {
+                    bump(&self.work.maps);
+                    scope.push_constant("it", entity_map(t, Some(d)));
+                }
                 _it = Some(nset(|n| n.it = Some((NonNull::from(t), d))));
                 Some(t)
             }
@@ -2092,7 +2189,11 @@ impl Game {
             if let Some(list) = script.native.as_ref().and_then(|n| self.native(|env| n.effects(env))) {
                 if native_check() {
                     CTX.with(|c| c.borrow_mut().calls = before);
-                    let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
+                    let len = scope.len();
+                    self.dress(scope);
+                    let out = self.rhai.eval_ast_with_scope::<Array>(scope, script).map_err(|e| e.to_string());
+                    scope.rewind(len);
+                    let out = out?;
                     let rhai: Vec<Effect> = out.into_iter().map(|i| effect_from_map(e, i)).collect::<Result<_, _>>()?;
                     let mine: Vec<Effect> = list
                         .iter()
@@ -2110,8 +2211,11 @@ impl Game {
                     effects.push(if add { Effect::Add { e: e.id, prop, d: v } } else { Effect::Set { e: e.id, prop, v } });
                 }
             } else {
-                let out: Array = self.rhai.eval_ast_with_scope(scope, script).map_err(|e| e.to_string())?;
-                for item in out {
+                let len = scope.len();
+                self.dress(scope);
+                let out = self.rhai.eval_ast_with_scope::<Array>(scope, script).map_err(|e| e.to_string());
+                scope.rewind(len);
+                for item in out? {
                     effects.push(effect_from_map(e, item)?);
                 }
             }

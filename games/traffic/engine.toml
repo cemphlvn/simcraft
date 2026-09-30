@@ -14,3 +14,7 @@ height = 1600
 
 [spawn]
 car = 400
+
+# You drive car 1 (game.ron `player_id`).
+[agent]
+controllable = ["car"]

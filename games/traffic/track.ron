@@ -1,0 +1,37 @@
+#![enable(implicit_some)]
+// traffic from behind your car (sim-gpu): greybox cars on the desert road. Up / down: the speed you want; left /
+// right: a lane over. `c` changes the camera. The other cars drive themselves (IDM, MOBIL: game.ron).
+Track(
+    assets: ["road"],
+    follow: "car",
+    screen: (450, 800),
+    sky: "sky",
+    skyline: (image: "mesas", height: 0.18, drift: 0.3),
+    road: (image: "asphalt", lanes: 4, repeat: 2.5, shoulder: "sand", shoulder_width: 40.0, shoulder_repeat: 5.0,
+           paint: (240, 236, 222)),
+    camera: (height: 1.4, back: 3.0, fov: 70.0, pitch: 12.0, rumble: 0.002, bank: 0.4, max_bank: 4.0,
+             lane: (stiffness: 60.0, damping: 1.0), lag: (stiffness: 40.0, damping: 1.0), follow_x: 0.6,
+             speed_fov: 0.08, speed_streaks: 30.0),
+    view: 70.0,
+    fog: ((236, 150, 118), 30.0, 68.0),
+    kinds: {
+        // Every other car; yours is drawn as the rider below (hide_followed).
+        "car": (block: (size: (0.6, 0.45, 0.9), color: (220, 220, 214)), hide_followed: true),
+    },
+    rider: (parts: [ ((0.6, 0.3, 0.9), (214, 58, 44)), ((0.46, 0.2, 0.5), (60, 70, 90)) ]),
+    scenery: [
+        (images: ["post"], height: (0.75, 0.85), every: 3.0, side: (0.3, 0.4), seed: 1),
+        (images: ["cactus", "rock"], height: (1.4, 3.0), every: 4.0, side: (2.0, 14.0), seed: 2),
+    ],
+    switch: ( prop: "lane_to", base: 0.6, per_lane: 0.0, ease: sine_in_out ),
+    swipes: {
+        "left": [("lane", { "dir": -1 })], "right": [("lane", { "dir": 1 })],
+        "up": [("speed", { "d": 1 })], "down": [("speed", { "d": -1 })],
+    },
+    buttons: [
+        (action: "lane", args: { "dir": -1 }, on: "car", icon: "btn_left", key: "left", at: (0.1, 0.9), hidden: true),
+        (action: "lane", args: { "dir": 1 }, on: "car", icon: "btn_right", key: "right", at: (0.9, 0.9), hidden: true),
+        (action: "speed", args: { "d": 1 }, on: "car", icon: "btn_jump", key: "up", at: (0.5, 0.85), hidden: true),
+        (action: "speed", args: { "d": -1 }, on: "car", icon: "btn_brake", key: "down", at: (0.5, 0.95), hidden: true),
+    ],
+)

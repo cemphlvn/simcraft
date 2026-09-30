@@ -9,13 +9,15 @@
 // second), accelerations in thousandths of a fine unit a tick squared (IDM needs that resolution in integers).
 // The road is open at both ends: a car reaching the end comes back at the start of its lane (a seam, like a ring
 // road that cannot see across its join: the first disturbance on an empty road).
+// You drive the first car (`player_id`): up / down choose the speed you want, left / right change lanes; the car keeps
+// its distance on its own (the same model as everyone else), and the other drivers react to you like to anyone.
 Game(
     name: "traffic",
     perception: Senses,
 
     kinds: {
         "car": (glyph: 'c', fsm: "car", motion: (size: (600, 900)),
-                props: { "v0": -1, "vfrac": 0, "lane_to": -1, "timer": 0, "slow": 0 }),
+                props: { "v0": -1, "vfrac": 0, "lane_to": -1, "timer": 0, "slow": 0, "human": 0 }),
     },
 
     params: {
@@ -31,6 +33,8 @@ Game(
         "steer_k": 10, "steer_acc": 4, "steer_max": 30,
         // A car below this share (%) of its desired speed counts as stuck in a jam.
         "jam": 30,
+        // The car you drive, and how much one press changes the speed you want (fine units a tick).
+        "player_id": 1, "speed_step": 15, "speed_min": 15, "speed_max": 250,
     },
 
     fsms: {
@@ -52,7 +56,7 @@ Game(
         // First tick: a driver of its own (desired speed), on its lane.
         (name: "born", for: "car", when: "me.v0 < 0",
          then: [ Set("v0", "p.v0 - p.v0_spread / 2 + rand(p.v0_spread + 1)"), Set("lane_to", "me.x"),
-                 Set("vy", "p.v0 / 2") ]),
+                 Set("vy", "p.v0 / 2"), Set("human", "if me.id == p.player_id { 1 } else { 0 }") ]),
         // The Intelligent Driver Model, in integers.
         (name: "drive", for: "car", when: "me.v0 > 0",
          script: r#"
@@ -78,10 +82,10 @@ Game(
         (name: "count_down", for: "car", when: "me.timer > 0", then: [ Add("timer", "-1") ]),
         // Stuck behind a slower car: signal toward a lane with room (left first, the overtaking lane).
         (name: "want_left", for: "car", state: "Cruise",
-         when: "me.x > 0 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind",
+         when: "me.human == 0 && me.x > 0 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind",
          then: [ Set("lane_to", "me.x - 1"), Set("timer", "p.signal_ticks"), Goto("Signal"), Emit("signal") ]),
         (name: "want_right", for: "car", state: "Cruise",
-         when: "me.x < p.lanes - 1 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && !(me.x > 0 && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind) && ahead(\"car\", 1000) > p.room_ahead && behind(\"car\", 1000) > p.room_behind",
+         when: "me.human == 0 && me.x < p.lanes - 1 && me.vy * 100 < me.v0 * p.unhappy && ahead(\"car\") < p.crowded && !(me.x > 0 && ahead(\"car\", -1000) > p.room_ahead && behind(\"car\", -1000) > p.room_behind) && ahead(\"car\", 1000) > p.room_ahead && behind(\"car\", 1000) > p.room_behind",
          then: [ Set("lane_to", "me.x + 1"), Set("timer", "p.signal_ticks"), Goto("Signal"), Emit("signal") ]),
         // Moving over: steer to the lane's centre, easing in and out.
         (name: "steer", for: "car", state: "Changing",
@@ -94,5 +98,15 @@ Game(
         (name: "wrap", for: "car", when: "me.y >= p.length - 2", then: [ Set("py", "500"), Emit("lap") ]),
         // Two cars overlapping: a crash (IDM should never let it happen; lane changes and the seam might).
         (name: "crash", for: "car", when: "touching(\"car\") > 0", then: [ Emit("crash") ]),
+    ],
+
+    // What you do: the speed you want, and a lane over (right away: you are the one signalling).
+    actions: [
+        (name: "speed", for: "car", args: ["d"],
+         when: "me.human == 1 && (arg.d == 1 || arg.d == -1)",
+         then: [ Set("v0", "clamp(me.v0 + arg.d * p.speed_step, p.speed_min, p.speed_max)"), Emit("throttle") ]),
+        (name: "lane", for: "car", args: ["dir"],
+         when: r#"me.human == 1 && in_state("Cruise") && (arg.dir == 1 || arg.dir == -1) && me.x + arg.dir >= 0 && me.x + arg.dir < p.lanes"#,
+         then: [ Set("lane_to", "me.x + arg.dir"), Goto("Changing"), Emit("changed_lane") ]),
     ],
 )

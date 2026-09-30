@@ -4,8 +4,8 @@ assertion_line: 75
 expression: profile(&dir)
 ---
 ticks 60, entities per tick 835.5
-per tick:        evals     186.5  queries    266.1  maps    108.5
-per entity-tick: evals      0.22  queries     0.32  maps     0.13
+per tick:        evals     186.5  queries    248.1  maps     89.5
+per entity-tick: evals      0.22  queries     0.30  maps     0.11
 hottest rules (checks per tick, % that fired):
   drive_car                     55.5    2.0%
   exit_car                      55.5    0.2%

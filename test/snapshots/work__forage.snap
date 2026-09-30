@@ -1,10 +1,11 @@
 ---
 source: test/tests/all/work.rs
+assertion_line: 75
 expression: profile(&dir)
 ---
 ticks 60, entities per tick 20.4
-per tick:        evals     270.5  queries     57.0  maps     63.6
-per entity-tick: evals     13.26  queries     2.79  maps     3.12
+per tick:        evals     270.5  queries     57.0  maps     47.6
+per entity-tick: evals     13.26  queries     2.79  maps     2.33
 hottest rules (checks per tick, % that fired):
   born                          11.4    2.0%
   die                           11.4    0.0%
