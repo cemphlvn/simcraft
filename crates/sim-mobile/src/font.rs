@@ -50,6 +50,7 @@ fn glyph(c: char) -> [u8; 7] {
         '+' => [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00],
         '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
         '%' => [0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
         _ => [0; 7],
     }
 }
@@ -65,18 +66,27 @@ pub fn height(px: f32) -> f32 {
     7.0 * px
 }
 
-/// Draws `text` with its top left at `at`, each font pixel `px` screen pixels.
-pub fn text(frame: &mut Frame, layer: Layer, order: i32, at: Px, px: f32, color: Color, text: &str) {
+/// The lit pixels of `text`: (column, row) from its top left, a glyph every 6 columns. For hosts that draw text
+/// with their own primitives (sprites, quads).
+pub fn pixels(text: &str) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
     for (i, c) in text.chars().enumerate() {
-        let x0 = at.x + i as f32 * 6.0 * px;
         for (row, bits) in glyph(c).iter().enumerate() {
             for col in 0..5 {
                 if bits >> (4 - col) & 1 == 1 {
-                    let rect = Rect::new(x0 + col as f32 * px, at.y + row as f32 * px, px * 0.92, px * 0.92);
-                    frame.push(layer, order, Shape::Box { rect, r: px * 0.25, color });
+                    out.push((i as i32 * 6 + col, row as i32));
                 }
             }
         }
+    }
+    out
+}
+
+/// Draws `text` with its top left at `at`, each font pixel `px` screen pixels.
+pub fn text(frame: &mut Frame, layer: Layer, order: i32, at: Px, px: f32, color: Color, text: &str) {
+    for (col, row) in pixels(text) {
+        let rect = Rect::new(at.x + col as f32 * px, at.y + row as f32 * px, px * 0.92, px * 0.92);
+        frame.push(layer, order, Shape::Box { rect, r: px * 0.25, color });
     }
 }
 
@@ -92,7 +102,7 @@ mod tests {
 
     #[test]
     fn every_label_character_has_a_glyph() {
-        for c in "ROPE TOUCH FEEL TILT FPS 0123456789 .:-+/%".chars().filter(|&c| c != ' ') {
+        for c in "ROPE TOUCH FEEL TILT GAME FPS 0123456789 .:-+/%_".chars().filter(|&c| c != ' ') {
             assert_ne!(glyph(c), [0; 7], "no glyph for {c:?}");
         }
         assert_eq!(glyph('a'), glyph('A'));

@@ -4,6 +4,7 @@
 //! distances, speeds and what the phone registered can be read by eye.
 
 mod feel;
+mod game;
 mod rope;
 mod tilt;
 mod touch;
@@ -101,7 +102,13 @@ impl Default for Playground {
 impl Playground {
     pub fn new() -> Playground {
         Playground {
-            cards: vec![Box::new(rope::Rope::new()), Box::new(touch::Touch::default()), Box::new(feel::Feel::default()), Box::new(tilt::Tilt::new())],
+            cards: vec![
+                Box::new(game::GameCard::new()),
+                Box::new(rope::Rope::new()),
+                Box::new(touch::Touch::default()),
+                Box::new(feel::Feel::default()),
+                Box::new(tilt::Tilt::new()),
+            ],
             active: 0,
             trails: BTreeMap::new(),
             on_tabs: false,
@@ -194,7 +201,9 @@ impl Playground {
         let sa = layout.safe;
         let (len, th) = (18.0 * layout.px / 2.2, line * 1.5);
         let mark = Color::hexa(0x8f7cff, 0.55);
-        for (x, y, dx, dy) in [(sa.x, sa.y, 1.0, 1.0), (sa.x + sa.w, sa.y, -1.0, 1.0), (sa.x, sa.y + sa.h, 1.0, -1.0), (sa.x + sa.w, sa.y + sa.h, -1.0, -1.0)] {
+        for (x, y, dx, dy) in
+            [(sa.x, sa.y, 1.0, 1.0), (sa.x + sa.w, sa.y, -1.0, 1.0), (sa.x, sa.y + sa.h, 1.0, -1.0), (sa.x + sa.w, sa.y + sa.h, -1.0, -1.0)]
+        {
             let hx = if dx > 0.0 { x } else { x - len };
             let vy = if dy > 0.0 { y } else { y - len };
             frame.push(Layer::Fx, 0, Shape::Box { rect: Rect::new(hx, if dy > 0.0 { y } else { y - th }, len, th), r: 0.0, color: mark });
@@ -204,7 +213,16 @@ impl Playground {
         for t in self.trails.values() {
             for w in t.windows(2) {
                 let fade = 1.0 - w[1].1 / TRAIL_MS;
-                frame.push(Layer::Fx, 1, Shape::Capsule { a: w[0].0, b: w[1].0, r: 3.0 * layout.px / 2.2 * fade + 0.5, color: Color::hexa(0x9be7ff, 0.45 * fade) });
+                frame.push(
+                    Layer::Fx,
+                    1,
+                    Shape::Capsule {
+                        a: w[0].0,
+                        b: w[1].0,
+                        r: 3.0 * layout.px / 2.2 * fade + 0.5,
+                        color: Color::hexa(0x9be7ff, 0.45 * fade),
+                    },
+                );
             }
         }
     }
@@ -258,14 +276,14 @@ mod tests {
         let l = layout();
         let mut p = Playground::new();
         let mut out = Vec::new();
-        let third = Px::new(l.tabs.x + l.tabs.w * 2.5 / 4.0, l.tabs.y + l.tabs.h / 2.0);
-        p.touch(1, Phase::Down, third, &l, &mut out);
-        assert_eq!(p.active, 2);
+        let fourth = Px::new(l.tabs.x + l.tabs.w * 3.5 / 5.0, l.tabs.y + l.tabs.h / 2.0);
+        p.touch(1, Phase::Down, fourth, &l, &mut out);
+        assert_eq!(p.active, 3);
         assert_eq!(p.card().name(), "FEEL");
         assert_eq!(out.len(), 1, "a tick for the switch");
         // The tap's gestures are swallowed until it lifts.
-        p.input(&Gesture::Down(third), &l, &mut out);
-        p.input(&Gesture::Release { at: third, velocity: Px::default() }, &l, &mut out);
+        p.input(&Gesture::Down(fourth), &l, &mut out);
+        p.input(&Gesture::Release { at: fourth, velocity: Px::default() }, &l, &mut out);
         assert!(!p.on_tabs);
         assert_eq!(out.len(), 1);
     }
@@ -287,7 +305,7 @@ mod tests {
     fn every_card_draws_and_reports() {
         let l = layout();
         let mut p = Playground::new();
-        for i in 0..4 {
+        for i in 0..p.cards.len() {
             p.active = i;
             let mut out = Vec::new();
             p.step(&Sense { gravity: Some([300, -950, 0]) }, &mut out);

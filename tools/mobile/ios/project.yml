@@ -18,6 +18,10 @@ targets:
     sources:
       - Sources
       - Resources
+      # Bundled games (data, never code): tools/mobile/build.sh copies $SIMCRAFT_GAMES here.
+      - path: Generated/Games
+        type: folder
+        buildPhase: resources
     info:
       path: Generated/Info.plist
       properties:

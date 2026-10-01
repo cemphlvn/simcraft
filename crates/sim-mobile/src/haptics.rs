@@ -78,8 +78,7 @@ mod ios {
     use objc2_core_haptics::{
         CHHapticDynamicParameter, CHHapticEngine, CHHapticEvent, CHHapticEventParameter, CHHapticEventParameterIDAttackTime,
         CHHapticEventParameterIDDecayTime, CHHapticEventParameterIDHapticIntensity, CHHapticEventParameterIDHapticSharpness,
-        CHHapticEventTypeHapticContinuous, CHHapticEventTypeHapticTransient, CHHapticPattern, CHHapticPatternPlayer,
-        CHHapticTimeImmediate,
+        CHHapticEventTypeHapticContinuous, CHHapticEventTypeHapticTransient, CHHapticPattern, CHHapticPatternPlayer, CHHapticTimeImmediate,
     };
     use objc2_foundation::NSArray;
 
@@ -107,7 +106,10 @@ mod ios {
             // SAFETY: the constants are Core Haptics' own; the arrays hold the parameter objects made here.
             unsafe {
                 let param = |id, v: f32| CHHapticEventParameter::initWithParameterID_value(CHHapticEventParameter::alloc(), id, v);
-                let mut params = vec![param(CHHapticEventParameterIDHapticIntensity, p.intensity), param(CHHapticEventParameterIDHapticSharpness, p.sharpness)];
+                let mut params = vec![
+                    param(CHHapticEventParameterIDHapticIntensity, p.intensity),
+                    param(CHHapticEventParameterIDHapticSharpness, p.sharpness),
+                ];
                 let (transient, secs) = match p.kind {
                     Kind::Tap | Kind::Thud | Kind::Tick => (true, 0.0),
                     Kind::Rise => {
@@ -122,7 +124,12 @@ mod ios {
                 };
                 let params = NSArray::from_retained_slice(&params);
                 if transient {
-                    CHHapticEvent::initWithEventType_parameters_relativeTime(CHHapticEvent::alloc(), CHHapticEventTypeHapticTransient, &params, 0.0)
+                    CHHapticEvent::initWithEventType_parameters_relativeTime(
+                        CHHapticEvent::alloc(),
+                        CHHapticEventTypeHapticTransient,
+                        &params,
+                        0.0,
+                    )
                 } else {
                     CHHapticEvent::initWithEventType_parameters_relativeTime_duration(
                         CHHapticEvent::alloc(),
@@ -140,7 +147,8 @@ mod ios {
             unsafe {
                 let events = NSArray::from_retained_slice(&[CoreHaptics::event(p)]);
                 let none: Retained<NSArray<CHHapticDynamicParameter>> = NSArray::new();
-                let pattern = CHHapticPattern::initWithEvents_parameters_error(CHHapticPattern::alloc(), &events, &none).map_err(|e| e.to_string())?;
+                let pattern = CHHapticPattern::initWithEvents_parameters_error(CHHapticPattern::alloc(), &events, &none)
+                    .map_err(|e| e.to_string())?;
                 let player = self.engine.createPlayerWithPattern_error(&pattern).map_err(|e| e.to_string())?;
                 player.startAtTime_error(CHHapticTimeImmediate).map_err(|e| e.to_string())
             }

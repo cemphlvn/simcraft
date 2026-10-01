@@ -62,7 +62,6 @@ impl Rope {
     fn nearest(&self, w: V2) -> Option<usize> {
         self.rope.iter().copied().filter(|&i| self.sys.points[i].inv > Fx::ZERO).min_by_key(|&i| (self.sys.points[i].pos - w).length())
     }
-
 }
 
 impl Card for Rope {
