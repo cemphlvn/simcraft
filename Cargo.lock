@@ -2477,14 +2477,19 @@ name = "sim-mobile"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "image",
  "objc2 0.6.4",
  "objc2-core-haptics",
  "objc2-core-motion",
  "objc2-foundation 0.3.2",
  "pollster",
+ "ron",
+ "serde",
+ "serde_json",
  "sim-core",
  "sim-physics",
  "sim-rules",
+ "toml",
  "wgpu",
  "winit",
 ]

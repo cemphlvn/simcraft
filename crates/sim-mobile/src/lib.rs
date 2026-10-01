@@ -7,6 +7,7 @@
 
 pub mod app;
 pub mod draw;
+pub mod draw3d;
 pub mod font;
 pub mod games;
 pub mod gesture;
@@ -14,6 +15,7 @@ pub mod haptics;
 pub mod layer;
 pub mod playground;
 pub mod sensors;
+pub mod smash;
 pub mod stats;
 
 use winit::event_loop::EventLoop;

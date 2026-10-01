@@ -152,11 +152,12 @@ impl App {
         let (w, h) = (s.config.width, s.config.height);
         let mut frame = Frame::default();
         self.playground.draw(self.clock, &layout, &mut frame);
+        let scene = self.playground.scene(self.clock, &layout);
         let shapes = frame.sorted();
         match s.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex) | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
                 let view = tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                r.draw(&view, w, h, Color::hex(0x1b1440).0, &shapes);
+                r.draw(&view, w, h, Color::hex(0x1b1440).0, scene.as_ref(), &shapes);
                 tex.present();
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {}
