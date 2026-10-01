@@ -10,6 +10,9 @@
 #                                        Xcode's Organizer, or `xcodebuild -exportArchive`)
 #   tools/mobile/build.sh android apk   a debug APK for a device or emulator
 #   tools/mobile/build.sh android aab   a release App Bundle for Play (sign it with your upload key)
+#
+# SIMCRAFT_GAMES=<folder> bundles simcraft games (game.ron + engine.toml per level) into the app as data; the
+# player's GAME card plays them (iOS for now).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -29,6 +32,14 @@ ios() {
     esac
     rustup target list --installed | grep -qx "$target" || die "missing Rust target: rustup target add $target"
     cargo build --manifest-path "$root/Cargo.toml" -p sim-mobile --lib --release --target "$target"
+    # Games travel as data inside the app: $SIMCRAFT_GAMES (a folder of game.ron + engine.toml levels) → Games/.
+    local games="$root/tools/mobile/ios/Generated/Games"
+    rm -rf "$games" && mkdir -p "$games"
+    if [ -n "${SIMCRAFT_GAMES:-}" ]; then
+        [ -d "$SIMCRAFT_GAMES" ] || die "SIMCRAFT_GAMES is not a folder: $SIMCRAFT_GAMES"
+        cp -R "$SIMCRAFT_GAMES"/. "$games"/
+        echo "bundling games from $SIMCRAFT_GAMES ($(find "$games" -name game.ron | wc -l | tr -d ' ') levels)"
+    fi
     (cd "$root/tools/mobile/ios" && xcodegen generate --quiet)
     local proj="$root/tools/mobile/ios/Simcraft.xcodeproj" derived="$out/ios/derived"
     case "$what" in

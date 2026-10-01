@@ -1,0 +1,39 @@
+#![enable(implicit_some)]
+// A test level for the GAME card (sim-mobile): a chain-reaction puzzle in one row. An explosion breaks the bricks
+// around it and pushes the bombs around it one cell outward, where they explode next. A bomb next to the starter
+// carries the chain to the brick; without it the chain stops short.
+Game(
+    name: "chain_test",
+    perception: Direct,
+    kinds: {
+        "wall":  (glyph: 'W', solid: true),
+        "brick": (glyph: '#', solid: true),
+        "edge":  (glyph: ' ', solid: true, hidden: true),
+        "hand":  (glyph: 'h', solid: true, hidden: true, props: { "budget": 0 }),
+        "bomb":  (glyph: 'b', solid: true, props: { "starter": 0, "dx": 0, "dy": 0 }, fsm: "fuse"),
+    },
+    layout: (
+        legend: { 'W': "wall", '#': "brick", 'x': "edge", 'S': ("bomb", { "starter": 1 }), 'H': ("hand", { "budget": 1 }) },
+        rows: [
+            "Hxxxxxx",
+            "xS..#Wx",
+            "xxxxxxx",
+        ],
+    ),
+    fsms: { "fuse": (initial: "Ready", states: { "Ready": (), "Lit": (), "Boom": () }, transitions: []) },
+    rules: [
+        (name: "brick_breaks", for: "brick", when: r#"around("bomb", "Boom", 1) > 0"#, then: [ Emit("brick_broken"), Despawn(Me) ]),
+        (name: "bomb_pushed", for: "bomb", state: "Ready", target: NearestIn("bomb", "Boom"), when: "it.dist <= 1",
+         then: [ Set("dx", "me.x - it.x"), Set("dy", "me.y - it.y"), Goto("Lit") ]),
+        (name: "explosion_ends", for: "bomb", state: "Boom", then: [ Emit("boom"), Despawn(Me) ]),
+        (name: "lit_slides", for: "bomb", state: "Lit", then: [ Move("me.dx", "me.dy"), Goto("Boom") ]),
+    ],
+    actions: [
+        (name: "place", for: "hand", args: ["x", "y"],
+         then: [ Need("budget", "1"), SpawnAt("bomb", "arg.x - me.x", "arg.y - me.y"), Add("budget", "-1") ]),
+        (name: "pickup", for: "bomb", when: r#"me.starter == 0 && me.state == "Ready""#,
+         then: [ On(Nearest("hand"), [ Add("budget", "1") ]), Despawn(Me) ]),
+        (name: "detonate", for: "bomb", when: r#"me.starter == 1 && me.state == "Ready""#, then: [ Goto("Boom") ]),
+    ],
+    end: [ (when: "count.brick == 0", result: "win") ],
+)

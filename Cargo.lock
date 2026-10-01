@@ -2482,7 +2482,9 @@ dependencies = [
  "objc2-core-motion",
  "objc2-foundation 0.3.2",
  "pollster",
+ "sim-core",
  "sim-physics",
+ "sim-rules",
  "wgpu",
  "winit",
 ]

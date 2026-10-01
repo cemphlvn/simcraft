@@ -33,6 +33,17 @@ Not timed yet: the iOS simulator loop, the Android loop with the emulator alread
 | 2026-09-30 | Baseline | 60.0 | 16.68 / 17.0 | ~1.0 | ~15 |
 | 2026-09-30 | ProMotion: Info.plist allows 120 Hz and a display link asks for it (`main.m`) | **119.9** | 8.34 / 8.9 | ~0.1 | ~11 |
 
+## CPU on the phone (Instruments, Activity Monitor, idle screen)
+
+| Date | App | Change | CPU (mean) | Threads | Learned |
+|---|---|---|---|---|---|
+| 2026-10-01 | A grid puzzle (a separate app on the `sim-mobile` shell's loop) | winit `ControlFlow::Poll` | 94 % | 16–17 | On iOS, Poll never sleeps: a whole core on a still screen |
+| 2026-10-01 | The same grid puzzle | `Wait`, frames only while something moves, engine `threads = 1` | 2–3 % (still) | 10–11 | Playing: 13.2 %/h of battery for the whole phone, mostly the display; thermal state nominal |
+| 2026-10-01 | Playground (`sim-mobile`) | `Wait`, every frame requested (the cards always move) | 22 % | 11 | What 120 fps of drawing costs here, mostly Metal's driver; drawing only while something moves is the next step |
+
+On the desktop (`simcraft-play`, `games/colony3d` running) Poll costs 12–23 %: macOS paces it with the display, iOS
+does not.
+
 ## Next candidates
 
 - The live player (`simcraft serve` plus the player's reload): a data change without build or install. Target:

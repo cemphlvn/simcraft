@@ -1117,7 +1117,9 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
 - **Shell.** winit + wgpu. iOS: `simcraft_mobile_main()` from a static library, called by the Xcode app's `main`.
   Android: `android_main` in a shared library loaded by `NativeActivity`. On suspend the surface is dropped, on resume
   it is recreated. Portrait.
-- **Loop.** A fixed simulation tick with interpolation between ticks; the frame rate never changes a result.
+- **Loop.** A fixed simulation tick with interpolation between ticks; the frame rate never changes a result. The
+  loop waits (`ControlFlow::Wait`) and asks for each frame, which the display paces: winit's `Poll` never sleeps on
+  iOS (a whole core on a still screen, `tools/mobile/PERF.md`). A host draws only while something moves.
 - **Gestures** (`gesture`, pure and tested without a device): a finger's down, move and up become `Tap`, `Drag`,
   `Swipe` and `Release` (pull and let go). The **swipe-across** test (the finger's segment this frame against a
   shape's segments) catches or cuts a rope.

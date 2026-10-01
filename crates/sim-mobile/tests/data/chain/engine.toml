@@ -1,0 +1,6 @@
+[run]
+seed = 1
+max_ticks = 120
+
+[agent]
+controllable = ["hand", "bomb"]

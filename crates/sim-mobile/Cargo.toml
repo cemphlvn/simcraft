@@ -16,6 +16,9 @@ path = "src/bin/simcraft-mobile.rs"
 
 [dependencies]
 sim-physics.workspace = true
+# The engine itself: bundled games (game.ron) run on the phone exactly as the evals run them.
+sim-core.workspace = true
+sim-rules.workspace = true
 wgpu = "29"
 winit = "0.30"
 pollster = "0.4"

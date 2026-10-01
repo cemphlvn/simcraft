@@ -8,6 +8,7 @@
 pub mod app;
 pub mod draw;
 pub mod font;
+pub mod games;
 pub mod gesture;
 pub mod haptics;
 pub mod layer;
