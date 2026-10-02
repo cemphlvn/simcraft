@@ -2,6 +2,7 @@
 //! rounded box is a signed distance in the fragment shader, so edges stay smooth at any size without meshes or
 //! multisampling (cheap on a phone's GPU). Metal on iOS, Vulkan (or GLES) on Android, the desktop's API in the preview.
 
+use crate::draw3d::{Renderer3, Scene3};
 use crate::layer::Shape;
 
 #[repr(C)]
@@ -80,19 +81,36 @@ pub struct Renderer {
     globals_bg: wgpu::BindGroup,
     instances: wgpu::Buffer,
     capacity: usize,
+    three: Renderer3,
 }
 
 impl Renderer {
     pub async fn new(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>) -> Result<Renderer, String> {
-        let adapter = instance
+        let adapter = Renderer::adapter(instance, Some(surface)).await?;
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        Renderer::with_adapter(&adapter, format).await
+    }
+
+    /// Without a window: draws into textures of `format` (screenshots, tests).
+    pub async fn headless(instance: &wgpu::Instance, format: wgpu::TextureFormat) -> Result<Renderer, String> {
+        let adapter = Renderer::adapter(instance, None).await?;
+        Renderer::with_adapter(&adapter, format).await
+    }
+
+    async fn adapter(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<wgpu::Adapter, String> {
+        instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 // A phone's battery matters more than the last frame.
                 power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(surface),
+                compatible_surface: surface,
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(|e| format!("no GPU adapter: {e}"))?;
+            .map_err(|e| format!("no GPU adapter: {e}"))
+    }
+
+    async fn with_adapter(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> Result<Renderer, String> {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("sim-mobile"),
@@ -104,8 +122,6 @@ impl Renderer {
             })
             .await
             .map_err(|e| format!("no GPU device: {e}"))?;
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
         let shader = device
             .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shapes"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -165,7 +181,10 @@ impl Renderer {
         });
         let capacity = 1024;
         let instances = Renderer::instance_buffer(&device, capacity);
-        Ok(Renderer { device, queue, format, pipeline, globals, globals_bg, instances, capacity })
+        // 4× MSAA where the format allows it: nearly free on a phone's tiled GPU, and edges are what a toy look shows.
+        let samples = if adapter.get_texture_format_features(format).flags.sample_count_supported(4) { 4 } else { 1 };
+        let three = Renderer3::new(&device, format, samples);
+        Ok(Renderer { device, queue, format, pipeline, globals, globals_bg, instances, capacity, three })
     }
 
     fn instance_buffer(device: &wgpu::Device, n: usize) -> wgpu::Buffer {
@@ -177,8 +196,8 @@ impl Renderer {
         })
     }
 
-    /// Draws `shapes` (back to front) over `clear` into `target` of `w` × `h` pixels.
-    pub fn draw(&mut self, target: &wgpu::TextureView, w: u32, h: u32, clear: [f32; 4], shapes: &[Shape]) {
+    /// Draws `scene` (if any, else `clear`), then `shapes` (back to front) over it, into `target` of `w` × `h` pixels.
+    pub fn draw(&mut self, target: &wgpu::TextureView, w: u32, h: u32, clear: [f32; 4], scene: Option<&Scene3>, shapes: &[Shape]) {
         let inst: Vec<Inst> = shapes
             .iter()
             .map(|s| match *s {
@@ -206,6 +225,9 @@ impl Renderer {
             self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&inst));
         }
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shapes") });
+        if let Some(scene) = scene {
+            self.three.draw(&self.device, &self.queue, &mut enc, target, w, h, scene);
+        }
         {
             let [r, g, b, a] = clear.map(f64::from);
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -214,7 +236,10 @@ impl Renderer {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: if scene.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }) },
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,

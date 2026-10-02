@@ -1,0 +1,263 @@
+{
+  "metrics": {
+    "aim_error_m": {
+      "max": 0.2523452937602997,
+      "mean": 0.06534585981426062,
+      "min": 0.000027291047445032746
+    },
+    "aim_h_cm_px": {
+      "max": 0.37395232915878296,
+      "mean": 0.37395232915878296,
+      "min": 0.37395232915878296
+    },
+    "aim_linearity": {
+      "max": 1.1339686465645802,
+      "mean": 1.1339686465645802,
+      "min": 1.1339686465645802
+    },
+    "aim_v_cm_px": {
+      "max": 0.34511976771884495,
+      "mean": 0.34511976771884495,
+      "min": 0.34511976771884495
+    },
+    "cam_jerk": {
+      "max": 907.1710205078125,
+      "mean": 622.246630859375,
+      "min": 272.8221435546875
+    },
+    "cleared_pct": {
+      "max": 43.333333333333336,
+      "mean": 21.333333333333332,
+      "min": 6.666666666666667
+    },
+    "fg_clear": {
+      "max": 0.9812108559498957,
+      "mean": 0.8872474319324206,
+      "min": 0.726027397260274
+    },
+    "fg_share": {
+      "max": 0.37875446677207947,
+      "mean": 0.3021886169910431,
+      "min": 0.2347097396850586
+    },
+    "first_hit_s": {
+      "max": 0.5000000260770321,
+      "mean": 0.4100000213831663,
+      "min": 0.36666668578982353
+    },
+    "hitstop": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "impact_in_view": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "parallax_px": {
+      "max": 44.9871826171875,
+      "mean": 44.9871826171875,
+      "min": 44.9871826171875
+    },
+    "peak_awake": {
+      "max": 90.0,
+      "mean": 77.0,
+      "min": 61.0
+    },
+    "peak_pen_mm": {
+      "max": 32.00162947177887,
+      "mean": 14.371666312217712,
+      "min": 6.080448627471924
+    },
+    "pouch_in_view": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "pulses": {
+      "max": 18.0,
+      "mean": 17.2,
+      "min": 16.0
+    },
+    "pulses_per_s_peak": {
+      "max": 11.0,
+      "mean": 8.6,
+      "min": 7.0
+    },
+    "reach_pct": {
+      "max": 100.0,
+      "mean": 100.0,
+      "min": 100.0
+    },
+    "release_shift_cm": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0
+    },
+    "settle_s": {
+      "max": 6.883333683013916,
+      "mean": 6.283333587646484,
+      "min": 5.850000381469727
+    },
+    "slowmo": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "step_us_mean": {
+      "max": 400.1436259192891,
+      "mean": 297.84173312948207,
+      "min": 121.66152059879818
+    },
+    "step_us_p95": {
+      "max": 708.5830078125,
+      "mean": 671.3416137695312,
+      "min": 610.8330078125
+    },
+    "stone_in_view": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "swim_px": {
+      "max": 20.624011993408203,
+      "mean": 20.624011993408203,
+      "min": 20.624011993408203
+    },
+    "tower_in_view": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "trauma_peak": {
+      "max": 0.9700000286102295,
+      "mean": 0.9700000286102295,
+      "min": 0.9700000286102295
+    }
+  },
+  "name": "release lock: shoot the aim from 80 ms before the lift",
+  "set": [],
+  "shots": {
+    "aim_left": {
+      "aim_error_m": 0.027928553521633148,
+      "cam_jerk": 648.3927612304688,
+      "cleared_pct": 16.666666666666664,
+      "fg_clear": 0.9761904761904762,
+      "fg_share": 0.25015348196029663,
+      "first_hit_s": 0.3833333533257246,
+      "hitstop": 1.0,
+      "impact_in_view": 1.0,
+      "peak_awake": 74.0,
+      "peak_pen_mm": 11.856377124786377,
+      "pouch_in_view": 1.0,
+      "pulses": 17.0,
+      "pulses_per_s_peak": 9.0,
+      "settle_s": 6.300000190734863,
+      "slowmo": 1.0,
+      "step_us_mean": 365.52944513191545,
+      "step_us_p95": 684.1670532226562,
+      "stone_in_view": 1.0,
+      "tower_in_view": 1.0,
+      "trauma_peak": 0.9700000286102295
+    },
+    "aim_right": {
+      "aim_error_m": 0.02792854607105255,
+      "cam_jerk": 907.1710205078125,
+      "cleared_pct": 16.666666666666664,
+      "fg_clear": 0.9761904761904762,
+      "fg_share": 0.298747181892395,
+      "first_hit_s": 0.3833333533257246,
+      "hitstop": 1.0,
+      "impact_in_view": 1.0,
+      "peak_awake": 71.0,
+      "peak_pen_mm": 6.080448627471924,
+      "pouch_in_view": 1.0,
+      "pulses": 18.0,
+      "pulses_per_s_peak": 9.0,
+      "settle_s": 6.300000190734863,
+      "slowmo": 1.0,
+      "step_us_mean": 290.8161370908575,
+      "step_us_p95": 661.7919921875,
+      "stone_in_view": 1.0,
+      "tower_in_view": 1.0,
+      "trauma_peak": 0.9700000286102295
+    },
+    "center_full": {
+      "aim_error_m": 0.2523452937602997,
+      "cam_jerk": 649.702392578125,
+      "cleared_pct": 6.666666666666667,
+      "fg_clear": 0.726027397260274,
+      "fg_share": 0.34857821464538574,
+      "first_hit_s": 0.36666668578982353,
+      "hitstop": 1.0,
+      "impact_in_view": 1.0,
+      "peak_awake": 61.0,
+      "peak_pen_mm": 32.00162947177887,
+      "pouch_in_view": 1.0,
+      "pulses": 18.0,
+      "pulses_per_s_peak": 11.0,
+      "settle_s": 6.083333492279053,
+      "slowmo": 1.0,
+      "step_us_mean": 121.66152059879818,
+      "step_us_p95": 708.5830078125,
+      "stone_in_view": 1.0,
+      "tower_in_view": 1.0,
+      "trauma_peak": 0.9700000286102295
+    },
+    "center_mid": {
+      "aim_error_m": 0.01849961467087269,
+      "cam_jerk": 633.1448364257812,
+      "cleared_pct": 23.333333333333332,
+      "fg_clear": 0.7766179540709812,
+      "fg_share": 0.37875446677207947,
+      "first_hit_s": 0.41666668839752674,
+      "hitstop": 1.0,
+      "impact_in_view": 1.0,
+      "peak_awake": 90.0,
+      "peak_pen_mm": 14.451563358306885,
+      "pouch_in_view": 1.0,
+      "pulses": 16.0,
+      "pulses_per_s_peak": 7.0,
+      "settle_s": 6.883333683013916,
+      "slowmo": 1.0,
+      "step_us_mean": 400.1436259192891,
+      "step_us_p95": 691.3330078125,
+      "stone_in_view": 1.0,
+      "tower_in_view": 1.0,
+      "trauma_peak": 0.9700000286102295
+    },
+    "center_soft": {
+      "aim_error_m": 0.000027291047445032746,
+      "cam_jerk": 272.8221435546875,
+      "cleared_pct": 43.333333333333336,
+      "fg_clear": 0.9812108559498957,
+      "fg_share": 0.2347097396850586,
+      "first_hit_s": 0.5000000260770321,
+      "hitstop": 1.0,
+      "impact_in_view": 1.0,
+      "peak_awake": 89.0,
+      "peak_pen_mm": 7.468312978744507,
+      "pouch_in_view": 1.0,
+      "pulses": 17.0,
+      "pulses_per_s_peak": 7.0,
+      "settle_s": 5.850000381469727,
+      "slowmo": 1.0,
+      "step_us_mean": 311.05793690655014,
+      "step_us_p95": 610.8330078125,
+      "stone_in_view": 1.0,
+      "tower_in_view": 1.0,
+      "trauma_peak": 0.9700000286102295
+    },
+    "precision": {
+      "aim_h_cm_px": 0.37395232915878296,
+      "aim_linearity": 1.1339686465645802,
+      "aim_v_cm_px": 0.34511976771884495,
+      "parallax_px": 44.9871826171875,
+      "reach_pct": 100.0,
+      "release_shift_cm": 0.0,
+      "swim_px": 20.624011993408203
+    }
+  },
+  "step": 10
+}

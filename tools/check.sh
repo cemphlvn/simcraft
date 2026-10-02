@@ -44,13 +44,19 @@ for g in games/*/; do
   printf '%s\n' "$out" | grep -v '^note' || true
   printf '%s\n' "$out" | grep -q '^error\|^warn' && bad=1
 done
+cargo build -q --release -p sim-mobile --bin simcraft-smash
+out=$(target/release/simcraft-smash check --dir games/smash 2>&1) || true
+printf '%s\n' "$out" | grep -q '^error' && { printf '%s\n' "$out"; bad=1; }
 [ "$bad" = 0 ] || { echo "simcraft-check found problems"; exit 1; }
 
 if [ "$quick" != "--quick" ]; then
   step eval --check
   for g in games/*/; do
-    [ -d "$g/evals" ] || continue
+    [ -d "$g/evals" ] && [ -f "$g/engine.toml" ] || continue
     python3 tools/eval.py "${g%/}" --check | tail -1
   done
+  # Native mobile games measure themselves (sim-mobile).
+  cargo build -q --release -p sim-mobile --bin simcraft-smash
+  target/release/simcraft-smash eval --check --dir games/smash
 fi
 printf '\nall green\n'

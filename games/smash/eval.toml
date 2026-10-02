@@ -1,0 +1,71 @@
+# What "better" means for SMASH's core mechanic (docs/evals.md). `simcraft-smash eval` plays every scripted shot
+# through the same input path as a finger, on fresh towers, and computes these per shot; goal: max | min | info.
+# SMASH is native (sim-mobile), so the metrics are computed in Rust (crates/sim-mobile/src/smash/eval.rs), not by
+# tools/eval.py; the loop is the same: --save, --set, --check.
+
+shots = ["center_full", "center_mid", "center_soft", "aim_left", "aim_right"]
+screen = [1179, 2556]     # an iPhone 15 Pro, portrait
+
+# --- What the shot does ---
+[metrics.cleared_pct]
+goal = "info"             # share of the tower knocked off by one shot (levels will tune this; the core keeps it visible)
+[metrics.first_hit_s]
+goal = "info"             # release to the stone's first touch (6 if it never touches anything)
+[metrics.aim_error_m]
+goal = "min"              # where on the target the preview said vs where the stone touched, across the hit surface (m): the dotted arc must not lie (since step 005; before, stone centres a tick apart)
+[metrics.settle_s]
+goal = "min"              # release until everything is asleep again (cap 8): how long a shot keeps you waiting
+
+# --- Aiming precision (smash/precision.rs: the slingshot on a fresh tower, reading the preview) ---
+[metrics.aim_v_cm_px]
+goal = "info"             # cm the hit climbs per px of pull (finer is smaller, but the tower must stay reachable)
+[metrics.aim_h_cm_px]
+goal = "info"             # cm the hit moves sideways per px of sideways finger travel
+[metrics.aim_linearity]
+goal = "min"              # largest / smallest vertical step along the pull (1 = the hit climbs evenly)
+[metrics.reach_pct]
+goal = "max"              # share of the tower's rows and columns a finger can hit
+[metrics.release_shift_cm]
+goal = "min"              # how far the shot moves when the finger rolls 12 px as it lifts
+[metrics.swim_px]
+goal = "min"              # how far the aim mark drifts on screen after the finger stops
+[metrics.parallax_px]
+goal = "info"             # how far the far palms shift against the tower when aiming fully sideways
+
+# --- Camera ---
+[metrics.tower_in_view]
+goal = "max"              # while aiming and in flight: the worst share of the tower's pieces on screen
+[metrics.impact_in_view]
+goal = "max"              # the first hit lands inside the inner 90 % of the screen (1) or not (0)
+[metrics.pouch_in_view]
+goal = "max"              # while aiming: share of the time the pouch and the stone in it are on screen
+[metrics.fg_clear]
+goal = "max"              # after the release: share of the time the slingshot stays below the pedestal's foot on screen (it must not cover the smash)
+[metrics.fg_share]
+goal = "min"              # watching (0.3 s after the release on): the most screen height the slingshot covers (with its stone once reloaded)
+[metrics.stone_in_view]
+goal = "max"              # share of the flight the stone is on screen
+[metrics.cam_jerk]
+goal = "min"              # the camera's largest jerk (m/s³, shake excluded): smooth framing has none to spare
+
+# --- Feel ---
+[metrics.hitstop]
+goal = "info"             # a hard first hit froze the world (1) or not (0)
+[metrics.slowmo]
+goal = "info"
+[metrics.trauma_peak]
+goal = "info"             # the largest shake (0..1; the picture moves by trauma²)
+[metrics.pulses]
+goal = "info"             # haptic pulses from touch-down to settled
+[metrics.pulses_per_s_peak]
+goal = "min"              # the most pulses in any one second: a buzz storm numbs the hand (Apple HIG: use sparingly)
+
+# --- Solver ---
+[metrics.peak_pen_mm]
+goal = "min"              # the deepest overlap left after any step (mm)
+[metrics.peak_awake]
+goal = "info"
+[metrics.step_us_mean]
+goal = "min"              # solver time per tick on this machine (µs; release build)
+[metrics.step_us_p95]
+goal = "min"              # 95th percentile (the worst single step is OS noise: it moves run to run)

@@ -35,7 +35,13 @@ case "$rel" in
     ;;
   games/*/*)
     game=$(printf '%s' "$rel" | cut -d/ -f1-2)
-    [ -x "$check" ] && report "$("$check" "$game" 2>&1)"
+    if [ -f "$game/smash.ron" ] && [ ! -f "$game/engine.toml" ]; then
+      # A native mobile game (sim-mobile): its own checker reads its tuning.
+      smash="$root/target/release/simcraft-smash"
+      [ -x "$smash" ] && report "$("$smash" check --dir "$game" 2>&1)"
+    else
+      [ -x "$check" ] && report "$("$check" "$game" 2>&1)"
+    fi
     ;;
   assets/*.ron)
     if [ -x "$check" ]; then

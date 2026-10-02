@@ -1,0 +1,172 @@
+// SMASH: a slingshot, a tower on a pedestal, clear the table. Every number that shapes how it feels is here, so a
+// change of feel is a change of data, measured by `simcraft-smash eval` (EVALS.md) and probed with `--set`.
+// Units: metres, seconds, kilograms; angles in degrees. The world: y up, the pedestal at the origin, the slingshot
+// on +z looking towards -z.
+(
+    physics: (
+        gravity: 9.81,
+        substeps: 6,
+    ),
+    sling: (
+        // Where the pouch rests (between the fork's tips).
+        at: (0.0, 1.25, 8.5),
+        // A full pull: the finger travels this share of the screen's height.
+        pull_screen: 0.30,
+        // Pull share → launch speed (m/s): a harder pull is a faster, more destructive stone.
+        min_speed: 13.0,
+        max_speed: 25.0,
+        // The pull aims at a height on the tower, evenly: from this far above the pedestal (m) to this far over the
+        // tower's top (negative: a full pull aims into the top row); the launch angle is solved to fly there.
+        aim_low: 0.15,
+        aim_over: -0.12,
+        // A full screen's width of sideways finger travel aims this far across the tower (m); the shot goes opposite
+        // the pull.
+        aim_width: 4.7,
+        // How far the pouch comes back towards the camera at a full pull (m).
+        pouch_travel: 0.9,
+        // A release shoots the aim from this long before the finger lifted (s): a lifting finger rolls a few pixels.
+        release_lock: 0.08,
+        // The released band: a spring (Hz) and how fast it settles (damping ratio).
+        band_hz: 7.0,
+        band_damping: 0.25,
+        // Seconds from a shot to the next stone in the pouch.
+        reload: 0.55,
+        // Pull steps felt as ticks in the hand.
+        ticks: 8,
+    ),
+    stone: (
+        radius: 0.17,
+        density: 2600.0,
+        restitution: 0.2,
+        friction: 0.5,
+    ),
+    camera: (
+        // Aiming: where the eye sits and what it looks at.
+        eye: (0.0, 2.3, 12.6),
+        look: (0.0, 1.75, 0.0),
+        fov: 46.0,
+        // A full pull leans in: fov narrows by this many degrees, the eye drops by this much (m).
+        pull_fov: -3.0,
+        pull_drop: 0.12,
+        // Aiming sideways: the eye slides with the aim (m per deg of yaw) while it keeps looking at the tower, so the
+        // tower stays under the finger and the beach glides past behind it (parallax round the target).
+        lean: 0.06,
+        // Tilting the phone slides the eye too (m per g of tilt away from how it is usually held), looking at the
+        // tower still: the picture has depth you can feel in the hand.
+        tilt: 1.2,
+        // In flight the camera pushes after the stone: share of the way from the aim pose towards it.
+        follow: 0.22,
+        follow_fov: -5.0,
+        // Spring stiffness of the camera towards its target pose (Hz); 1 = critically damped.
+        hz: 2.2,
+        damping: 1.0,
+        // Back to the aim pose this long after the last big hit (s).
+        settle: 1.1,
+    ),
+    feel: (
+        // Hit-stop: the world freezes this long on a hard first hit (s); hits under `hitstop_impulse` don't.
+        hitstop: 0.06,
+        hitstop_impulse: 40.0,
+        // Slow motion when a hit moves a lot at once: time scale, how long it eases back (s), the trigger
+        // (total impulse in one step, N·s).
+        slowmo_scale: 0.35,
+        slowmo_time: 0.55,
+        slowmo_impulse: 220.0,
+        // Screen shake: trauma per N·s of impulse, its decay a second, and the largest turn (deg) and move (m).
+        shake_per_impulse: 0.006,
+        shake_decay: 1.8,
+        shake_angle: 1.6,
+        shake_move: 0.06,
+        // Debris chips per impact (scaled by impulse, capped) and their life (s).
+        chips_per_impulse: 0.08,
+        chips_max: 14,
+        chip_life: 1.1,
+        // A white flash on a hard hit (0..1).
+        flash: 0.12,
+    ),
+    // Every piece sits in a cell of this size (m); a row stands on the one below it and is centred, so a shorter row
+    // sits half a cell in (the classic can pyramid comes out of the rows alone).
+    pieces: (
+        cell: (0.36, 0.40, 0.36),
+    ),
+    // The levels, in order. Rows from the bottom: `w` wood box, `s` stone block, `c` a can, `g` a glass jar, `=` a
+    // wood beam and `#` a stone beam (a run of them is one long piece), `.` empty. `depth`: cells front to back.
+    // `stones`: what the player gets; stars for stones left over.
+    levels: [
+        (name: "FIRST CANS", stones: 3, depth: 1, rows: [
+            "ccccc",
+            "cccc",
+            "ccc",
+            "cc",
+            "c",
+        ]),
+        (name: "CRATES", stones: 3, depth: 1, rows: [
+            "wwwww",
+            "wwwww",
+            "cwwwc",
+            ".ccc.",
+            "..c..",
+        ]),
+        (name: "GLASS SHELF", stones: 3, depth: 1, rows: [
+            "gggg",
+            "====",
+            "gggg",
+            "====",
+            "cggc",
+        ]),
+        (name: "TWO TOWERS", stones: 4, depth: 1, rows: [
+            "ww..ss",
+            "cc..cc",
+            "ww..ss",
+            "cc..cc",
+            "g....g",
+        ]),
+        (name: "STONE CAP", stones: 4, depth: 2, rows: [
+            "cccccc",
+            "######",
+            "cccccc",
+            ".####.",
+            "..ss..",
+        ]),
+        (name: "PILLARS", stones: 5, depth: 1, rows: [
+            "c.c.c.c",
+            "c.c.c.c",
+            "#######",
+            "g.w.w.g",
+            "=======",
+            "c.c.c.c",
+        ]),
+        (name: "FORTRESS", stones: 5, depth: 2, rows: [
+            "cwwwwc",
+            "cggggc",
+            "wwwwww",
+            ".cssc.",
+            ".gccg.",
+            "..ww..",
+            "..cc..",
+        ]),
+        (name: "GLASS TOWER", stones: 4, depth: 2, rows: [
+            "gg",
+            "ww",
+            "gg",
+            "##",
+            "gg",
+            "ww",
+            "gg",
+            "cc",
+        ]),
+    ],
+    // The round table the tower stands on: its top (m) and thickness; it is as wide as its tower needs (at least
+    // `radius`).
+    pedestal: (
+        radius: 1.55,
+        top: 1.0,
+        thickness: 0.14,
+    ),
+    materials: (
+        wood: (density: 550.0, friction: 0.65, restitution: 0.05, colour: 0xf08a24, break_dv: 0.0),
+        stone: (density: 2300.0, friction: 0.7, restitution: 0.02, colour: 0x4d5a82, break_dv: 0.0),
+        can: (density: 180.0, friction: 0.45, restitution: 0.25, colour: 0xe9eef7, break_dv: 0.0),
+        glass: (density: 900.0, friction: 0.4, restitution: 0.1, colour: 0x3fc4ff, break_dv: 2.2),
+    ),
+)

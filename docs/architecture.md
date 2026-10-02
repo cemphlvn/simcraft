@@ -46,7 +46,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | Crate | Contents | Knows the game? |
 |---|---|---|
 | `sim-core` | `World` (entities + cell grid + per-kind index, mutation only via methods), `Effect`, `Group`, `apply`, `Engine<Loaded→Validated→Running>`, `trait Rules`, hash, snapshot/restore | No |
-| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. So far `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). `verlet`: points and constraints (ropes, chains, struts; see Constraints). Plan: `docs/plans/physics-and-vehicles.md` | No |
+| `sim-physics` | The physics layer, blind to games and the world: plain data in, a fixed step, plain data out. `rigid`: 3D rigid bodies (`f32` for now, see Rigid bodies). `fixed`: `Fx` (Q48.16 fixed point, `i128` intermediates, exact integer `sqrt`), `Angle` (binary angle, 2^32 a turn, sin/cos from a compile-time integer table), `curve` (piecewise-linear data, e.g. a torque curve). `verlet`: points and constraints (ropes, chains, struts; see Constraints). Plan: `docs/plans/physics-and-vehicles.md` | No |
 | `sim-mobile` | The mobile core (see Mobile core): the iOS/Android shell (winit + wgpu), gestures, screen layers, haptics; a static library for Xcode and a shared library for Gradle | No |
 | `sim-state` | State charts: nested states, layers, reusable machines, remember, interrupt/back, pick; memory encoding; selectors; step distances. Guards and actions are generic (`G`, `A`) | No (not even Rhai) |
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
@@ -324,6 +324,35 @@ kinematics (tier 0), **constraints** (tier 1, here), rigid bodies (tier 2, growi
   turns it into speed (the slingshot).
 - **Queries:** a rope's segments (for drawing and for swipe-across), its length and its tension (the largest
   stretch left, for sound and haptics).
+
+## Rigid bodies (`sim_physics::rigid`)
+
+Tier 2 of the physics tiers: boxes, prisms and spheres that stack, rest, topple and get hit (stack-and-topple
+games). Research and parameter sources: `docs/research/smash-physics.md`.
+
+- **Floats, for now** (decided 2026-10-02): `f32` while a game's feel is tuned (the same binary gives the same
+  result); it moves to `fixed` once the feel is locked. The one place in `sim-physics` that is not integer.
+- **Shapes:** `Box { half }`, `Sphere { radius }`, `Prism { radius, half_height, sides }`: an upright convex prism
+  stands in for a cylinder (a can, a jar), as every casual game does.
+- **A step:** sweep-and-prune broadphase over bounds grown by how far a body can move; narrowphase by SAT on hulls
+  (Gregorius: face axes, Gauss-map-pruned edge axes, a bias towards faces) with face clipping to ≤ 4 points,
+  sphere–hull and sphere–sphere; all contacts speculative, so a fast projectile cannot pass through, and a
+  speculative contact on a fast sphere is kept only if its sweep this step really reaches the other body (no ghost
+  collisions: a stone flying past a corner is not stopped by a contact the linear model made up). Then the soft
+  step (Catto, Box2D v3) in `substeps` (6): integrate velocities, warm start, solve soft contacts (60 Hz, damping
+  ratio 10), integrate positions, relax, and a restitution pass. Warm starting matches points by anchor proximity.
+- **Sleeping:** union-find islands; an island whose bodies have all been slow for 0.5 s sleeps. A body made
+  `asleep` (a level's tower) stays bit-identical until something awake touches it; waking floods to every sleeping
+  body it touches.
+- **Collision layers:** `layer` and `mask` per body; two bodies touch only if each one's layer is in the other's
+  mask (debris that hits the ground but not the tower).
+- **Out:** `impacts()` (per touching pair: point, normal, impulse, approach speed, new) for breaking, haptics and
+  camera; `stats()` (awake, manifolds, points, deepest overlap and the pair's tags); `raycast`; `sphere_cast`
+  (conservative advancement, layer-aware: what a thrown sphere first touches, exactly). `World` is `Clone` (a
+  game's bot tries shots on copies).
+- **Measured:** property tests (parabola, rest without sinking, an asleep tower bit-identical, stacks, pyramids,
+  cans, no tunnelling at 40 m/s, a hit wakes and topples, same inputs same result) and named scenes
+  (`rigid::scenes`: `stack10`, `pyramid21`, `cans5`, `wall40`, `shot`) with `measure`.
 
 ## Vehicles (`vehicle:` on a kind, `track:` in the game)
 
@@ -1149,6 +1178,27 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
   fading trail behind every finger, so distances, speeds and what the phone registered can be read by eye. Each
   card adds its live values to the stats line. Sensors enter the simulation as whole numbers (tilt in
   thousandths of g), so a replay includes them. Text is a 5×7 pixel font drawn with the same shapes.
+- **3D** (`draw3d`): a card may return a `Scene3` (a camera, a sun, instances of unit meshes: cube, sphere, cylinder,
+  cone), drawn before the 2D layers: a sun shadow map, hemisphere light, a chamfer on box edges from the shader
+  (a toy look without bevelled meshes), fog, 4× MSAA where the GPU offers it. A **fullscreen** card (`fullscreen()`)
+  has no workbench, header or tabs, and draws its own way back.
+- **SMASH** (`smash`, the app's first card): the first mobile game, a slingshot against a tower on a pedestal
+  (Smash Fest's family) on `rigid`. Its tuning is data, `games/smash/smash.ron` (embedded in the player); it is
+  developed eval-driven like a `game.ron` game, natively: `simcraft-smash eval [--save] [--set path=value]
+  [--check]` plays scripted shots through the same calls a finger makes and measures aim, aiming precision (cm per
+  px, linearity, reach, release roll, swim, parallax), camera (jerk, what is on screen), haptics (pulses a second),
+  solver (overlap, time); `simcraft-smash shot DIR [--level NAME]` renders frames of a shot without a window;
+  `simcraft-smash check` reads the tuning for the edit hook. Log: `games/smash/EVALS.md`.
+  - **Aim:** the pull picks a height on the tower (evenly, base to top) and sideways a point across it; the launch
+    angle is solved (low arc). The preview flies the solver's integrator with an exact sphere cast. A release
+    shoots the aim from 80 ms before the lift (a lifting finger rolls).
+  - **Camera:** a spring that follows a smoothed goal (bounded jerk); one point of interest (the stone, then where
+    it hit) with an eased push-in; parallax round the target: aiming and tilting the phone slide the eye while it
+    keeps looking at the tower; trauma² shake on real time.
+  - **Levels** are data in `smash.ron` (rows of pieces from the bottom, centred: `w s c g`, `=`/`#` beams, stones,
+    depth); a clear goes to the next level, out of stones retries, stars for stones left. The evals keep playing
+    one level (`FORTRESS`), so the series stays comparable as levels are added.
+  - Game time can slow (hit-stop, slow motion); camera, band and haptics run on real time.
 
 `simcraft-build --list` shows every target and whether this machine can build it.
 
