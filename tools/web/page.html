@@ -1,0 +1,66 @@
+<title>Simcraft Arcade</title>
+<style>
+/* One fixed look, a walnut games box at night; the canvas fills the page and takes every touch. */
+:root { --night: #1b2235; --ink: #f7efe2; --dim: #b8a98f; --maple: #e9c48c; --walnut: #7a4a2a; --go: #35d07f;
+  --font: "Bungee", "Arial Black", system-ui, sans-serif; color-scheme: dark; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--night); color: var(--ink); overflow: hidden; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; outline: none; }
+#cover { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px; text-align: center; padding-inline: 24px; background: var(--night); transition: opacity .3s; }
+#cover h1 { margin: 0; font: 400 clamp(40px, 14vw, 76px)/1 var(--font); letter-spacing: .03em; color: var(--maple); text-shadow: 0 5px 0 var(--walnut); }
+#cover p { margin: 0; font: 600 14px/1.5 system-ui, sans-serif; color: var(--dim); max-width: 30ch; }
+#cover .bar { height: 4px; width: min(220px, 60vw); border-radius: 2px; background: #2c3550; overflow: hidden; }
+#cover .bar i { display: block; height: 100%; width: 0; background: var(--maple); transition: width .2s; }
+#play { font: 400 22px/1 var(--font); letter-spacing: .06em; color: #10251a; background: var(--go); border: 0; border-radius: 999px; padding: 18px 44px; box-shadow: 0 5px 0 #1f8a52; cursor: pointer; }
+#play:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; }
+#play:active { transform: translateY(3px); box-shadow: 0 2px 0 #1f8a52; }
+#cover.err h1 { color: #ff8a7a; text-shadow: none; font-size: 28px; }
+#cover.done { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { #cover, #cover .bar i { transition: none; } }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&display=swap">
+<div id="cover" role="status">
+  <h1>MAZE<br>&amp; SMASH</h1>
+  <div class="bar" id="bar"><i id="fill"></i></div>
+  <button id="play" type="button" hidden>PLAY</button>
+  <p id="msg">Loading the engine: simcraft physics, compiled to WebAssembly.</p>
+</div>
+<script type="module">
+/*GLUE*/
+const cover = document.getElementById("cover"), msg = document.getElementById("msg"), fill = document.getElementById("fill");
+const play = document.getElementById("play"), bar = document.getElementById("bar");
+function fail(why) { cover.classList.add("err"); cover.querySelector("h1").textContent = "Could not start"; play.hidden = true; msg.textContent = why; }
+new MutationObserver(() => {
+  const s = document.documentElement.dataset.simcraft || "";
+  if (s.startsWith("ready:")) {
+    bar.hidden = true;
+    play.hidden = false;
+    msg.textContent = "Tilt your phone to roll the marble. No tilt? Drag a finger instead.";
+    play.focus();
+  } else if (s.startsWith("error:")) { fail(s.slice(6)); }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-simcraft"] });
+// Tilt: Safari asks for motion access on a tap; where it is refused or missing, the game tilts by drag.
+play.addEventListener("click", async () => {
+  try {
+    const ask = window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission;
+    const state = ask ? await DeviceOrientationEvent.requestPermission() : "granted";
+    if (state === "granted") {
+      window.addEventListener("deviceorientation", e => {
+        if (e.beta !== null && e.gamma !== null) set_tilt(e.beta, e.gamma);
+      });
+    }
+  } catch (_) { /* refused here: drag to tilt */ }
+  cover.classList.add("done");
+});
+try {
+  if (typeof WebAssembly !== "object") throw new Error("This browser has no WebAssembly.");
+  const res = await fetch("simcraft_bg.wasm");
+  if (!res.ok) throw new Error("The game file did not load (" + res.status + ").");
+  const total = +res.headers.get("content-length") || 0, reader = res.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.length; if (total) fill.style.width = Math.min(100, got / total * 100) + "%"; }
+  fill.style.width = "100%";
+  msg.textContent = "Starting the GPU…";
+  await __wbg_init({ module_or_path: new Blob(parts, { type: "application/wasm" }).arrayBuffer() });
+} catch (e) { fail(String(e && e.message || e)); }
+</script>

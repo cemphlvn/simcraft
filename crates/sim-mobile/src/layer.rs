@@ -54,6 +54,10 @@ impl Insets {
     /// A portrait phone's usual cover when the platform does not say: a status bar or an island on top (59 points on
     /// current iPhones), a home indicator below (34 points). `scale` is pixels per point.
     pub fn phone(scale: f32) -> Insets {
+        // In a browser the page already sits inside the safe area: only a little breathing room.
+        #[cfg(target_arch = "wasm32")]
+        return Insets { top: 8.0 * scale, bottom: 8.0 * scale, left: 0.0, right: 0.0 };
+        #[cfg(not(target_arch = "wasm32"))]
         Insets { top: 59.0 * scale, bottom: 34.0 * scale, left: 0.0, right: 0.0 }
     }
 

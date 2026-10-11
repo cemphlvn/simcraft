@@ -1,6 +1,7 @@
 //! Sensors: what the phone feels, read once a frame and handed to the simulation as whole numbers, so a replay
 //! can carry them. Motion is Core Motion's device motion on iOS (gravity with the hand's shake filtered out, no
-//! permission prompt); elsewhere there is none yet and a card says so.
+//! permission prompt); in a browser it is the page's device orientation, handed in by `web::set_tilt` once the
+//! player allowed it; elsewhere there is none and a card says so.
 
 /// What the sensors read this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,7 +56,12 @@ impl Motion {
         Some([milli(g.x), milli(g.y), milli(g.z)])
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_arch = "wasm32")]
+    pub fn gravity(&self) -> Option<[i32; 3]> {
+        WEB_GRAVITY.get()
+    }
+
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
     pub fn gravity(&self) -> Option<[i32; 3]> {
         None
     }
@@ -63,4 +69,20 @@ impl Motion {
     pub fn sense(&self) -> Sense {
         Sense { gravity: self.gravity() }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The browser's latest gravity reading (the page's one thread).
+    static WEB_GRAVITY: std::cell::Cell<Option<[i32; 3]>> = const { std::cell::Cell::new(None) };
+}
+
+/// The browser: gravity from the page's device orientation (degrees: `beta` front to back, `gamma` left to right,
+/// a portrait phone), in the same frame and units as Core Motion's.
+#[cfg(target_arch = "wasm32")]
+pub fn set_web_gravity(beta: f64, gamma: f64) {
+    let (b, g) = (beta.to_radians(), gamma.to_radians());
+    // Earth's down, (0, 0, −1), turned into the phone's frame (W3C: R = Rz(α)·Rx(β)·Ry(γ)).
+    let milli = |v: f64| (v * 1000.0).round() as i32;
+    WEB_GRAVITY.set(Some([milli(b.cos() * g.sin()), milli(-b.sin()), milli(-b.cos() * g.cos())]));
 }

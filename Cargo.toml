@@ -57,3 +57,10 @@ iter_overeager_cloned = "warn"
 redundant_allocation = "warn"
 box_collection = "warn"
 vec_box = "warn"
+
+# The browser build (tools/web/build.sh): a phone downloads it, so whole-program optimisation and no symbols.
+[profile.web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true

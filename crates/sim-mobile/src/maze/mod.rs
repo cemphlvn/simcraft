@@ -86,8 +86,10 @@ pub struct Maze {
     pub drag: Option<(Px, Px)>,
     /// The autopilot's tilt, when it plays (the evals); it takes the place of the hand.
     pub pilot: Option<(f32, f32)>,
-    /// Ticks played on this level (the clock; it stops when the level is won).
+    /// Ticks played on this level (the clock: it starts at the first tilt and stops when the level is won).
     pub tick: u64,
+    /// The board has been tilted since the level started.
+    pub started: bool,
     /// Ticks since the level was built, never stopping (animations), and its value when the level was won.
     pub age: u64,
     pub won_age: u64,
@@ -132,6 +134,7 @@ impl Maze {
             drag: None,
             pilot: None,
             tick: 0,
+            started: false,
             age: 0,
             won_age: 0,
             falls: 0,
@@ -213,6 +216,7 @@ impl Maze {
         self.base = None;
         self.drag = None;
         self.tick = 0;
+        self.started = false;
         self.age = 0;
         self.won_age = 0;
         self.falls = 0;
@@ -282,6 +286,8 @@ impl Maze {
     /// One tick: the board follows the hand, gravity follows the board, the marble rolls, drops, knocks.
     pub fn tick(&mut self, out: &mut Vec<Pulse>) {
         let dt = 1.0 / TICK_RATE as f32;
+        // A page waiting for its player (or a phone set down) is not playing yet.
+        self.started |= self.want.0.abs() + self.want.1.abs() > 0.005;
         let k = 1.0 - (-dt / self.t.physics.tilt_lag.max(1e-3)).exp();
         self.tilt.0 += (self.want.0 - self.tilt.0) * k;
         self.tilt.1 += (self.want.1 - self.tilt.1) * k;
@@ -302,7 +308,7 @@ impl Maze {
                 }
             }
         }
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         self.world.step(dt);
         self.step_us = started.elapsed().as_secs_f32() * 1e6;
         self.knocks(out);
@@ -336,7 +342,7 @@ impl Maze {
                 out.push(Pulse::new(Haptic::Tap, 0.5, 0.8));
             }
         }
-        if self.won.is_none() {
+        if self.won.is_none() && self.started {
             self.tick += 1;
         }
         self.age += 1;

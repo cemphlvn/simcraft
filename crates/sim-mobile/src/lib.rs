@@ -3,7 +3,8 @@
 //! (`draw`), text (`font`), the Mobile Capability Playground (`playground`) and the application loop (`app`). Designed from the types of casual mobile games (`docs/research/mobile-types.md`).
 //!
 //! Entry points: `simcraft_mobile_main` (iOS: the Xcode app's `main` calls it; it never returns), `android_main`
-//! (Android: `NativeActivity` loads this library and calls it), [`preview`] (the desktop).
+//! (Android: `NativeActivity` loads this library and calls it), [`preview`] (the desktop), `web::start` (the
+//! browser: runs when the wasm module loads).
 
 pub mod app;
 pub mod draw;
@@ -18,14 +19,25 @@ pub mod playground;
 pub mod sensors;
 pub mod smash;
 pub mod stats;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 use winit::event_loop::EventLoop;
 
 /// Runs the app on `el` until it ends (on iOS: forever).
 pub fn run(el: EventLoop<()>) {
-    let mut app = app::App::new();
-    if let Err(e) = el.run_app(&mut app) {
-        eprintln!("sim-mobile: {e}");
+    // The browser's loop returns at once and lives on in the page's event callbacks: the app is handed over.
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        el.spawn_app(app::App::new());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut app = app::App::new();
+        if let Err(e) = el.run_app(&mut app) {
+            eprintln!("sim-mobile: {e}");
+        }
     }
 }
 

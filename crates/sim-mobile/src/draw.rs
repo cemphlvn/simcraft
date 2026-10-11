@@ -76,6 +76,8 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub format: wgpu::TextureFormat,
+    /// The GPU API underneath ("metal", "vulkan", "webgpu", "gl", …).
+    pub backend: &'static str,
     pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
@@ -184,7 +186,8 @@ impl Renderer {
         // 4× MSAA where the format allows it: nearly free on a phone's tiled GPU, and edges are what a toy look shows.
         let samples = if adapter.get_texture_format_features(format).flags.sample_count_supported(4) { 4 } else { 1 };
         let three = Renderer3::new(&device, format, samples);
-        Ok(Renderer { device, queue, format, pipeline, globals, globals_bg, instances, capacity, three })
+        let backend = adapter.get_info().backend.to_str();
+        Ok(Renderer { device, queue, format, backend, pipeline, globals, globals_bg, instances, capacity, three })
     }
 
     fn instance_buffer(device: &wgpu::Device, n: usize) -> wgpu::Buffer {

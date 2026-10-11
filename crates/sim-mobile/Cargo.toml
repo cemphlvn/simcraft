@@ -30,6 +30,8 @@ sim-rules.workspace = true
 wgpu = "29"
 winit = "0.30"
 pollster = "0.4"
+# std::time::Instant on native; performance.now() in the browser, where std's clock panics.
+web-time = "1"
 bytemuck = { version = "1", features = ["derive"] }
 # Games as data: SMASH's tuning (games/smash/smash.ron) is embedded, and read from disk by the eval tool.
 serde.workspace = true
@@ -48,6 +50,14 @@ image = { version = "0.24", default-features = false, features = ["png"] }
 # The eval tool reads eval.toml and its own saved steps.
 toml.workspace = true
 serde_json.workspace = true
+
+# The browser: the same shell on a canvas, WebGPU where the browser has it and WebGL2 otherwise
+# (docs/architecture.md, Distribution: `web`).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "29", features = ["webgl"] }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["console", "Document", "Element", "HtmlCanvasElement", "Window"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30", features = ["android-native-activity"] }

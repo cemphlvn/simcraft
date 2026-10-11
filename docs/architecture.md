@@ -1170,6 +1170,14 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
 - **Release.** The same player with the bundle embedded: publishing a game never compiles the engine.
 - **Desktop preview** (`simcraft-mobile`): the player in a phone-sized window, for quick checks; the phone is
   where a game is judged.
+- **Browser** (`tools/web/build.sh` → `dist/simcraft-web/`): the same player compiled to `wasm32` and drawn on a
+  canvas, WebGPU where the browser gives an adapter and WebGL2 otherwise, so a phone plays it from a link with no
+  store and no Mac. The GPU is made by a spawned future and picked up by the next frame (a browser cannot block on
+  it); the canvas is sized from the page every frame (CSS size × device pixel ratio). The page asks for motion on
+  its PLAY tap and hands `deviceorientation` to the game as gravity in Core Motion's frame (`web::set_tilt`);
+  refused or missing, games fall back to touch. No haptics (Safari has no vibration). The 3D renderer draws without
+  a base vertex (indices are absolute), which WebGL2 cannot do. One page plus one `.wasm` file: the JS glue is
+  inlined.
 - **Mobile Capability Playground** (`playground`): where the mobile core's mechanics are tuned before a game uses
   them, one card per capability, switched by tabs at the bottom of the safe area: `ROPE` (catch, pull, fling),
   `TOUCH` (every finger with its id and trail; two fingers hold a rope's ends), `FEEL` (a pad for each haptic

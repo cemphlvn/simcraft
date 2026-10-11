@@ -39,3 +39,4 @@ tools/mobile/android/.gradle/
 tools/mobile/android/.kotlin/
 tools/mobile/android/build/
 tools/mobile/android/app/build/
+/dist/

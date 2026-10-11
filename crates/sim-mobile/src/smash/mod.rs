@@ -562,7 +562,7 @@ impl Smash {
             1.0
         };
         let gdt = dt * scale;
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         self.world.step(gdt);
         self.step_us = started.elapsed().as_secs_f32() * 1e6;
         if gdt > 0.0 {

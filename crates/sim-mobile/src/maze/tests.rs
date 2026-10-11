@@ -135,6 +135,16 @@ fn a_hole_swallows_the_marble_and_it_comes_back_at_the_start() {
 }
 
 #[test]
+fn the_clock_waits_for_the_first_tilt() {
+    let mut m = Maze::default();
+    run(&mut m, 120);
+    assert_eq!(m.tick, 0, "nobody is playing yet");
+    m.pilot = Some((0.1, 0.0));
+    run(&mut m, 60);
+    assert_eq!(m.tick, 60);
+}
+
+#[test]
 fn the_goal_wins_and_the_clock_stops() {
     let mut m = Maze::default();
     m.holes.push(Hole { at: m.start, cell: (1, 1), goal: true });

@@ -3,9 +3,13 @@
 //!
 //! Lifecycle: on suspend the surface is dropped (Android destroys it; iOS goes inactive), on resume it is made
 //! again; the scene and the GPU device survive both. The loop runs the scene at a fixed tick and draws between ticks.
+//!
+//! In a browser the GPU cannot be waited for on the event loop's thread: it is made by a spawned future and picked
+//! up by the next frame ([`Pending`]).
 
 use std::sync::Arc;
-use std::time::Instant;
+
+use web_time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
@@ -31,6 +35,11 @@ struct Surface {
     config: wgpu::SurfaceConfiguration,
 }
 
+/// A browser's GPU, made asynchronously: the instance (WebGPU when it gives an adapter, else WebGL2), the canvas's
+/// surface and the renderer, or why there is none.
+#[cfg(target_arch = "wasm32")]
+type Pending = std::rc::Rc<std::cell::RefCell<Option<Result<(wgpu::Instance, wgpu::Surface<'static>, Renderer), String>>>>;
+
 pub struct App {
     instance: wgpu::Instance,
     window: Option<Arc<Window>>,
@@ -48,6 +57,8 @@ pub struct App {
     mouse_down: bool,
     /// The last second, printed as one JSON line (streamed from a phone by `devicectl ... --console`).
     stats: Stats,
+    #[cfg(target_arch = "wasm32")]
+    pending: Option<Pending>,
 }
 
 impl Default for App {
@@ -74,6 +85,8 @@ impl App {
             mouse: Px::default(),
             mouse_down: false,
             stats: Stats::default(),
+            #[cfg(target_arch = "wasm32")]
+            pending: None,
         }
     }
 
@@ -133,6 +146,13 @@ impl App {
     }
 
     fn frame(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pick_up();
+            if let Some((w, h)) = self.window.as_ref().and_then(|w| crate::web::fit_canvas(w)) {
+                self.resize(w, h);
+            }
+        }
         let now = Instant::now();
         let interval = now.duration_since(self.last).as_secs_f32();
         self.last = now;
@@ -172,31 +192,9 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, el: &ActiveEventLoop) {
-        let window = match &self.window {
-            Some(w) => w.clone(),
-            None => {
-                let attrs = Window::default_attributes().with_title("simcraft");
-                #[cfg(not(any(target_os = "ios", target_os = "android")))]
-                let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(PREVIEW.0, PREVIEW.1)).with_resizable(false);
-                let w = Arc::new(el.create_window(attrs).expect("a window"));
-                self.gestures = Recognizer::new(Tuning::for_scale(w.scale_factor() as f32));
-                self.window = Some(w.clone());
-                w
-            }
-        };
-        let surface = self.instance.create_surface(window.clone()).expect("a surface");
-        if self.renderer.is_none() {
-            match pollster::block_on(Renderer::new(&self.instance, &surface)) {
-                Ok(r) => self.renderer = Some(r),
-                Err(e) => {
-                    eprintln!("sim-mobile: {e}");
-                    el.exit();
-                    return;
-                }
-            }
-        }
+impl App {
+    /// Draws into `surface` from now on, at the window's size.
+    fn attach(&mut self, surface: wgpu::Surface<'static>, window: &Window) {
         let r = self.renderer.as_ref().expect("a renderer");
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
@@ -212,10 +210,88 @@ impl ApplicationHandler for App {
         surface.configure(&r.device, &config);
         self.surface = Some(Surface { surface, config });
         self.last = Instant::now();
+        window.request_redraw();
+    }
+
+    /// The browser: starts making the GPU once; [`App::pick_up`] installs it.
+    #[cfg(target_arch = "wasm32")]
+    fn start_gpu(&mut self, window: &Arc<Window>) {
+        if self.pending.is_some() {
+            return;
+        }
+        let pending: Pending = Default::default();
+        self.pending = Some(pending.clone());
+        let window = window.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let made = async {
+                let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+                desc.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+                let instance = wgpu::util::new_instance_with_webgpu_detection(desc).await;
+                let surface = instance.create_surface(window.clone()).map_err(|e| format!("no surface: {e}"))?;
+                let renderer = Renderer::new(&instance, &surface).await?;
+                Ok((instance, surface, renderer))
+            };
+            let made = made.await;
+            *pending.borrow_mut() = Some(made);
+            window.request_redraw();
+        });
+    }
+
+    /// The browser: installs the GPU when its future has finished; a failure is shown on the page.
+    #[cfg(target_arch = "wasm32")]
+    fn pick_up(&mut self) {
+        let Some(made) = self.pending.as_ref().and_then(|p| p.borrow_mut().take()) else { return };
+        match made {
+            Ok((instance, surface, renderer)) => {
+                self.instance = instance;
+                self.renderer = Some(renderer);
+                if let Some(w) = self.window.clone() {
+                    self.attach(surface, &w);
+                }
+                crate::web::status(&format!("ready:{}", self.renderer.as_ref().map_or("", |r| r.backend)));
+            }
+            Err(e) => crate::web::status(&format!("error:{e}")),
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        let window = match &self.window {
+            Some(w) => w.clone(),
+            None => {
+                let attrs = Window::default_attributes().with_title("simcraft");
+                #[cfg(target_arch = "wasm32")]
+                let attrs = winit::platform::web::WindowAttributesExtWebSys::with_append(attrs, true);
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(PREVIEW.0, PREVIEW.1)).with_resizable(false);
+                let w = Arc::new(el.create_window(attrs).expect("a window"));
+                self.gestures = Recognizer::new(Tuning::for_scale(w.scale_factor() as f32));
+                self.window = Some(w.clone());
+                w
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        if self.renderer.is_none() {
+            self.start_gpu(&window);
+            el.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        let surface = self.instance.create_surface(window.clone()).expect("a surface");
+        if self.renderer.is_none() {
+            match pollster::block_on(Renderer::new(&self.instance, &surface)) {
+                Ok(r) => self.renderer = Some(r),
+                Err(e) => {
+                    eprintln!("sim-mobile: {e}");
+                    el.exit();
+                    return;
+                }
+            }
+        }
+        self.attach(surface, &window);
         // Wait, not Poll: on iOS Poll spins the run loop without ever sleeping (a whole core at 94 % on an idle
         // screen, measured with Instruments); each frame is asked for instead and paced by the display.
         el.set_control_flow(ControlFlow::Wait);
-        window.request_redraw();
     }
 
     fn suspended(&mut self, el: &ActiveEventLoop) {
@@ -227,6 +303,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
+            // In a browser the canvas is sized from the page every frame instead (`web::fit_canvas`).
+            #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::Resized(size) => self.resize(size.width, size.height),
             WindowEvent::Touch(t) => self.touch(t),
             WindowEvent::CursorMoved { position, .. } => {

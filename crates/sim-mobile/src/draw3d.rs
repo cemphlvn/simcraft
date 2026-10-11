@@ -363,12 +363,12 @@ fn fs_sky(i: SkyOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Where each mesh sits in the shared vertex and index buffers.
+/// Where each mesh sits in the shared index buffer. Its indices are absolute (they already point past the meshes
+/// before it): WebGL2 cannot draw with a base vertex.
 #[derive(Clone, Copy, Debug)]
 struct Range {
     first: u32,
     count: u32,
-    base: i32,
 }
 
 pub struct Renderer3 {
@@ -712,7 +712,7 @@ impl Renderer3 {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             for &(r, a, casters, _) in &calls {
                 if casters > a {
-                    pass.draw_indexed(r.first..r.first + r.count, r.base, a..casters);
+                    pass.draw_indexed(r.first..r.first + r.count, 0, a..casters);
                 }
             }
         }
@@ -744,7 +744,7 @@ impl Renderer3 {
         pass.set_vertex_buffer(1, self.instances.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for &(r, a, _, b) in &calls {
-            pass.draw_indexed(r.first..r.first + r.count, r.base, a..b);
+            pass.draw_indexed(r.first..r.first + r.count, 0, a..b);
         }
         // The sky last, only where nothing was drawn (depth 1).
         pass.set_pipeline(&self.sky_pipeline);
@@ -819,11 +819,14 @@ fn invert(m: &M4) -> M4 {
 fn meshes() -> (Vec<Vertex>, Vec<u32>, [Range; 4]) {
     let mut v: Vec<Vertex> = Vec::new();
     let mut idx: Vec<u32> = Vec::new();
-    let mut ranges = [Range { first: 0, count: 0, base: 0 }; 4];
+    let mut ranges = [Range { first: 0, count: 0 }; 4];
     let begin = |v: &Vec<Vertex>, idx: &Vec<u32>| (v.len(), idx.len());
     let mut end = |m: Mesh, (vb, ib): (usize, usize), v: &Vec<Vertex>, idx: &mut Vec<u32>| {
         let _ = v;
-        ranges[m as usize] = Range { first: ib as u32, count: (idx.len() - ib) as u32, base: vb as i32 };
+        for i in &mut idx[ib..] {
+            *i += vb as u32;
+        }
+        ranges[m as usize] = Range { first: ib as u32, count: (idx.len() - ib) as u32 };
     };
     // Cube: four vertices a face so every face has its own normal.
     let s = begin(&v, &idx);
@@ -931,7 +934,7 @@ mod tests {
             let r = ranges[m as usize];
             for t in idx[r.first as usize..(r.first + r.count) as usize].chunks(3) {
                 let p = |i: u32| {
-                    let q = v[(r.base as u32 + i) as usize].pos;
+                    let q = v[i as usize].pos;
                     V3::new(q[0], q[1], q[2])
                 };
                 let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
