@@ -52,6 +52,7 @@ engine.toml┴─► sim-rules ──────►├── sim-ffi    (C API)
 | `sim-rules` | `GameDef` (RON), `EngineConfig` (TOML), Rhai compilation, dry-run validation, `impl Rules for Game` | Knows the schema, not the content |
 | `sim-agent` | The `simcraft-agent` binary, JSON line protocol, ASCII map | No |
 | `sim-ffi` | `cdylib` + `staticlib`, C header; the agent protocol behind `extern "C"` | No |
+| `sim-model` | Models from modelling tools, standalone (`wgpu` 29, `gltf`, `bytemuck`; nothing of simcraft): `model` (glTF 2.0 import, models built in code, clips baked to palettes, live poses on the CPU) and `skin` (the instanced, skinned PBR model renderer). `sim-gpu` re-exports both (`sim_gpu::model`, `sim_gpu::skin`); other workspaces (tini's piano) use it directly | No |
 | `sim-gpu` | HD renderer (`wgpu` 29 + `winit` 0.30): a game's side-view `stage.ron` (2.5D quads), first-person `track.ron` (3D: perspective camera, depth, fog) or the driver's seat `drive.ron` (a cockpit on a TrackDef), composed without a GPU (`stage`, `track`, `drive`, tested) and drawn by `gpu`; camera effects driven by game events (`fx`); `simcraft-play` (window, `--shot`, `--record`, `--bench`), `simcraft-import` | No |
 | `sim-kernel` (`kernel/`) | 32-bit integer tensor machine that runs ONNX graphs (brains, rules as graphs); `Graph` builds models in code; `genome`/`mutate` for learning | No |
 | `sim-render` | Terminal renderer (cell buffer, diff, frame loop), primitives, 3D voxel view, `view.ron`; `simcraft-view` | No |
@@ -837,7 +838,7 @@ invisible field (the pheromone).
   thing built (`--camera wide`: from above). `simcraft-check` checks the view against the game (your kind is
   controllable, the three actions take `dx`, `dy`, `dz`, drawn kinds, the smell field, the carried prop).
 
-## Models: from modelling tools to the game (`sim_gpu::model`, `sim_gpu::skin`)
+## Models: from modelling tools to the game (`sim-model`: `model`, `skin`)
 
 A kind can be drawn with a model made in the best tools and bound to the game's own state machine. The format
 between tools is glTF 2.0 (`.glb`): Blender, Unity, Unreal and Higgsfield's image-to-3D generators all write it.
@@ -857,6 +858,24 @@ Research and choices: `docs/research/animation.md`.
   the fragment shader lights with the PBR maps (normal maps from screen-space derivatives, GGX specular, sky and
   ground ambient, wrap lighting and a transmitted back-light for thin bodies). One instanced draw per model part.
   Needs storage buffers (Metal, Vulkan, DX12); without them (WebGL2) models are skipped.
+- **A crate of its own** (`crates/sim-model`): loading and drawing models needs only `wgpu` 29, `gltf` and
+  `bytemuck`, so it is usable outside simcraft (tini draws its piano with it). `sim-gpu` re-exports it: every
+  `sim_gpu::model` / `sim_gpu::skin` path is unchanged. A host brings a `wgpu::Device` with storage buffers, its
+  queue, the colour target format and a `Depth32Float` depth attachment; per frame it calls `Skin::prepare`
+  (view-projection, eye, fog, `Light`, the sun's view-projection and shadow parameters; `shadow[0] = 0` = no
+  shadows, `skin::no_shadow_map` gives the placeholder shadow map `Skin::new` needs), then `Skin::draw` inside its
+  pass (and `Skin::draw_shadow` in its shadow pass, if it has one).
+- **Models built in code:** `Model::build(nodes, parts, materials, textures)` makes a model without a `.glb`: a node
+  hierarchy (name, parent, rest transform) and parts whose vertices weigh on node slots (`ModelVert::rigid`). Its
+  only clip is `rest`. Mistakes (a parent that is not a node, a cycle, a vertex on a missing slot, a missing
+  material or texture) are refused with what is wrong. 88 piano keys are one model with one node per key.
+- **Live poses:** besides baked clips, a model can be posed every frame by its owner. Every model keeps its rig on
+  the CPU (`Model::rig`: parents, rest transforms, skin joints and their inverse binds); `Model::pose_into(locals,
+  out)` writes the palette for the rest pose with some nodes' local transforms replaced (children follow their
+  parents, skins follow their joints). `Skin::upload_posable(.., poses)` reserves `poses` live palettes after the
+  clips (an `upload` reserves none, so baked models are laid out as before); `Skin::pose(queue, name, pose, locals)`
+  computes and writes one of them (scratch buffers kept, no allocation per frame), and `Skin::pose_frames(name,
+  pose)` gives the frames an `Instance` uses to draw it. Each pose is shared by every instance that points at it.
 - **The contract** (`roam.ron`, per kind):
   `model: (file, lods: [(from_distance, file)], length, clips: [(state_selector, clip)], still, rate, carry, textures)`.
   The game's state picks the clip (first match; `*` = any), `still` plays when it has not moved for half a second,

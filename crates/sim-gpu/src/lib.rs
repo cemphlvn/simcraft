@@ -5,14 +5,15 @@ pub mod drive;
 pub mod fx;
 pub mod gpu;
 pub mod math;
-pub mod model;
 pub mod perf;
 pub mod post;
 pub mod roam;
-pub mod skin;
 pub mod stage;
 pub mod track;
 pub mod walker;
+
+/// Models and their renderer live in `sim-model` (usable outside simcraft); re-exported so every path is unchanged.
+pub use sim_model::{model, skin};
 
 use std::path::{Path, PathBuf};
 

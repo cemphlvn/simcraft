@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sim-core", "crates/sim-physics", "crates/sim-mobile", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "crates/sim-gpu", "kernel", "test"]
+members = ["crates/sim-core", "crates/sim-physics", "crates/sim-mobile", "crates/sim-state", "crates/sim-rules", "crates/sim-agent", "crates/sim-ffi", "crates/sim-render", "crates/sim-gpu", "crates/sim-model", "kernel", "test"]
 
 [workspace.package]
 edition = "2024"
@@ -13,6 +13,7 @@ sim-physics = { path = "crates/sim-physics" }
 sim-rules = { path = "crates/sim-rules" }
 sim-state = { path = "crates/sim-state" }
 sim-kernel = { path = "kernel" }
+sim-model = { path = "crates/sim-model" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ron = "0.12"

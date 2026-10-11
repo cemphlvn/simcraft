@@ -2448,7 +2448,6 @@ name = "sim-gpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "gltf",
  "image",
  "pollster",
  "rayon",
@@ -2457,6 +2456,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sim-core",
+ "sim-model",
  "sim-physics",
  "sim-render",
  "sim-rules",
@@ -2492,6 +2492,16 @@ dependencies = [
  "toml",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "sim-model"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "gltf",
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]

@@ -2,10 +2,13 @@
 //! is then one `Instance` (where it is, which two frames it blends, a tint). The vertex shader skins with the
 //! palette; the fragment shader lights with the model's PBR maps (base colour, normal, occlusion-roughness-metal),
 //! a sun, a sky and ground ambient, wrap lighting and a transmitted back-light (thin, pale bodies glow against the sun).
+//!
+//! A model can also be posed live: `Skin::upload_posable` reserves palettes after the baked clips, `Skin::pose`
+//! rewrites one of them from node transforms, and `Skin::pose_frames` gives the frames an `Instance` draws it with.
 
 use std::collections::BTreeMap;
 
-use crate::model::{Model, Texture};
+use crate::model::{Mat4, Model, Rig, Texture};
 
 const SHADER: &str = r#"
 struct G {
@@ -311,6 +314,16 @@ struct GpuPart {
     material: wgpu::BindGroup,
 }
 
+/// Live palettes of a posable model: where they start in its palette buffer (in vec4s), how many, its rig, and
+/// scratch buffers reused every `Skin::pose` (no allocation per frame).
+struct Poses {
+    start: u32,
+    count: usize,
+    rig: Rig,
+    matrices: Vec<Mat4>,
+    rows: Vec<[f32; 4]>,
+}
+
 struct GpuModel {
     verts: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -318,6 +331,35 @@ struct GpuModel {
     palette: wgpu::Buffer,
     globals: wgpu::BindGroup,
     shadow_globals: wgpu::BindGroup,
+    poses: Option<Poses>,
+}
+
+/// A palette as the shader reads it: each matrix as its top three rows (vec4s), appended to `rows`.
+fn push_rows(rows: &mut Vec<[f32; 4]>, palette: &[Mat4]) {
+    for mat in palette {
+        rows.extend((0..3).map(|r| [mat[0][r], mat[1][r], mat[2][r], mat[3][r]]));
+    }
+}
+
+/// A placeholder shadow map and its comparison sampler, for hosts without a shadow pass: `Skin::new` needs both,
+/// and with `shadow[0] = 0` in `Skin::prepare` the shader never samples them.
+pub fn no_shadow_map(device: &wgpu::Device) -> (wgpu::TextureView, wgpu::Sampler) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("no shadow map"),
+        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("no shadow map"),
+        compare: Some(wgpu::CompareFunction::LessEqual),
+        ..Default::default()
+    });
+    (texture.create_view(&wgpu::TextureViewDescriptor::default()), sampler)
 }
 
 pub struct Skin {
@@ -615,8 +657,22 @@ impl Skin {
     }
 
     /// Uploads a model under `name`: mesh, textures (a material's image can be replaced by one from the game's
-    /// assets: `overrides` by material name), and every clip's palettes.
+    /// assets: `overrides` by material name), and every clip's palettes. Not posable live (`upload_posable`).
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, name: &str, m: &Model, overrides: &BTreeMap<String, Texture>) {
+        self.upload_posable(device, queue, name, m, overrides, 0);
+    }
+
+    /// Like `upload`, with `poses` live palettes reserved after the clips (each starts in the rest pose). The owner
+    /// writes them with `pose` and draws them with `pose_frames`; every instance pointing at a pose shares it.
+    pub fn upload_posable(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        m: &Model,
+        overrides: &BTreeMap<String, Texture>,
+        poses: usize,
+    ) {
         use wgpu::util::DeviceExt;
         let mut verts = Vec::new();
         let mut indices = Vec::new();
@@ -636,19 +692,24 @@ impl Skin {
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        // The palette, laid out as `Frames::of` says.
+        // The palette, laid out as `Frames::of` says, then the live poses (rest until posed).
         let mut palette: Vec<[f32; 4]> = Vec::new();
         for c in m.clips.values() {
             for frame in &c.frames {
-                for mat in frame {
-                    palette.extend((0..3).map(|r| [mat[0][r], mat[1][r], mat[2][r], mat[3][r]]));
-                }
+                push_rows(&mut palette, frame);
             }
         }
+        let live = (poses > 0).then(|| {
+            let start = palette.len() as u32;
+            let rest = m.rig.rest_palette();
+            (0..poses).for_each(|_| push_rows(&mut palette, &rest));
+            Poses { start, count: poses, rig: m.rig.clone(), matrices: rest, rows: Vec::with_capacity(m.slots * 3) }
+        });
+        let usage = if live.is_some() { wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST } else { wgpu::BufferUsages::STORAGE };
         let pbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(name),
             contents: bytemuck::cast_slice(&palette),
-            usage: wgpu::BufferUsages::STORAGE,
+            usage,
         });
         let globals = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(name),
@@ -723,8 +784,31 @@ impl Skin {
                 wgpu::BindGroupEntry { binding: 1, resource: pbuf.as_entire_binding() },
             ],
         });
-        self.models.insert(name.to_string(), GpuModel { verts: vbuf, indices: ibuf, parts, palette: pbuf, globals, shadow_globals });
+        let gpu = GpuModel { verts: vbuf, indices: ibuf, parts, palette: pbuf, globals, shadow_globals, poses: live };
+        self.models.insert(name.to_string(), gpu);
         self.frames.insert(name.to_string(), Frames::of(m));
+    }
+
+    /// Poses live palette `pose` of model `name`: the rest pose with some nodes' local transforms replaced
+    /// (`Rig::pose_into`), written to the GPU (seen by draws submitted after this queue write). Refused when the
+    /// model is not uploaded or has no such pose.
+    pub fn pose(&mut self, queue: &wgpu::Queue, name: &str, pose: usize, locals: &[(usize, Mat4)]) -> Result<(), String> {
+        let m = self.models.get_mut(name).ok_or_else(|| format!("no model '{name}'"))?;
+        let p = m.poses.as_mut().filter(|p| pose < p.count).ok_or_else(|| format!("model '{name}' has no live pose {pose}"))?;
+        p.rig.pose_into(locals, &mut p.matrices);
+        p.rows.clear();
+        push_rows(&mut p.rows, &p.matrices);
+        let offset = (p.start as usize + pose * p.matrices.len() * 3) * std::mem::size_of::<[f32; 4]>();
+        queue.write_buffer(&m.palette, offset as u64, bytemuck::cast_slice(&p.rows));
+        Ok(())
+    }
+
+    /// The frames an `Instance` draws live pose `pose` of model `name` with (`Instance::frames`; blend 0). `None`
+    /// when the model is not uploaded or has no such pose.
+    pub fn pose_frames(&self, name: &str, pose: usize) -> Option<[u32; 4]> {
+        let p = self.models.get(name)?.poses.as_ref().filter(|p| pose < p.count)?;
+        let at = p.start + (pose * p.rig.slots() * 3) as u32;
+        Some([at, at, 0, 0])
     }
 
     /// Writes this frame's globals and instances; call before the pass.
@@ -803,9 +887,143 @@ impl Skin {
                     pass.set_bind_group(1, &p.material, &[]);
                     pass.draw_indexed(p.first..p.first + p.count, p.base_vertex, at..at + n);
                 }
-                let _ = &m.palette;
             }
             at += n;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{IDENTITY, Material, ModelVert, Node, Part, trs};
+
+    const SIZE: u32 = 64;
+    const COLOUR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+        limits.max_storage_buffers_per_shader_stage = adapter.limits().max_storage_buffers_per_shader_stage;
+        limits.max_storage_buffer_binding_size = adapter.limits().max_storage_buffer_binding_size;
+        let desc = wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() };
+        pollster::block_on(adapter.request_device(&desc)).ok()
+    }
+
+    /// A board with one key: a quad around the key's origin, in clip space (the view-projection is the identity).
+    fn board() -> Model {
+        let at = |x: f32| trs([x, 0.0, 0.5], [0.0, 0.0, 0.0, 1.0], [1.0; 3]);
+        let nodes =
+            [Node { name: "board".into(), parent: None, rest: at(0.0) }, Node { name: "key".into(), parent: Some(0), rest: IDENTITY }];
+        let v = |x: f32, y: f32| ModelVert::rigid([x, y, 0.0], [0.0, 0.0, -1.0], [0.0; 2], 1);
+        let quad =
+            Part { verts: vec![v(-0.2, -0.2), v(0.2, -0.2), v(0.2, 0.2), v(-0.2, 0.2)], indices: vec![0, 1, 2, 0, 2, 3], material: 0 };
+        let white = Material {
+            name: "white".into(),
+            base_color: [1.0; 4],
+            base_tex: None,
+            normal_tex: None,
+            mr_tex: None,
+            occlusion_tex: None,
+            metallic: 0.0,
+            roughness: 0.5,
+        };
+        Model::build(&nodes, vec![quad], vec![white], Vec::new()).expect("builds")
+    }
+
+    /// Draws `draws` and returns the red channel of row `SIZE / 2`.
+    fn render(device: &wgpu::Device, queue: &wgpu::Queue, skin: &mut Skin, draws: &[ModelDraw]) -> Vec<u8> {
+        let target = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let colour = target(COLOUR, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        let depth = target(wgpu::TextureFormat::Depth32Float, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let (colour_view, depth_view) = (colour.create_view(&Default::default()), depth.create_view(&Default::default()));
+        skin.prepare(device, queue, IDENTITY, [0.0; 4], [0.0, 0.0, -5.0], [0.0; 2], Light::default(), draws, IDENTITY, [0.0; 4]);
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &colour_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            skin.draw(&mut pass, draws);
+        }
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(SIZE * SIZE * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            colour.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SIZE * 4), rows_per_image: Some(SIZE) },
+            },
+            wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        read.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("maps"));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("polls");
+        let px = read.slice(..).get_mapped_range();
+        let row = (SIZE / 2 * SIZE * 4) as usize;
+        px[row..row + (SIZE * 4) as usize].as_chunks::<4>().0.iter().map(|p| p[0]).collect()
+    }
+
+    #[test]
+    fn a_live_pose_moves_what_is_drawn_and_each_pose_has_its_own_palette() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU: skipped");
+            return;
+        };
+        let (shadow_view, shadow_sampler) = no_shadow_map(&device);
+        let mut skin = Skin::new(&device, &queue, COLOUR, &shadow_view, &shadow_sampler);
+        let model = board();
+        skin.upload_posable(&device, &queue, "board", &model, &BTreeMap::new(), 2);
+        // The rest clip takes 2 slots x 3 rows; the poses follow it.
+        assert_eq!((skin.pose_frames("board", 0), skin.pose_frames("board", 1)), (Some([6, 6, 0, 0]), Some([12, 12, 0, 0])));
+        assert_eq!(skin.pose_frames("board", 2), None);
+        assert!(skin.pose(&queue, "board", 2, &[]).is_err() && skin.pose(&queue, "piano", 0, &[]).is_err());
+
+        let draw = |skin: &Skin, pose: usize| {
+            let frames = skin.pose_frames("board", pose).expect("a pose");
+            let m = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+            vec![ModelDraw { model: "board".into(), instances: vec![Instance { m, frames, params: [0.0; 4], tint: [1.0; 4] }] }]
+        };
+        let (centre, right) = (SIZE as usize / 2, (1.6 / 2.0 * SIZE as f32) as usize);
+        let draws = draw(&skin, 0);
+        let rest = render(&device, &queue, &mut skin, &draws);
+        assert!(rest[centre] > 0 && rest[right] == 0, "at rest the key is in the middle");
+        let pressed = trs([0.6, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3]);
+        skin.pose(&queue, "board", 0, &[(model.nodes["key"], pressed)]).expect("poses");
+        let draws = draw(&skin, 0);
+        let moved = render(&device, &queue, &mut skin, &draws);
+        assert!(moved[centre] == 0 && moved[right] > 0, "posed, the key moved right");
+        let draws = draw(&skin, 1);
+        let other = render(&device, &queue, &mut skin, &draws);
+        assert!(other[centre] > 0 && other[right] == 0, "pose 1 is untouched");
     }
 }

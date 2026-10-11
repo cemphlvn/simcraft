@@ -1,0 +1,17 @@
+[package]
+name = "sim-model"
+description = "Models from modelling tools (glTF 2.0) or built in code, baked clips and live poses, drawn instanced and skinned with wgpu"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+gltf.workspace = true
+wgpu = "29"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+pollster = "0.4"
+
+[lints]
+workspace = true
