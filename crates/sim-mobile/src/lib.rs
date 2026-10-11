@@ -13,6 +13,7 @@ pub mod games;
 pub mod gesture;
 pub mod haptics;
 pub mod layer;
+pub mod maze;
 pub mod playground;
 pub mod sensors;
 pub mod smash;

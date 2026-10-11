@@ -228,6 +228,28 @@ tur süreleri `game.ron`'daki iki kısa kuraldır: çizgiyi geçmek bir tur saya
 Görseller üretilmiştir (Higgsfield) ve tüm markalar hayalidir. Motor sesi ve müzik senin ekleyeceğin CC0 kayıtlardır
 ([liste](assets/src/race/audio/README.md)). O zamana kadar motor sesi sentezlenir.
 
+### `games/maze`: eğmeli bilye labirenti (telefon)
+
+Telefonu eğerek çelik bir bilyeyi tahta bir labirentte, siyah deliklerin yanından geçirip yeşil deliğe yuvarlarsın.
+Beş bölüm, bir saat, hiç düşmeden bitirilen tura yıldız. Uygulamanın ilk kartıdır; köşedeki düğme SMASH'e geçer.
+
+<p align="center">
+  <img src="docs/media/maze_levels.jpg" alt="MAZE: dört bölüm, yuvarlanan bilye ve bölüm sonu bandı" width="100%">
+</p>
+<sub>Otomatik pilotun oynadığı kareler, pencere açmadan <code>simcraft-maze shot</code> ile çizildi.</sub>
+
+- **Bölümler veridir.** [`games/maze/maze.ron`](games/maze/maze.ron) hissi (en dik eğim, tahtanın eli ne hızla
+  izlediği, bilye, tahta) ve bölümleri satır satır tutar: `#` duvar, `.` zemin, `o` delik, `S` başlangıç, `G`
+  hedef. Yeni bir bölüm birkaç satırdır.
+- **Tahtayı eğmek yerçekimini döndürmektir.** Fizik motorunda tahta hiç kıpırdamaz, yerçekimi ters yöne döner;
+  kamera eğimle birlikte döner, ekranda eğilen tahtadır. Yalnız bilye hareket eder, neredeyse hiçbir şeye mal olmaz.
+- **Tek düz zemin.** Delik zeminde bir noktadır: bilyenin merkezi oraya varınca düşer. Ek yeri yok, takılacak bir
+  şey yok.
+- **Telefonu nasıl tutuyorsan o düzdür.** Eğim, bölüm başladığında telefonun tutuluşundan sayılır; bir dokunuş
+  yeniden ortalar. Eğim algılayıcısı yoksa (masaüstü önizleme) parmakla sürükleyerek eğersin.
+- **Her bölüm yayımlanmadan önce oynanır.** Otomatik pilot yolu planlar ve elinle aynı girdiyle oynar
+  ([`games/maze/EVALS.md`](games/maze/EVALS.md)).
+
 ### `games/smash`: kuleye karşı bir sapan (telefon)
 
 Dik tutulan telefon için, Smash Fest ailesinden bir üst üste dizip devirme oyunu. Sapanı aşağı çekip nişan al,

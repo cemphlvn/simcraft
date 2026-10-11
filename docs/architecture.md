@@ -1182,7 +1182,18 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
   cone), drawn before the 2D layers: a sun shadow map, hemisphere light, a chamfer on box edges from the shader
   (a toy look without bevelled meshes), fog, 4× MSAA where the GPU offers it. A **fullscreen** card (`fullscreen()`)
   has no workbench, header or tabs, and draws its own way back.
-- **SMASH** (`smash`, the app's first card): the first mobile game, a slingshot against a tower on a pedestal
+- **MAZE** (`maze`, the app's first card): tilt the phone to roll a steel marble through a wooden labyrinth into
+  the goal, past holes (Labyrinth's family) on `rigid`. The board never moves in the solver: a tilt turns gravity
+  the other way (the floor and walls stay fixed bodies, only the marble moves), and the camera turns with the tilt
+  so on screen the board tips. One flat floor, no seams: a hole is a spot on it, and a marble whose centre reaches
+  one stops colliding with the floor (its mask) and drops. Walls are merged into as few boxes as cover them. Tilt
+  is the phone's gravity relative to how it was held at the level's start (a tap re-centres), or a dragged finger
+  without a sensor. Tuning and levels are data, `games/maze/maze.ron` (rows: `#` wall, `.` floor, `o` hole, `S`,
+  `G`); the eval is an autopilot that plans the shortest way (never over a hole) and tilts towards each corner at a
+  speed it can stop from, playing every level through the same input as the hand
+  (`cargo test -p sim-mobile maze_eval -- --nocapture`); `simcraft-maze shot DIR --level N` renders frames of it
+  without a window. Log: `games/maze/EVALS.md`. Its corner button leads on to SMASH.
+- **SMASH** (`smash`, the app's second card): the first mobile game, a slingshot against a tower on a pedestal
   (Smash Fest's family) on `rigid`. Its tuning is data, `games/smash/smash.ron` (embedded in the player); it is
   developed eval-driven like a `game.ron` game, natively: `simcraft-smash eval [--save] [--set path=value]
   [--check]` plays scripted shots through the same calls a finger makes and measures aim, aiming precision (cm per

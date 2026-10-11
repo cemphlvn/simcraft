@@ -1,0 +1,126 @@
+// MAZE: tilt the phone to roll a steel marble through a wooden maze into the green hole, past the black ones. Every
+// number that shapes how it feels is here; `cargo test -p sim-mobile maze` plays every level with the autopilot
+// (EVALS.md). Units: metres, seconds, kilograms; angles in degrees. The board lies in x (screen right) and z (screen
+// down), y up; its floor's top is y = 0.
+(
+    physics: (
+        gravity: 9.81,
+        substeps: 6,
+        // The steepest the board tilts, whatever the phone does: a real wooden labyrinth stops at about this.
+        max_tilt: 14.0,
+        // How fast the board follows the hand (s): a board has mass, it does not snap.
+        tilt_lag: 0.06,
+        // Without a motion sensor (the desktop, or by choice): a finger dragged this far (points) is a full tilt.
+        drag_full: 70.0,
+        // Rolling resistance (m): steel on hard wood. The solver's default (0.02, for SMASH's stones on sand) holds a
+        // 15 cm marble still on a 12° slope.
+        rolling_resistance: 0.001,
+    ),
+    marble: (
+        radius: 0.15,
+        // Steel.
+        density: 7800.0,
+        friction: 0.4,
+        restitution: 0.35,
+    ),
+    board: (
+        // One character of a level is a cell this wide (m); a marble is 0.30 across, so a 0.5 corridor is snug.
+        cell: 0.5,
+        wall_height: 0.32,
+        // The marble drops when its centre comes this close to a hole's centre (m); holes are drawn this wide.
+        capture: 0.16,
+        hole_radius: 0.2,
+        // Wood, where the marble meets it.
+        friction: 0.5,
+        restitution: 0.25,
+    ),
+    feel: (
+        // A knock against a wall this fast (m/s) is felt; the hardest knock is felt at full strength.
+        knock_min: 0.35,
+        knock_full: 2.0,
+        // After a fall, the marble is back at the start this long after it disappears (s).
+        respawn: 0.7,
+    ),
+    camera: (
+        fov: 42.0,
+        // Space kept round the board on screen (m), and how far below straight down the camera looks from (degrees).
+        margin: 0.35,
+        lean: 14.0,
+        // The board's tilt as the camera shows it (share of the real tilt): enough to see the board answer the
+        // hand, not so much that the screen swims.
+        tilt_shown: 0.6,
+    ),
+    // '#' wall, '.' floor, 'o' a hole, 'S' the start, 'G' the goal. Rows top to bottom as seen on the screen.
+    levels: [
+        (name: "FIRST ROLL", rows: [
+            "#########",
+            "#S......#",
+            "#.......#",
+            "#.......#",
+            "#...#...#",
+            "#...#...#",
+            "#.......#",
+            "#.......#",
+            "#.......#",
+            "#.......#",
+            "#......G#",
+            "#########",
+        ]),
+        (name: "ZIGZAG", rows: [
+            "#########",
+            "#S......#",
+            "######..#",
+            "#.......#",
+            "#..######",
+            "#.......#",
+            "######..#",
+            "#.......#",
+            "#..######",
+            "#.......#",
+            "#......G#",
+            "#########",
+        ]),
+        (name: "FIRST HOLES", rows: [
+            "#########",
+            "#S..o...#",
+            "#...o...#",
+            "#.......#",
+            "#..ooo..#",
+            "#.......#",
+            "#.o...o.#",
+            "#...o...#",
+            "#.......#",
+            "#.oo.oo.#",
+            "#...G...#",
+            "#########",
+        ]),
+        (name: "NARROWS", rows: [
+            "#########",
+            "#S.#....#",
+            "#..#.o..#",
+            "#..#..#.#",
+            "#o....#.#",
+            "####.##.#",
+            "#.....o.#",
+            "#.o#....#",
+            "#..##o###",
+            "#.....o.#",
+            "#o.#...G#",
+            "#########",
+        ]),
+        (name: "SPIRAL", rows: [
+            "#########",
+            "#S......#",
+            "#######.#",
+            "#.....#.#",
+            "#.###.#.#",
+            "#.#G#.#.#",
+            "#.#.o.#.#",
+            "#.#.###.#",
+            "#.#.....#",
+            "#o#######",
+            "#.......#",
+            "#########",
+        ]),
+    ],
+)

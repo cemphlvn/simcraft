@@ -220,6 +220,28 @@ the best one.
 The assets are generated (Higgsfield), and all brands are fictional. The engine sound and music are CC0 recordings
 you add ([list](assets/src/race/audio/README.md)); until then the engine note is synthesised.
 
+### `games/maze`: a tilt marble maze (phone)
+
+Tilt your phone to roll a steel marble through a wooden labyrinth into the green hole, past the black ones. Five
+levels, a clock, stars for a run without a fall. It is the app's first card; its corner button leads on to SMASH.
+
+<p align="center">
+  <img src="docs/media/maze_levels.jpg" alt="MAZE: four levels, the marble rolling, and the clear banner" width="100%">
+</p>
+<sub>Frames of the autopilot playing, rendered without a window by <code>simcraft-maze shot</code>.</sub>
+
+- **The levels are data.** [`games/maze/maze.ron`](games/maze/maze.ron) holds the feel (the steepest tilt, how fast
+  the board follows the hand, the marble, the wood) and the levels as rows: `#` wall, `.` floor, `o` hole, `S`
+  start, `G` goal. A new level is a few lines.
+- **Tilting the board turns gravity.** The board stays still in the physics engine and gravity turns the other way;
+  the camera turns with the tilt, so on screen the board tips. Only the marble moves, so it costs almost nothing.
+- **One flat floor.** A hole is a spot on the floor: the marble drops when its centre reaches one. No seams, nothing
+  to catch on.
+- **How you hold the phone is level.** The tilt counts from how the phone was held when the level started; a tap
+  re-centres it. Without a tilt sensor (the desktop preview), drag a finger to tilt.
+- **Every level is played before it ships.** An autopilot plans the way through and plays it with the same input
+  as your hand ([`games/maze/EVALS.md`](games/maze/EVALS.md)).
+
 ### `games/smash`: a slingshot against a tower (phone)
 
 A casual stack-and-topple game for portrait phones, in Smash Fest's family. Pull the slingshot down to aim, let go,

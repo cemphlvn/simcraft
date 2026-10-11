@@ -166,44 +166,7 @@ mod desktop {
         scene: Option<&sim_mobile::draw3d::Scene3>,
         shapes: &[sim_mobile::layer::Shape],
     ) -> Result<image::RgbaImage, String> {
-        let tex = r.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shot"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: r.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        r.draw(&view, w, h, Color::hex(0x1b1440).0, scene, shapes);
-        let row = (w * 4).div_ceil(256) * 256;
-        let buf = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("shot read"),
-            size: (row * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut enc = r.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shot") });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        r.queue.submit([enc.finish()]);
-        let slice = buf.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        r.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
-        let data = slice.get_mapped_range();
-        let mut img = image::RgbaImage::new(w, h);
-        for y in 0..h {
-            let src = &data[(y * row) as usize..(y * row + w * 4) as usize];
-            img.as_mut()[(y * w * 4) as usize..((y + 1) * w * 4) as usize].copy_from_slice(src);
-        }
-        Ok(img)
+        let rgba = r.capture(w, h, Color::hex(0x1b1440).0, scene, shapes)?;
+        image::RgbaImage::from_raw(w, h, rgba).ok_or_else(|| "a frame of the wrong size".to_string())
     }
 }

@@ -196,6 +196,49 @@ impl Renderer {
         })
     }
 
+    /// Draws a frame of `w` × `h` into a texture and reads it back: RGBA, rows top to bottom, no padding
+    /// (screenshots and evals without a window).
+    pub fn capture(&mut self, w: u32, h: u32, clear: [f32; 4], scene: Option<&Scene3>, shapes: &[Shape]) -> Result<Vec<u8>, String> {
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shot"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.draw(&view, w, h, clear, scene, shapes);
+        let row = (w * 4).div_ceil(256) * 256;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shot read"),
+            size: (row * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shot") });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            out.extend_from_slice(&data[(y * row) as usize..(y * row + w * 4) as usize]);
+        }
+        Ok(out)
+    }
+
     /// Draws `scene` (if any, else `clear`), then `shapes` (back to front) over it, into `target` of `w` × `h` pixels.
     pub fn draw(&mut self, target: &wgpu::TextureView, w: u32, h: u32, clear: [f32; 4], scene: Option<&Scene3>, shapes: &[Shape]) {
         let inst: Vec<Inst> = shapes
