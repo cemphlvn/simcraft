@@ -19,8 +19,8 @@ name = "simcraft-smash"
 path = "src/bin/simcraft-smash.rs"
 
 [[bin]]
-name = "simcraft-maze"
-path = "src/bin/simcraft-maze.rs"
+name = "simcraft-shot"
+path = "src/bin/simcraft-shot.rs"
 
 [dependencies]
 sim-physics.workspace = true

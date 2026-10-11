@@ -20,7 +20,7 @@ canvas { display: block; width: 100% !important; height: 100% !important; touch-
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&display=swap">
 <div id="cover" role="status">
-  <h1>MAZE<br>&amp; SMASH</h1>
+  <h1>SIMCRAFT<br>ARCADE</h1>
   <div class="bar" id="bar"><i id="fill"></i></div>
   <button id="play" type="button" hidden>PLAY</button>
   <p id="msg">Loading the engine: simcraft physics, compiled to WebAssembly.</p>
@@ -35,7 +35,7 @@ new MutationObserver(() => {
   if (s.startsWith("ready:")) {
     bar.hidden = true;
     play.hidden = false;
-    msg.textContent = "Tilt your phone to roll the marble. No tilt? Drag a finger instead.";
+    msg.textContent = "GUMBALL first: drag, let go, merge. The corner button moves on to MAZE and SMASH.";
     play.focus();
   } else if (s.startsWith("error:")) { fail(s.slice(6)); }
 }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-simcraft"] });

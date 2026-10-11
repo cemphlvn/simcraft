@@ -1190,7 +1190,18 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
   cone), drawn before the 2D layers: a sun shadow map, hemisphere light, a chamfer on box edges from the shader
   (a toy look without bevelled meshes), fog, 4× MSAA where the GPU offers it. A **fullscreen** card (`fullscreen()`)
   has no workbench, header or tabs, and draws its own way back.
-- **MAZE** (`maze`, the app's first card): tilt the phone to roll a steel marble through a wooden labyrinth into
+- **GUMBALL** (`gumball`, the app's first card): a merge-drop game (Suika's family) on `rigid`. Drag to aim, let
+  go to drop a gumball into a glass jar; two of one size that touch merge into the next size up (11 sizes, each
+  1.26 × the last), two of the largest vanish for a bonus; a ball resting over the rim for 1.5 s fills the jar. A
+  flat game in the 3D solver: after every step each ball is put back in the plane z = 0 (position, velocity, spin
+  about z only). Merging is the game's rule, not the solver's: after a step, equal balls closer than their radii
+  pair up nearest first, each once a tick, and the new ball appears at their midpoint, inside its neighbours on
+  purpose (the solver eases them aside, `push_max`). Tuning is data, `games/gumball/gumball.ron` (sizes, points,
+  colours, the seeded dice, the jar). The eval plays five seeded jars with an autopilot (for each of 17 places
+  across the jar, where would the ball come to rest; lowest wins, landing on its own size preferred) against a
+  random dropper (`cargo test -p sim-mobile --release gumball_eval -- --nocapture`); `simcraft-shot gumball DIR`
+  renders frames. Log: `games/gumball/EVALS.md`. Its corner button leads on to MAZE.
+- **MAZE** (`maze`, the app's second card): tilt the phone to roll a steel marble through a wooden labyrinth into
   the goal, past holes (Labyrinth's family) on `rigid`. The board never moves in the solver: a tilt turns gravity
   the other way (the floor and walls stay fixed bodies, only the marble moves), and the camera turns with the tilt
   so on screen the board tips. One flat floor, no seams: a hole is a spot on it, and a marble whose centre reaches
@@ -1199,9 +1210,9 @@ casual mobile games (`docs/research/mobile-types.md`), not from any existing sim
   without a sensor. Tuning and levels are data, `games/maze/maze.ron` (rows: `#` wall, `.` floor, `o` hole, `S`,
   `G`); the eval is an autopilot that plans the shortest way (never over a hole) and tilts towards each corner at a
   speed it can stop from, playing every level through the same input as the hand
-  (`cargo test -p sim-mobile maze_eval -- --nocapture`); `simcraft-maze shot DIR --level N` renders frames of it
+  (`cargo test -p sim-mobile maze_eval -- --nocapture`); `simcraft-shot maze DIR --level N` renders frames of it
   without a window. Log: `games/maze/EVALS.md`. Its corner button leads on to SMASH.
-- **SMASH** (`smash`, the app's second card): the first mobile game, a slingshot against a tower on a pedestal
+- **SMASH** (`smash`, the app's third card): the first mobile game, a slingshot against a tower on a pedestal
   (Smash Fest's family) on `rigid`. Its tuning is data, `games/smash/smash.ron` (embedded in the player); it is
   developed eval-driven like a `game.ron` game, natively: `simcraft-smash eval [--save] [--set path=value]
   [--check]` plays scripted shots through the same calls a finger makes and measures aim, aiming precision (cm per

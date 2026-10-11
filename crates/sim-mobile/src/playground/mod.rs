@@ -121,6 +121,7 @@ impl Playground {
     pub fn new() -> Playground {
         Playground {
             cards: vec![
+                Box::new(crate::gumball::Gumball::default()),
                 Box::new(crate::maze::Maze::default()),
                 Box::new(crate::smash::Smash::default()),
                 Box::new(game::GameCard::new()),
@@ -314,12 +315,12 @@ mod tests {
     fn a_tap_on_a_tab_switches_the_card_and_never_reaches_it() {
         let l = layout();
         let mut p = Playground::new();
-        p.active = 2;
+        p.active = 3;
         let mut out = Vec::new();
         let n = p.cards.len() as f32;
-        let fourth = Px::new(l.tabs.x + l.tabs.w * 5.5 / n, l.tabs.y + l.tabs.h / 2.0);
+        let fourth = Px::new(l.tabs.x + l.tabs.w * 6.5 / n, l.tabs.y + l.tabs.h / 2.0);
         p.touch(1, Phase::Down, fourth, &l, &mut out);
-        assert_eq!(p.active, 5);
+        assert_eq!(p.active, 6);
         assert_eq!(p.card().name(), "FEEL");
         assert_eq!(out.len(), 1, "a tick for the switch");
         // The tap's gestures are swallowed until it lifts.
@@ -333,10 +334,16 @@ mod tests {
     fn a_fullscreen_game_has_no_tabs_and_its_lab_button_leads_back() {
         let l = layout();
         let mut p = Playground::new();
-        assert!(p.card().fullscreen(), "the app opens on MAZE");
-        assert_eq!(p.card().name(), "MAZE");
-        // MAZE's corner button leads on to SMASH.
+        assert!(p.card().fullscreen(), "the app opens on GUMBALL");
+        assert_eq!(p.card().name(), "GUMBALL");
+        // Each game's corner button leads on to the next: GUMBALL, MAZE, SMASH, then the lab.
         let mut out = Vec::new();
+        let mut gb = crate::gumball::Gumball::default();
+        gb.layout(&l);
+        let next = crate::gumball::look::buttons(&gb)[1].rect.center();
+        p.input(&Gesture::Down(next), &l, &mut out);
+        p.input(&Gesture::Release { at: next, velocity: Px::default() }, &l, &mut out);
+        assert_eq!(p.card().name(), "MAZE");
         let mut m = crate::maze::Maze::default();
         m.layout(&l);
         let next = crate::maze::look::buttons(&m)[1].rect.center();
@@ -346,13 +353,13 @@ mod tests {
         // Where a tab would be is the game's: a pull starts there.
         let tab_spot = Px::new(l.tabs.x + l.tabs.w * 0.5, l.tabs.y + l.tabs.h / 2.0);
         p.touch(1, Phase::Down, tab_spot, &l, &mut out);
-        assert_eq!(p.active, 1);
+        assert_eq!(p.active, 2);
         p.input(&Gesture::Release { at: tab_spot, velocity: Px::default() }, &l, &mut out);
         let mut g = crate::smash::Smash::default();
         g.layout(&l);
         let lab = crate::smash::look::buttons(&g)[1].rect.center();
         p.input(&Gesture::Down(lab), &l, &mut out);
-        assert_eq!(p.active, 2, "LAB goes to the playground's cards");
+        assert_eq!(p.active, 3, "LAB goes to the playground's cards");
         assert!(!p.card().fullscreen());
     }
 

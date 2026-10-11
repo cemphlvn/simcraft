@@ -12,6 +12,7 @@ pub mod draw3d;
 pub mod font;
 pub mod games;
 pub mod gesture;
+pub mod gumball;
 pub mod haptics;
 pub mod layer;
 pub mod maze;

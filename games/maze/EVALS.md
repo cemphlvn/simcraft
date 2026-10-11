@@ -5,7 +5,7 @@ uses: it plans the shortest way from S to G that never crosses a hole, keeps the
 roll towards the next corner at a speed it can stop from (top speed 1.2 m/s, braking 1 m/s²). A level passes when it
 is won in 90 s without a fall and the marble never sinks 1 cm into the wood.
 Run: `cargo test -p sim-mobile --release maze_eval -- --nocapture`. Pictures: `cargo run --release -p sim-mobile
---bin simcraft-maze -- shot OUT_DIR --level N --at 0,2,4`.
+--bin simcraft-shot -- maze OUT_DIR --level N --at 0,2,4`.
 
 | Step | Change | Won (s) per level 1–5 | Falls | Knocks per level | Hardest knock (m/s) | Pen (mm) | Learned |
 |---|---|---|---|---|---|---|---|

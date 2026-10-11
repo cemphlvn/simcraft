@@ -220,15 +220,35 @@ the best one.
 The assets are generated (Higgsfield), and all brands are fictional. The engine sound and music are CC0 recordings
 you add ([list](assets/src/race/audio/README.md)); until then the engine note is synthesised.
 
+### `games/gumball`: a merge-drop jar (phone)
+
+Drag to aim, let go to drop a gumball into a glass jar. Two of the same size that touch merge into the next size up;
+two of the largest vanish for a bonus. Keep the pile under the red rim. It is the app's first card; its corner
+button leads on to MAZE.
+
+<p align="center">
+  <img src="docs/media/gumball_jar.jpg" alt="GUMBALL: the jar filling, balls merging into bigger ones, the jar-full banner" width="100%">
+</p>
+<sub>One jar played by the autopilot, rendered without a window by <code>simcraft-shot gumball</code>.</sub>
+
+- **The feel is data.** [`games/gumball/gumball.ron`](games/gumball/gumball.ron): eleven sizes, each 1.26 times
+  the last, their points and sugar colours, the jar, the seeded dice that pick the next ball.
+- **A flat game in a 3D physics engine.** The balls are the same rigid spheres as MAZE's marble, held in one plane
+  after every step, so the jar plays like a flat game and still gets 3D light and shadow.
+- **Merging is a game rule.** Equal balls that touch become one bigger ball where they met; it appears inside its
+  neighbours and the physics engine eases them aside.
+- **Measured over whole jars.** An autopilot that looks before it drops plays five seeded jars against a player who
+  drops at random ([`games/gumball/EVALS.md`](games/gumball/EVALS.md)).
+
 ### `games/maze`: a tilt marble maze (phone)
 
 Tilt your phone to roll a steel marble through a wooden labyrinth into the green hole, past the black ones. Five
-levels, a clock, stars for a run without a fall. It is the app's first card; its corner button leads on to SMASH.
+levels, a clock, stars for a run without a fall. It is the app's second card; its corner button leads on to SMASH.
 
 <p align="center">
   <img src="docs/media/maze_levels.jpg" alt="MAZE: four levels, the marble rolling, and the clear banner" width="100%">
 </p>
-<sub>Frames of the autopilot playing, rendered without a window by <code>simcraft-maze shot</code>.</sub>
+<sub>Frames of the autopilot playing, rendered without a window by <code>simcraft-shot maze</code>.</sub>
 
 - **The levels are data.** [`games/maze/maze.ron`](games/maze/maze.ron) holds the feel (the steepest tilt, how fast
   the board follows the hand, the marble, the wood) and the levels as rows: `#` wall, `.` floor, `o` hole, `S`
